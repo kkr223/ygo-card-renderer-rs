@@ -1,0 +1,17 @@
+[package]
+name = "ygo-card-renderer-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Rust card rendering core for Yu-Gi-Oh! custom card generation"
+repository = "https://github.com/placeholder/ygo-card-renderer-rs"
+
+[dependencies]
+base64 = "0.22.1"
+resvg = "0.45.1"
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.17"
+ygopro-cdb-encode-rs = { path = "../ygopro-cdb-encode-rs" }
+
+[dev-dependencies]
+tempfile = "3.23.0"
