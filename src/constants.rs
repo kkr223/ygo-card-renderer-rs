@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub(crate) const CARD_WIDTH: u32 = 1394;
 pub(crate) const CARD_HEIGHT: u32 = 2031;
 

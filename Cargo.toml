@@ -8,10 +8,16 @@ repository = "https://github.com/placeholder/ygo-card-renderer-rs"
 
 [dependencies]
 base64 = "0.22.1"
-resvg = "0.45.1"
+cosmic-text = "0.14"
+fontdb = "0.16"
+image = { version = "0.25", features = ["webp"] }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 thiserror = "2.0.17"
+tiny-skia = "0.11"
+ygo-woff2 = { path = "../ygo-woff2" }
 ygopro-cdb-encode-rs = { path = "../ygopro-cdb-encode-rs" }
 
 [dev-dependencies]
+brotli = "8.0.2"
 tempfile = "3.23.0"

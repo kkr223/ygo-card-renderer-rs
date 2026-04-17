@@ -1,6 +1,5 @@
 use ygopro_cdb_encode_rs::{
-    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_MONSTER, TYPE_PENDULUM, TYPE_RITUAL, TYPE_SYNCHRO,
-    TYPE_XYZ,
+    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_MONSTER, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ,
 };
 
 use crate::{
@@ -9,38 +8,30 @@ use crate::{
     model::{CardKind, RenderError},
 };
 
-pub(crate) fn background_rel_path_yugioh(card: &CardDataEntry) -> &'static str {
+pub(crate) fn get_frame_name(card: &CardDataEntry) -> &'static str {
     if card.is_spell() {
-        "yugioh/image/card-spell.png"
+        "魔法"
     } else if card.is_trap() {
-        "yugioh/image/card-trap.png"
+        "陷阱"
     } else if (card.type_ & TYPE_LINK) != 0 {
-        "yugioh/image/card-link.png"
-    } else if (card.type_ & TYPE_XYZ) != 0 && (card.type_ & TYPE_PENDULUM) != 0 {
-        "yugioh/image/card-xyz-pendulum.png"
+        "连接"
     } else if (card.type_ & TYPE_XYZ) != 0 {
-        "yugioh/image/card-xyz.png"
-    } else if (card.type_ & TYPE_SYNCHRO) != 0 && (card.type_ & TYPE_PENDULUM) != 0 {
-        "yugioh/image/card-synchro-pendulum.png"
+        "超量"
     } else if (card.type_ & TYPE_SYNCHRO) != 0 {
-        "yugioh/image/card-synchro.png"
-    } else if (card.type_ & TYPE_FUSION) != 0 && (card.type_ & TYPE_PENDULUM) != 0 {
-        "yugioh/image/card-fusion-pendulum.png"
+        "同调"
     } else if (card.type_ & TYPE_FUSION) != 0 {
-        "yugioh/image/card-fusion.png"
-    } else if (card.type_ & TYPE_RITUAL) != 0 && (card.type_ & TYPE_PENDULUM) != 0 {
-        "yugioh/image/card-ritual-pendulum.png"
+        "融合"
     } else if (card.type_ & TYPE_RITUAL) != 0 {
-        "yugioh/image/card-ritual.png"
-    } else if (card.type_ & TYPE_PENDULUM) != 0 {
-        "yugioh/image/card-effect-pendulum.png"
-    } else if (card.type_ & TYPE_MONSTER) != 0 {
-        "yugioh/image/card-effect.png"
+        "仪式"
+    } else if (card.type_ & 0x20) != 0 {
+        // Effect Monster check (CardDataEntry sets effect flag)
+        "效果"
     } else {
-        "yugioh/image/card-normal.png"
+        "通常"
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn background_rel_path_rush(card: &CardDataEntry) -> &'static str {
     if card.is_spell() {
         "rush-duel/image/card-spell.png"
@@ -57,6 +48,7 @@ pub(crate) fn background_rel_path_rush(card: &CardDataEntry) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_primary_line(card: &CardDataEntry, kind: CardKind) -> String {
     if card.is_spell() {
         "【魔法卡】".to_string()
@@ -85,6 +77,7 @@ pub(crate) fn build_primary_line(card: &CardDataEntry, kind: CardKind) -> String
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_effect_line(card: &CardDataEntry, kind: CardKind) -> Option<String> {
     if card.is_spell() || card.is_trap() {
         return None;
@@ -142,6 +135,7 @@ pub(crate) fn image_frame(card: &CardDataEntry) -> (u32, u32, u32, u32) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn mask_position(card: &CardDataEntry) -> (u32, u32, u32, u32) {
     if card.is_pendulum() {
         (68, 342, 1258, 1258)
@@ -154,6 +148,7 @@ pub(crate) fn uses_rank(card: &CardDataEntry) -> bool {
     (card.type_ & TYPE_XYZ) != 0
 }
 
+#[allow(dead_code)]
 pub(crate) fn description_y(card: &CardDataEntry, style: &LayoutStyle) -> u32 {
     if card.is_spell() || card.is_trap() {
         style.effect_top
@@ -163,6 +158,7 @@ pub(crate) fn description_y(card: &CardDataEntry, style: &LayoutStyle) -> u32 {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn description_height(card: &CardDataEntry, style: &LayoutStyle) -> u32 {
     let mut height = 385_u32;
     if !card.is_spell() && !card.is_trap() {
@@ -173,6 +169,7 @@ pub(crate) fn description_height(card: &CardDataEntry, style: &LayoutStyle) -> u
     height
 }
 
+#[allow(dead_code)]
 pub(crate) fn draw_level_or_rank(
     svg: &mut String,
     card: &CardDataEntry,
@@ -211,6 +208,7 @@ pub(crate) fn draw_level_or_rank(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn attribute_rel_path(
     card: &CardDataEntry,
 ) -> Result<Option<&'static str>, RenderError> {
@@ -238,6 +236,7 @@ pub(crate) fn attribute_rel_path(
     Ok(relative)
 }
 
+#[allow(dead_code)]
 pub(crate) fn display_stat(value: i32) -> String {
     match value {
         -2 => "INF".to_string(),

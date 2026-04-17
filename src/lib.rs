@@ -1,10 +1,10 @@
-mod assets;
+pub mod asset_bundle;
 mod card_logic;
 mod constants;
 mod layout;
-mod model;
-mod renderer;
+pub mod model;
+pub mod renderer;
 mod text;
 
 pub use model::{CardKind, RenderError, RenderOptions, RenderRequest};
-pub use renderer::{render_png, render_svg};
+pub use renderer::Renderer;
