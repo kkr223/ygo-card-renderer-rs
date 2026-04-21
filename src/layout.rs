@@ -1,24 +1,26 @@
 #![allow(dead_code)]
 
-use crate::asset_bundle::TextLayout;
+use crate::asset_bundle::{LayoutPayload, StyleDefinition};
 use crate::model::{CardKind, LayoutOverrides};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct LayoutStyle {
-    pub(crate) base_font_family: &'static str,
-    pub(crate) name_font_family: &'static str,
-    pub(crate) type_font_family: &'static str,
-    pub(crate) effect_font_family: &'static str,
-    pub(crate) stat_font_family: &'static str,
-    pub(crate) link_font_family: &'static str,
-    pub(crate) password_font_family: &'static str,
+    pub(crate) base_font_family: String,
+    pub(crate) name_font_family: String,
+    pub(crate) type_font_family: String,
+    pub(crate) effect_font_family: String,
+    pub(crate) stat_font_family: String,
+    pub(crate) link_font_family: String,
+    pub(crate) password_font_family: String,
     pub(crate) name_top: u32,
     pub(crate) name_size: u32,
     pub(crate) type_top: u32,
     pub(crate) type_size: u32,
+    pub(crate) type_right: u32,
     pub(crate) effect_top: u32,
     pub(crate) effect_size: u32,
     pub(crate) effect_line_height: f32,
+    pub(crate) effect_min_height: u32,
     pub(crate) description_size: u32,
     pub(crate) description_line_height: f32,
     pub(crate) pendulum_description_top: u32,
@@ -44,140 +46,22 @@ pub(crate) struct LayoutStyle {
     pub(crate) stat_letter_spacing: f32,
 }
 
-/// RushDuel 族基准（sc）
-const fn rush_duel_base() -> LayoutStyle {
-    LayoutStyle {
-        base_font_family: "'rd-sc', 'Microsoft YaHei', sans-serif",
-        name_font_family: "'rd-sc-name', 'rd-sc', 'Microsoft YaHei', sans-serif",
-        type_font_family: "'rd-sc', 'Microsoft YaHei', sans-serif",
-        effect_font_family: "'rd-sc', 'Microsoft YaHei', sans-serif",
-        stat_font_family: "'rd-atk-def', 'Times New Roman', serif",
-        link_font_family: "'rd-atk-def', 'Times New Roman', serif",
-        password_font_family: "'rd-tip', 'rd-sc', monospace",
-        name_top: 71,
-        name_size: 92,
-        type_top: 1476,
-        type_size: 46,
-        effect_top: 1476,
-        effect_size: 46,
-        effect_line_height: 1.15,
-        description_size: 39,
-        description_line_height: 1.39,
-        pendulum_description_top: 1282,
-        pendulum_description_size: 36,
-        title_max_width_with_attribute: 1033,
-        title_max_width_without_attribute: 1161,
-        body_max_width: 1175,
-        title_letter_spacing: 0.0,
-        type_letter_spacing: 2.0,
-        effect_letter_spacing: 2.0,
-        description_letter_spacing: 0.0,
-        name_x: 116,
-        description_x: 126,
-        effect_x: 126,
-        effect_text_indent: 0,
-        stat_atk_x: 1028,
-        stat_def_x: 1306,
-        stat_link_x: 1294,
-        stat_top: 1804,
-        stat_size: 54,
-        link_top: 1820,
-        link_size: 42,
-        stat_letter_spacing: 1.5,
-    }
+fn quoted_font(name: &str) -> String {
+    format!("'{name}'")
 }
 
-/// YuGiOh 族基准（sc）
-const fn yugioh_base() -> LayoutStyle {
-    LayoutStyle {
-        base_font_family: "'ygo-sc', 'Microsoft YaHei', sans-serif",
-        name_font_family: "'ygo-sc', 'Microsoft YaHei', sans-serif",
-        type_font_family: "'ygo-sc', 'Microsoft YaHei', sans-serif",
-        effect_font_family: "'ygo-sc', 'Microsoft YaHei', sans-serif",
-        stat_font_family: "'ygo-atk-def', 'Times New Roman', serif",
-        link_font_family: "'ygo-link', 'ygo-atk-def', 'Times New Roman', serif",
-        password_font_family: "'ygo-password', 'ygo-sc', monospace",
-        name_top: 108,
-        name_size: 108,
-        type_top: 254,
-        type_size: 76,
-        effect_top: 1528,
-        effect_size: 44,
-        effect_line_height: 1.2,
-        description_size: 36,
-        description_line_height: 1.2,
-        pendulum_description_top: 1282,
-        pendulum_description_size: 36,
-        title_max_width_with_attribute: 1033,
-        title_max_width_without_attribute: 1161,
-        body_max_width: 1196,
-        title_letter_spacing: 0.0,
-        type_letter_spacing: 2.0,
-        effect_letter_spacing: 2.0,
-        description_letter_spacing: 2.0,
-        name_x: 116,
-        description_x: 99,
-        effect_x: 99,
-        effect_text_indent: 0,
-        stat_atk_x: 1003,
-        stat_def_x: 1286,
-        stat_link_x: 1280,
-        stat_top: 1833,
-        stat_size: 62,
-        link_top: 1849,
-        link_size: 44,
-        stat_letter_spacing: 2.0,
-    }
+fn style_for_language<'a>(layout: &'a LayoutPayload, language: &str) -> &'a StyleDefinition {
+    layout
+        .styles
+        .get(language)
+        .or_else(|| layout.styles.get("sc"))
+        .expect("layout styles missing default 'sc'")
 }
 
-/// PSD pt → 像素（基于 96dpi 屏幕，PSD 使用 72pt = 1 inch）
-#[inline]
-fn pt_to_px(pt: f32) -> u32 {
-    (pt * 96.0 / 72.0).round() as u32
+fn text_indent_px(value: Option<f32>) -> i32 {
+    value.unwrap_or(0.0).round() as i32
 }
 
-/// 将 bundle 的 TextLayout 数据应用到 style 上（硬编码值已在 style 中，bundle 覆盖有值的字段）。
-fn apply_bundle_text_layout(style: &mut LayoutStyle, tl: &TextLayout) {
-    if let Some(name) = &tl.card_name {
-        if let Some(x) = name.x {
-            style.name_x = x as u32;
-        }
-        if let Some(w) = name.width {
-            // 卡名宽度对应两个 title_max_width；带属性图标时略窄，这里用 PSD 值作为不带属性的上限
-            style.title_max_width_without_attribute = w as u32;
-            // 带属性版本保持与无属性的比例关系（原硬编码 1033/1161 ≈ 0.89）
-            style.title_max_width_with_attribute = (w * 1033.0 / 1161.0).round() as u32;
-        }
-    }
-    if let Some(eff) = &tl.effect_text {
-        if let Some(x) = eff.x {
-            style.effect_x = x as u32;
-        }
-        // NOTE: PSD の effect_text.y は文字枠上辺（行距込み）のため JS 参考値より約 16px 下にずれる。
-        // effect_top は各言語のハードコード値を維持し、PSD の y 値では上書きしない。
-        if let Some(w) = eff.width {
-            style.body_max_width = w as u32;
-        }
-        if let Some(lhr) = eff.line_height_ratio {
-            style.effect_line_height = lhr;
-        }
-    }
-    if let Some(desc) = &tl.description_text {
-        if let Some(x) = desc.x {
-            style.description_x = x as u32;
-        }
-        if let Some(lhr) = desc.line_height_ratio {
-            style.description_line_height = lhr;
-        }
-        // body_max_width 以 effect_text 为准（更宽），description 宽度略有差异时不覆盖
-    }
-    // NOTE: PSD の type_line は効果枠内の種族行（y≈1464）であり、
-    // spell/trap カード名直下の type_top（y≈253）とは別物なので、ここでは適用しない。
-    // type_top は各言語の hardcoded 値を維持する。
-    let _ = &tl.type_line; // suppress unused warning
-}
-
-/// 将外部 LayoutOverrides 应用到 style 上（最高优先级）。
 fn apply_overrides(style: &mut LayoutStyle, ov: &LayoutOverrides) {
     macro_rules! apply {
         ($field:ident) => {
@@ -218,86 +102,127 @@ fn apply_overrides(style: &mut LayoutStyle, ov: &LayoutOverrides) {
     apply!(link_size);
 }
 
-/// 构建最终 LayoutStyle。优先级：overrides > bundle text_layout > 硬编码默认值。
 pub(crate) fn layout_style(
     kind: CardKind,
     language: Option<&str>,
-    bundle_text_layout: Option<&TextLayout>,
+    bundle_layout: &LayoutPayload,
     overrides: &LayoutOverrides,
 ) -> LayoutStyle {
-    let mut style = match (kind, language.unwrap_or("sc")) {
-        (CardKind::RushDuel, "jp") => {
-            let mut s = rush_duel_base();
-            s.base_font_family = "'rd-jp', 'Yu Gothic', sans-serif";
-            s.name_font_family = "'rd-jp-name', 'rd-jp', 'Yu Gothic', sans-serif";
-            s.type_font_family = "'rd-jp-effect', 'rd-jp', 'Yu Gothic', sans-serif";
-            s.effect_font_family = "'rd-jp-effect', 'rd-jp', 'Yu Gothic', sans-serif";
-            s.password_font_family = "'rd-tip', 'rd-jp', monospace";
-            s
-        }
-        (CardKind::RushDuel, _) => rush_duel_base(),
-        (_, "en") => {
-            let mut s = yugioh_base();
-            s.base_font_family = "'ygo-en', 'Arial', sans-serif";
-            s.name_font_family = "'ygo-en-name', 'ygo-en', 'Arial', sans-serif";
-            s.type_font_family = "'ygo-en-race', 'ygo-en', 'Arial', sans-serif";
-            s.effect_font_family = "'ygo-en-race', 'ygo-en', 'Arial', sans-serif";
-            s.password_font_family = "'ygo-password', 'ygo-en', monospace";
-            s.name_top = 52;
-            s.name_size = 158;
-            s.type_size = 74;
-            s.effect_top = 1527;
-            s.effect_size = 56;
-            s.effect_line_height = 1.02;
-            s.description_size = 42;
-            s.description_line_height = 1.02;
-            s.pendulum_description_size = 42;
-            s.body_max_width = 1175;
-            s.title_letter_spacing = 1.0;
-            s.type_letter_spacing = 1.0;
-            s.effect_letter_spacing = 1.0;
-            s.description_letter_spacing = 0.0;
-            s.description_x = 109;
-            s.effect_x = 109;
-            s.stat_size = 58;
-            s
-        }
-        (_, "jp") => {
-            let mut s = yugioh_base();
-            s.base_font_family = "'ygo-jp', 'Yu Gothic', sans-serif";
-            s.name_font_family = "'ygo-jp', 'Yu Gothic', sans-serif";
-            s.type_font_family = "'ygo-jp', 'Yu Gothic', sans-serif";
-            s.effect_font_family = "'ygo-jp', 'Yu Gothic', sans-serif";
-            s.password_font_family = "'ygo-password', 'ygo-jp', monospace";
-            s.name_top = 98;
-            s.type_top = 253;
-            s.type_size = 80;
-            s.effect_size = 46;
-            s.effect_line_height = 1.17;
-            s.description_size = 38;
-            s.description_line_height = 1.17;
-            s.pendulum_description_top = 1288;
-            s.body_max_width = 1175;
-            s.title_letter_spacing = 0.0;
-            s.type_letter_spacing = 0.0;
-            s.effect_letter_spacing = 0.0;
-            s.description_letter_spacing = 0.0;
-            s.description_x = 109;
-            s.effect_x = 109;
-            s.effect_text_indent = -9;
-            s.stat_size = 58;
-            s
-        }
-        _ => yugioh_base(),
+    let lang = language.unwrap_or("sc");
+    let style = style_for_language(bundle_layout, lang);
+    let atk_text = if lang == "astral" {
+        &bundle_layout.base.atk_def_link.atk.astral
+    } else {
+        &bundle_layout.base.atk_def_link.atk.default
+    };
+    let def_text = if lang == "astral" {
+        &bundle_layout.base.atk_def_link.def.astral
+    } else {
+        &bundle_layout.base.atk_def_link.def.default
+    };
+    let link_text = if lang == "astral" {
+        &bundle_layout.base.atk_def_link.link.astral
+    } else {
+        &bundle_layout.base.atk_def_link.link.default
     };
 
-    // 第二层：bundle 中从 PSD 提取的数据
-    if let Some(tl) = bundle_text_layout {
-        apply_bundle_text_layout(&mut style, tl);
-    }
+    let stat_font_family = if lang == "astral" {
+        quoted_font("ygo-astral")
+    } else {
+        quoted_font("ygo-atk-def")
+    };
+    let link_font_family = if lang == "astral" {
+        quoted_font("ygo-astral")
+    } else {
+        quoted_font("ygo-link")
+    };
 
-    // 第三层：调用方显式覆盖（最高优先级）
-    apply_overrides(&mut style, overrides);
+    let mut layout = match kind {
+        CardKind::Yugioh => LayoutStyle {
+            base_font_family: quoted_font(&style.font_family),
+            name_font_family: quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family)),
+            type_font_family: quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family)),
+            effect_font_family: quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family)),
+            stat_font_family,
+            link_font_family,
+            password_font_family: quoted_font(&bundle_layout.base.password.font_family),
+            name_top: style.name.top.unwrap_or(97),
+            name_size: style.name.font_size.unwrap_or(108),
+            type_top: style.spell_trap.top.unwrap_or(254),
+            type_size: style.spell_trap.font_size.unwrap_or(76),
+            type_right: style.spell_trap.right.unwrap_or(134),
+            effect_top: style.effect.top.unwrap_or(1528),
+            effect_size: style.effect.font_size.unwrap_or(44),
+            effect_line_height: style.effect.line_height.unwrap_or(1.2),
+            effect_min_height: style.effect.min_height.unwrap_or(0),
+            description_size: style.description.font_size.unwrap_or(36),
+            description_line_height: style.description.line_height.unwrap_or(1.2),
+            pendulum_description_top: style.pendulum_description.top.unwrap_or(1282),
+            pendulum_description_size: style.pendulum_description.font_size.unwrap_or(36),
+            title_max_width_with_attribute: bundle_layout.base.name.width_with_attribute,
+            title_max_width_without_attribute: bundle_layout.base.name.width_without_attribute,
+            body_max_width: bundle_layout.base.description.width,
+            title_letter_spacing: style.name.letter_spacing.unwrap_or(0.0),
+            type_letter_spacing: style.spell_trap.letter_spacing.unwrap_or(0.0),
+            effect_letter_spacing: style.effect.letter_spacing.unwrap_or(0.0),
+            description_letter_spacing: style.description.letter_spacing.unwrap_or(0.0),
+            name_x: bundle_layout.base.name.x,
+            description_x: bundle_layout.base.description.x,
+            effect_x: ((bundle_layout.base.effect.x as i32) + text_indent_px(style.effect.text_indent))
+                .max(0) as u32,
+            effect_text_indent: text_indent_px(style.effect.text_indent),
+            stat_atk_x: atk_text.x,
+            stat_def_x: def_text.x,
+            stat_link_x: link_text.x,
+            stat_top: atk_text.y,
+            stat_size: atk_text.font_size,
+            link_top: link_text.y,
+            link_size: link_text.font_size,
+            stat_letter_spacing: if lang == "astral" { 0.0 } else { 2.0 },
+        },
+        CardKind::RushDuel => LayoutStyle {
+            base_font_family: quoted_font(&style.font_family),
+            name_font_family: quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family)),
+            type_font_family: quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family)),
+            effect_font_family: quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family)),
+            stat_font_family: quoted_font("rd-atk-def"),
+            link_font_family: quoted_font("rd-atk-def"),
+            password_font_family: quoted_font("rd-tip"),
+            name_top: 71,
+            name_size: 92,
+            type_top: 1476,
+            type_size: 46,
+            type_right: 134,
+            effect_top: 1476,
+            effect_size: 46,
+            effect_line_height: 1.15,
+            effect_min_height: 0,
+            description_size: 39,
+            description_line_height: 1.39,
+            pendulum_description_top: 1282,
+            pendulum_description_size: 36,
+            title_max_width_with_attribute: 1033,
+            title_max_width_without_attribute: 1161,
+            body_max_width: 1175,
+            title_letter_spacing: 0.0,
+            type_letter_spacing: 2.0,
+            effect_letter_spacing: 2.0,
+            description_letter_spacing: 0.0,
+            name_x: 116,
+            description_x: 126,
+            effect_x: 126,
+            effect_text_indent: 0,
+            stat_atk_x: 1028,
+            stat_def_x: 1306,
+            stat_link_x: 1294,
+            stat_top: 1804,
+            stat_size: 54,
+            link_top: 1820,
+            link_size: 42,
+            stat_letter_spacing: 1.5,
+        },
+    };
 
-    style
+    apply_overrides(&mut layout, overrides);
+    layout
 }

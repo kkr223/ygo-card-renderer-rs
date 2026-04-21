@@ -66,6 +66,10 @@ pub struct RenderOptions {
     pub output_kind: Option<CardKind>,
     pub name_color_override: Option<String>,
     pub description_color_override: Option<String>,
+    #[serde(default)]
+    pub title_width_compress: bool,
+    #[serde(default)]
+    pub description_first_line_compress: bool,
     /// 逐字段覆盖布局参数。优先级：此字段 > bundle text_layout > 硬编码默认值。
     #[serde(default)]
     pub layout_overrides: LayoutOverrides,
@@ -81,6 +85,8 @@ impl Default for RenderOptions {
             output_kind: None,
             name_color_override: None,
             description_color_override: None,
+            title_width_compress: false,
+            description_first_line_compress: false,
             layout_overrides: LayoutOverrides::default(),
         }
     }

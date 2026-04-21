@@ -1,6 +1,8 @@
 use image::ImageFormat;
+use resvg::{self, usvg};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use tiny_skia::{Pixmap, Transform};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -10,97 +12,337 @@ pub struct BufferPointer {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct SpriteInfo {
-    pub atlas: [u32; 4],  // u, v, w, h
-    pub layout: [f32; 2], // x, y (some old coordinates could be negative, float is safer)
+pub struct AtlasSprite {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AtlasMeta {
-    pub buffer: BufferPointer,
-    pub sprites: HashMap<String, SpriteInfo>,
+    pub buffer: Option<BufferPointer>,
+    pub width: u32,
+    pub height: u32,
+    pub sprites: HashMap<String, AtlasSprite>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct FrameMeta {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    pub buffer: BufferPointer,
+pub struct ImageSize {
+    pub w: u32,
+    pub h: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct FramesMeta {
-    pub normal: HashMap<String, FrameMeta>,
-    pub pendulum: HashMap<String, FrameMeta>,
+pub struct ImageEntry {
+    pub kind: String,
+    pub storage: String,
+    pub atlas: Option<AtlasSprite>,
+    pub size: Option<ImageSize>,
+    pub buffer: Option<BufferPointer>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FontMeta {
+    pub file: String,
     pub buffer: BufferPointer,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct PositionDetail {
-    pub x: f32,
-    pub y: f32,
+pub struct LayoutBufferMeta {
+    pub buffer: BufferPointer,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct MetaSection {
-    pub version: String,
-    pub language: String,
-    pub star_level_pos: Option<HashMap<String, PositionDetail>>,
-    pub star_rank_pos: Option<HashMap<String, PositionDetail>>,
-}
-
-/// 从 PSD 文字图层提取的单个区域布局参数。
-/// 所有坐标单位与 PSD 画布像素一致（卡片基准尺寸 1394×2031）。
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct TextLayoutEntry {
-    /// 文字框左边界 x（对应 layout.rs 的 *_x 参数）
-    pub x: Option<f32>,
-    /// 文字框顶部 y（对应 layout.rs 的 *_top 参数）
-    pub y: Option<f32>,
-    /// 文字框宽度（对应 layout.rs 的 body_max_width / title_max_width_* 参数）
-    pub width: Option<f32>,
-    /// 文字框高度
-    pub height: Option<f32>,
-    /// PSD 中字号（PostScript pt）。注意 PSD 72pt = 屏幕 96px，需乘以 96/72 = 4/3。
-    pub font_size_pt: Option<f32>,
-    /// PSD Tracking（千分之一字宽的字间距，正=加宽，负=收紧）
-    pub tracking: Option<i32>,
-    /// PSD Leading（行距 pt，绝对值）
-    pub leading_pt: Option<f32>,
-    /// Leading / FontSize，即行高倍数（对应 layout.rs 的 *_line_height 参数）
-    pub line_height_ratio: Option<f32>,
-}
-
-/// assets.json 中 text_layout 字段的完整结构。
-/// key 与 normalize_assets.py 中写入的一致：
-///   "card_name" / "effect_text" / "description_text" / "type_line"
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct TextLayout {
-    pub card_name: Option<TextLayoutEntry>,
-    pub effect_text: Option<TextLayoutEntry>,
-    pub description_text: Option<TextLayoutEntry>,
-    pub type_line: Option<TextLayoutEntry>,
+pub struct BundleMetaCounts {
+    pub sprite_raster: u32,
+    pub standalone_raster: u32,
+    pub svg: u32,
+    pub fonts: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct AssetsIndex {
-    pub meta: MetaSection,
+pub struct BundleMeta {
+    pub root: String,
+    pub version: u32,
+    pub atlas_width: u32,
+    pub max_sprite_dim: u32,
+    pub max_sprite_area: u32,
+    pub counts: BundleMetaCounts,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BundleIndex {
+    pub meta: BundleMeta,
     pub atlas: AtlasMeta,
-    pub frames: FramesMeta,
-    pub rare: HashMap<String, FrameMeta>,
+    pub layout: LayoutBufferMeta,
+    pub images: HashMap<String, ImageEntry>,
     pub fonts: HashMap<String, FontMeta>,
     #[serde(default)]
-    pub text_layout: TextLayout,
+    pub font_list: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LayoutPayload {
+    pub card: CardCanvas,
+    pub base: BaseLayout,
+    pub styles: HashMap<String, StyleDefinition>,
+    pub resource_rules: ResourceRules,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CardCanvas {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct NameBase {
+    pub x: u32,
+    pub width_with_attribute: u32,
+    pub width_without_attribute: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Position {
+    pub x: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PositionedAsset {
+    pub asset: String,
+    pub x: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LevelRankBase {
+    pub asset: String,
+    pub star_width: u32,
+    pub y: u32,
+    pub gap: u32,
+    pub max: u32,
+    pub right_lt_13: Option<u32>,
+    pub right_ge_13: Option<u32>,
+    pub left_lt_13: Option<u32>,
+    pub left_ge_13: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SpellTrapAssetRule {
+    pub icon_asset_prefix: String,
+    pub icon_asset_suffix: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FrameRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ImageFrames {
+    pub normal: FrameRect,
+    pub pendulum: FrameRect,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MaskFrames {
+    pub normal: PositionedAsset,
+    pub pendulum: PositionedAsset,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PendulumScaleSide {
+    pub astral: Position,
+    pub default: Position,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PendulumScaleLayout {
+    pub left: PendulumScaleSide,
+    pub right: PendulumScaleSide,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BoxRect {
+    pub x: u32,
+    pub y: Option<u32>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PackageVariant {
+    pub x: Option<u32>,
+    pub y: u32,
+    pub right: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PackageLayout {
+    pub font_family: String,
+    pub font_size: u32,
+    pub pendulum: PackageVariant,
+    pub default: PackageVariant,
+    pub link: PackageVariant,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ArrowState {
+    pub asset: String,
+    pub x: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ArrowPair {
+    pub on: ArrowState,
+    pub off: ArrowState,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AtkDefLinkText {
+    pub x: u32,
+    pub y: u32,
+    pub font_size: u32,
+    pub scale_x: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LanguageAwareText {
+    pub astral: AtkDefLinkText,
+    pub default: AtkDefLinkText,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AtkDefLinkLayout {
+    pub background: Position,
+    pub atk: LanguageAwareText,
+    pub def: LanguageAwareText,
+    pub link: LanguageAwareText,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DescriptionBase {
+    pub x: u32,
+    pub width: u32,
+    pub base_height: u32,
+    pub atk_bar_height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PasswordLayout {
+    pub x: u32,
+    pub y: u32,
+    pub font_family: String,
+    pub font_size: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CopyrightLayout {
+    pub right: u32,
+    pub y: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BaseLayout {
+    pub name: NameBase,
+    pub attribute: Position,
+    pub level: LevelRankBase,
+    pub rank: LevelRankBase,
+    pub spell_trap: SpellTrapAssetRule,
+    pub image: ImageFrames,
+    pub mask: MaskFrames,
+    pub pendulum_scale: PendulumScaleLayout,
+    pub pendulum_description: BoxRect,
+    pub package: PackageLayout,
+    pub link_arrows: HashMap<String, ArrowPair>,
+    pub effect: BoxRect,
+    pub description: DescriptionBase,
+    pub atk_def_link: AtkDefLinkLayout,
+    pub password: PasswordLayout,
+    pub copyright: CopyrightLayout,
+    pub laser: Position,
+    pub attribute_rare: PositionedAsset,
+    pub twentieth: PositionedAsset,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TextBlock {
+    #[serde(rename = "fontFamily")]
+    pub font_family: Option<String>,
+    pub top: Option<u32>,
+    #[serde(rename = "fontSize")]
+    pub font_size: Option<u32>,
+    #[serde(rename = "rtFontSize")]
+    pub rt_font_size: Option<u32>,
+    #[serde(rename = "rtTop")]
+    pub rt_top: Option<i32>,
+    #[serde(rename = "rtFontScaleX")]
+    pub rt_font_scale_x: Option<f32>,
+    #[serde(rename = "letterSpacing")]
+    pub letter_spacing: Option<f32>,
+    #[serde(rename = "wordSpacing")]
+    pub word_spacing: Option<f32>,
+    #[serde(rename = "lineHeight")]
+    pub line_height: Option<f32>,
+    #[serde(rename = "scaleY")]
+    pub scale_y: Option<f32>,
+    pub right: Option<u32>,
+    #[serde(rename = "textIndent")]
+    pub text_indent: Option<f32>,
+    #[serde(rename = "minHeight")]
+    pub min_height: Option<u32>,
+    #[serde(rename = "smallFontSize")]
+    pub small_font_size: Option<u32>,
+    pub icon: Option<IconMargins>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct IconMargins {
+    #[serde(rename = "marginTop")]
+    pub margin_top: Option<f32>,
+    #[serde(rename = "marginLeft")]
+    pub margin_left: Option<f32>,
+    #[serde(rename = "marginRight")]
+    pub margin_right: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StyleDefinition {
+    #[serde(rename = "fontFamily")]
+    pub font_family: String,
+    pub name: TextBlock,
+    #[serde(rename = "spellTrap")]
+    pub spell_trap: TextBlock,
+    #[serde(rename = "pendulumDescription")]
+    pub pendulum_description: TextBlock,
+    pub effect: TextBlock,
+    pub description: TextBlock,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ResourceRules {
+    pub base_image: String,
+    pub card_asset: String,
+    pub pendulum_asset: String,
+    pub attribute_asset: String,
+    pub spell_trap_attribute_asset: String,
+    pub rare_asset: String,
+    pub copyright_asset: String,
+    pub laser_asset: String,
+    pub atk_def_asset: HashMap<String, String>,
+    pub atk_link_asset: HashMap<String, String>,
 }
 
 pub struct AssetBundle {
-    pub index: AssetsIndex,
+    pub index: BundleIndex,
+    pub layout: LayoutPayload,
     payload: Vec<u8>,
     atlas_pixmap: Option<Pixmap>,
 }
@@ -112,33 +354,39 @@ impl AssetBundle {
         }
 
         let magic = &data[0..4];
-        if magic != b"YGOA" {
+        if magic != b"YGOC" {
             return Err("Invalid magic header".into());
         }
 
-        // let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
         let json_len = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
-
         if data.len() < 12 + json_len {
             return Err("Bundle truncated".into());
         }
 
-        let json_bytes = &data[12..12 + json_len];
-        let index: AssetsIndex = serde_json::from_slice(json_bytes)
-            .map_err(|e| format!("Failed to parse index JSON: {}", e))?;
+        let index: BundleIndex = serde_json::from_slice(&data[12..12 + json_len])
+            .map_err(|e| format!("Failed to parse bundle index: {e}"))?;
+        let payload = data[12 + json_len..].to_vec();
 
-        let payload_start = 12 + json_len;
-        let payload = data[payload_start..].to_vec();
+        let layout_ptr = index.layout.buffer.clone();
+        let layout_start = layout_ptr.offset as usize;
+        let layout_end = layout_start + layout_ptr.len as usize;
+        if layout_end > payload.len() {
+            return Err("Layout buffer pointer out of bounds".into());
+        }
+        let layout = serde_json::from_slice(&payload[layout_start..layout_end])
+            .map_err(|e| format!("Failed to parse layout payload: {e}"))?;
 
         let mut bundle = Self {
             index,
             payload,
+            layout,
             atlas_pixmap: None,
         };
 
-        // Pre-decode atlas since it's frequently used
-        let atlas_bytes = bundle.get_bytes(&bundle.index.atlas.buffer)?;
-        bundle.atlas_pixmap = Some(decode_webp(atlas_bytes)?);
+        if let Some(buffer) = &bundle.index.atlas.buffer {
+            let atlas_bytes = bundle.get_bytes(buffer)?;
+            bundle.atlas_pixmap = Some(decode_webp(atlas_bytes)?);
+        }
 
         Ok(bundle)
     }
@@ -152,56 +400,145 @@ impl AssetBundle {
         Ok(&self.payload[start..end])
     }
 
-    pub fn decode_frame(&self, ptr: &BufferPointer) -> Result<Pixmap, String> {
-        let bytes = self.get_bytes(ptr)?;
-        decode_webp(bytes)
+    pub fn image(&self, name: &str) -> Result<&ImageEntry, String> {
+        self.index
+            .images
+            .get(name)
+            .ok_or_else(|| format!("Missing image asset: {name}"))
     }
 
-    pub fn draw_sprite(&self, target: &mut Pixmap, sprite_name: &str, dx: f32, dy: f32) {
-        if let Some(atlas) = &self.atlas_pixmap {
-            if let Some(info) = self.index.atlas.sprites.get(sprite_name) {
-                let [u, v, w, h] = info.atlas;
-                let rect = tiny_skia::IntRect::from_xywh(u as i32, v as i32, w, h);
-                if let Some(rect) = rect {
-                    if let Some(cropped) = atlas.clone_rect(rect) {
-                        target.draw_pixmap(
-                            (info.layout[0] + dx) as i32,
-                            (info.layout[1] + dy) as i32,
-                            cropped.as_ref(),
-                            &tiny_skia::PixmapPaint::default(),
-                            Transform::default(),
-                            None,
-                        );
-                    }
-                }
+    pub fn has_image(&self, name: &str) -> bool {
+        self.index.images.contains_key(name)
+    }
+
+    pub fn decode_raster(&self, name: &str) -> Result<Pixmap, String> {
+        let image = self.image(name)?;
+        if image.kind != "raster" {
+            return Err(format!("Asset is not raster: {name}"));
+        }
+
+        match image.storage.as_str() {
+            "buffer" => {
+                let ptr = image
+                    .buffer
+                    .as_ref()
+                    .ok_or_else(|| format!("Missing buffer pointer for {name}"))?;
+                decode_webp(self.get_bytes(ptr)?)
             }
+            "atlas" => {
+                let sprite = image
+                    .atlas
+                    .as_ref()
+                    .ok_or_else(|| format!("Missing atlas entry for {name}"))?;
+                let atlas = self
+                    .atlas_pixmap
+                    .as_ref()
+                    .ok_or_else(|| "Atlas pixmap not initialized".to_string())?;
+                let rect = tiny_skia::IntRect::from_xywh(
+                    sprite.x as i32,
+                    sprite.y as i32,
+                    sprite.w,
+                    sprite.h,
+                )
+                .ok_or_else(|| format!("Invalid atlas rect for {name}"))?;
+                atlas
+                    .clone_rect(rect)
+                    .ok_or_else(|| format!("Failed to crop atlas rect for {name}"))
+            }
+            other => Err(format!("Unsupported raster storage '{other}' for {name}")),
         }
     }
 
-    pub fn draw_sprite_at(&self, target: &mut Pixmap, sprite_name: &str, x: f32, y: f32) {
-        if let Some(atlas) = &self.atlas_pixmap {
-            if let Some(info) = self.index.atlas.sprites.get(sprite_name) {
-                let [u, v, w, h] = info.atlas;
-                let rect = tiny_skia::IntRect::from_xywh(u as i32, v as i32, w, h);
-                if let Some(rect) = rect {
-                    if let Some(cropped) = atlas.clone_rect(rect) {
-                        target.draw_pixmap(
-                            x as i32,
-                            y as i32,
-                            cropped.as_ref(),
-                            &tiny_skia::PixmapPaint::default(),
-                            Transform::default(),
-                            None,
-                        );
-                    }
+    pub fn draw_image_at(
+        &self,
+        target: &mut Pixmap,
+        name: &str,
+        x: f32,
+        y: f32,
+    ) -> Result<(), String> {
+        let entry = self.image(name)?;
+        match entry.kind.as_str() {
+            "raster" => match entry.storage.as_str() {
+                "atlas" => {
+                    let sprite = entry
+                        .atlas
+                        .as_ref()
+                        .ok_or_else(|| format!("Missing atlas entry for {name}"))?;
+                    let atlas = self
+                        .atlas_pixmap
+                        .as_ref()
+                        .ok_or_else(|| "Atlas pixmap not initialized".to_string())?;
+                    let rect = tiny_skia::IntRect::from_xywh(
+                        sprite.x as i32,
+                        sprite.y as i32,
+                        sprite.w,
+                        sprite.h,
+                    )
+                    .ok_or_else(|| format!("Invalid atlas rect for {name}"))?;
+                    let cropped = atlas
+                        .clone_rect(rect)
+                        .ok_or_else(|| format!("Failed to crop atlas rect for {name}"))?;
+                    target.draw_pixmap(
+                        x as i32,
+                        y as i32,
+                        cropped.as_ref(),
+                        &tiny_skia::PixmapPaint::default(),
+                        Transform::default(),
+                        None,
+                    );
+                    Ok(())
                 }
+                "buffer" => {
+                    let pixmap = self.decode_raster(name)?;
+                    target.draw_pixmap(
+                        x as i32,
+                        y as i32,
+                        pixmap.as_ref(),
+                        &tiny_skia::PixmapPaint::default(),
+                        Transform::default(),
+                        None,
+                    );
+                    Ok(())
+                }
+                other => Err(format!("Unsupported raster storage '{other}' for {name}")),
+            },
+            "svg" => {
+                let pixmap = self.decode_svg(name)?;
+                target.draw_pixmap(
+                    x as i32,
+                    y as i32,
+                    pixmap.as_ref(),
+                    &tiny_skia::PixmapPaint::default(),
+                    Transform::default(),
+                    None,
+                );
+                Ok(())
             }
+            other => Err(format!("Unsupported asset kind '{other}' for {name}")),
         }
+    }
+
+    pub fn decode_svg(&self, name: &str) -> Result<Pixmap, String> {
+        let image = self.image(name)?;
+        if image.kind != "svg" {
+            return Err(format!("Asset is not svg: {name}"));
+        }
+
+        let ptr = image
+            .buffer
+            .as_ref()
+            .ok_or_else(|| format!("Missing buffer pointer for {name}"))?;
+        let svg_bytes = self.get_bytes(ptr)?;
+
+        let tree = usvg::Tree::from_data(svg_bytes, &usvg::Options::default())
+            .map_err(|e| format!("Failed to parse SVG {name}: {e}"))?;
+        let size = tree.size().to_int_size();
+        let mut pixmap = Pixmap::new(size.width(), size.height())
+            .ok_or_else(|| format!("Failed to allocate SVG pixmap for {name}"))?;
+        resvg::render(&tree, Transform::default(), &mut pixmap.as_mut());
+        Ok(pixmap)
     }
 }
-
-// Global singleton for convenience, but you can also pass it around.
-use std::sync::OnceLock;
 
 static BUNDLE: OnceLock<AssetBundle> = OnceLock::new();
 
@@ -219,23 +556,17 @@ pub fn get_bundle() -> &'static AssetBundle {
 
 pub fn decode_webp(bytes: &[u8]) -> Result<Pixmap, String> {
     let img = image::load_from_memory_with_format(bytes, ImageFormat::WebP)
-        .map_err(|e| format!("Image decode error: {}", e))?;
+        .map_err(|e| format!("Image decode error: {e}"))?;
     let rgba = img.into_rgba8();
     let width = rgba.width();
     let height = rgba.height();
 
-    // Image crate returns unpremultiplied RGBA. tiny_skia expects premultiplied RGBA.
-    // However, tiny_skia::Pixmap::from_vec parses as-is. We need to handle premultiplication if required,
-    // but WebP lossless alpha is generally okay. We'll use tiny_skia's premultiply logic to be safe.
     let mut pixmap = Pixmap::from_vec(
         rgba.into_raw(),
         tiny_skia::IntSize::from_wh(width, height).unwrap(),
     )
     .ok_or_else(|| "Failed to create Pixmap".to_string())?;
 
-    // Premultiply alpha manually just in case
-    // tiny_skia::Pixmap doesn't have an in-place premultiply public fn, but its from_vec assumes
-    // it's already premultiplied. Actually image crate RGBA8 is NOT premultiplied.
     let pixels = pixmap.pixels_mut();
     for pixel in pixels.iter_mut() {
         let color = pixel.demultiply();

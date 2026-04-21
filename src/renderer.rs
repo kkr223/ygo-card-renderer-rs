@@ -1,15 +1,19 @@
-use tiny_skia::{Pixmap, PixmapPaint, Transform};
+use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 
 use crate::{
-    asset_bundle::get_bundle,
+    asset_bundle::{get_bundle, AssetBundle, BaseLayout},
     card_logic::{
-        build_effect_line, build_primary_line, build_scale_line, description_height, description_y,
-        display_stat, get_frame_name, uses_rank,
+        attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
+        description_height, description_y, display_stat, frame_asset_name, image_frame,
+        localized_brackets, localized_spell_trap_name, spell_trap_subtype_icon_asset, uses_rank,
     },
     constants::{CARD_HEIGHT, CARD_WIDTH},
-    layout::layout_style,
+    layout::{layout_style, LayoutStyle},
     model::{RenderError, RenderRequest},
-    text::{draw_multiline_text, draw_text_line, estimate_text_width, fit_single_line, TextAlign},
+    text::{
+        draw_multiline_text, draw_text_line, draw_text_line_scaled, estimate_text_width,
+        fit_single_line, fit_single_line_compressed, TextAlign,
+    },
 };
 
 pub struct Renderer;
@@ -27,180 +31,45 @@ impl Renderer {
 
     pub fn render_png(&self, request: &RenderRequest) -> Result<Vec<u8>, RenderError> {
         let bundle = get_bundle();
+        let base = &bundle.layout.base;
+        let language = request.options.language.as_deref();
+        let style = layout_style(request.kind, language, &bundle.layout, &request.options.layout_overrides);
+
         let mut target = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
-        let language = request.options.language.as_deref();
-        let style = layout_style(
-            request.kind,
-            language,
-            Some(&bundle.index.text_layout),
-            &request.options.layout_overrides,
-        );
+        target.fill(Color::from_rgba8(244, 239, 231, 255));
 
-        // 1. Fill base background color
-        target.fill(tiny_skia::Color::from_rgba8(244, 239, 231, 255));
+        draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
+        draw_art(bundle, &mut target, request, base)?;
+        draw_mask(bundle, &mut target, request, base)?;
+        draw_attribute(bundle, &mut target, request, base, language)?;
+        draw_level_or_rank(bundle, &mut target, request, base)?;
+        draw_link_arrows(bundle, &mut target, request, base)?;
 
-        let frame_name = get_frame_name(&request.card);
-        let frames_cat = if request.card.is_pendulum() {
-            &bundle.index.frames.pendulum
-        } else {
-            &bundle.index.frames.normal
-        };
-
-        // 2. Load and draw the frame
-        if let Some(frame_meta) = frames_cat.get(frame_name) {
-            let pixmap = bundle
-                .decode_frame(&frame_meta.buffer)
-                .map_err(|e| RenderError::Backend(e))?;
-            target.draw_pixmap(
-                frame_meta.x as i32,
-                frame_meta.y as i32,
-                pixmap.as_ref(),
-                &PixmapPaint::default(),
-                Transform::default(),
-                None,
-            );
-        } else {
-            // fallback to normal
-            if let Some(frame_meta) = bundle.index.frames.normal.get("通常") {
-                let pixmap = bundle
-                    .decode_frame(&frame_meta.buffer)
-                    .map_err(|e| RenderError::Backend(e))?;
-                target.draw_pixmap(
-                    frame_meta.x as i32,
-                    frame_meta.y as i32,
-                    pixmap.as_ref(),
-                    &PixmapPaint::default(),
-                    Transform::default(),
-                    None,
-                );
-            }
-        }
-
-        // 3. Draw Attribute
-        let attr_key = get_attribute_key(request.card.attribute);
-        if let Some(key) = attr_key {
-            bundle.draw_sprite(&mut target, key, 0.0, 0.0);
-        } else if request.card.is_spell() {
-            bundle.draw_sprite(&mut target, "common/spell", 0.0, 0.0);
-        } else if request.card.is_trap() {
-            bundle.draw_sprite(&mut target, "common/trap", 0.0, 0.0);
-        }
-
-        // 4. Draw Stars (Level / Rank)
-        let star_count = request.card.level.min(13);
-        if star_count > 0 && !request.card.is_link() {
-            let (is_rank, positions) = if uses_rank(&request.card) {
-                (true, bundle.index.meta.star_rank_pos.as_ref())
-            } else {
-                (false, bundle.index.meta.star_level_pos.as_ref())
-            };
-
-            if let Some(pos_map) = positions {
-                let star_type = if is_rank {
-                    "common/star_rank"
-                } else {
-                    "common/star_level"
-                };
-                // Using 1, 2, 3 as keys in the JSON for star positions
-                for i in 1..=star_count {
-                    if let Some(pos) = pos_map.get(&i.to_string()) {
-                        bundle.draw_sprite_at(&mut target, star_type, pos.x, pos.y);
-                    }
-                }
-            }
-        }
-
-        // 5. Draw Link Arrows
-        if request.card.is_link() {
-            draw_link_arrows(bundle, &mut target, request.card.link_marker);
-        }
-
-        // 6. Draw Card Art
-        if let Some(art_path) = &request.options.art_image {
-            match image::open(art_path) {
-                Ok(img) => {
-                    let rgba = img.into_rgba8();
-                    let w = rgba.width();
-                    let h = rgba.height();
-                    if let Some(art_pixmap) = Pixmap::from_vec(
-                        rgba.into_raw(),
-                        tiny_skia::IntSize::from_wh(w, h).unwrap(),
-                    ) {
-                        // 因为外部已经裁剪好，我们直接取其卡框预设定的左上角锚点。
-                        let (art_x, art_y, _w, _h) = crate::card_logic::image_frame(&request.card);
-                        target.draw_pixmap(
-                            art_x as i32,
-                            art_y as i32,
-                            art_pixmap.as_ref(),
-                            &PixmapPaint::default(),
-                            Transform::default(),
-                            None,
-                        );
-                    }
-                }
-                Err(e) => {
-                    // Fail silently or log error depending on convention.
-                    // For now, continue without art.
-                    eprintln!("Warning: could not open art image: {}", e);
-                }
-            }
-        }
-
-        // 7. Text Overlay (Name, type/effect line, description, stats)
-        let show_attribute =
-            request.card.attribute != 0 || request.card.is_spell() || request.card.is_trap();
-        let title_layout = fit_single_line(
-            &request.card.name,
-            language,
-            style.name_size,
-            style.name_font_family,
-            if show_attribute {
-                style.title_max_width_with_attribute
-            } else {
-                style.title_max_width_without_attribute
-            },
-            style.title_letter_spacing,
-            style.name_size.saturating_sub(26),
-        );
-
-        draw_text_line(
-            &mut target,
-            &request.card.name,
-            style.name_x as f32,
-            style.name_top as f32,
-            title_layout.font_size as f32,
-            title_layout.max_width as f32,
-            auto_name_color(request),
-            tiny_skia::Color::TRANSPARENT,
-            style.name_font_family,
-            TextAlign::Left,
-            language,
-            title_layout.letter_spacing,
-        );
+        draw_title(&mut target, request, &style, base, language);
 
         if request.card.is_spell() || request.card.is_trap() {
-            draw_spell_trap_line(&mut target, request, &style, language);
+            draw_spell_trap_line(bundle, &mut target, request, &style, base, language)?;
         } else if let Some(line) = build_effect_line(&request.card, request.kind) {
             let line_layout = fit_single_line(
                 &line,
                 language,
                 style.effect_size,
-                style.effect_font_family,
-                style.body_max_width,
+                &style.effect_font_family,
+                base.effect.width,
                 style.effect_letter_spacing,
                 style.effect_size.saturating_sub(10),
             );
             draw_text_line(
                 &mut target,
-                &line,
+                &line_layout.text,
                 style.effect_x as f32,
                 style.effect_top as f32,
                 line_layout.font_size as f32,
                 line_layout.max_width as f32,
-                tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                tiny_skia::Color::TRANSPARENT,
-                style.effect_font_family,
+                Color::from_rgba8(17, 17, 17, 255),
+                Color::TRANSPARENT,
+                &style.effect_font_family,
                 TextAlign::Left,
                 language,
                 line_layout.letter_spacing,
@@ -213,168 +82,253 @@ impl Renderer {
             style.description_x as f32,
             description_y(&request.card, &style) as f32,
             style.body_max_width as f32,
-            description_height(&request.card, &style) as f32,
-            style.base_font_family,
-            tiny_skia::Color::BLACK,
-            tiny_skia::Color::TRANSPARENT,
+            description_height(&request.card, &style, base) as f32,
+            &style.base_font_family,
+            Color::BLACK,
+            Color::TRANSPARENT,
             language,
             style.description_size,
             style.description_line_height,
             style.description_letter_spacing,
             style.description_size.saturating_sub(8),
+            request.options.description_first_line_compress,
         );
 
-        if request.card.is_monster() {
-            draw_text_line(
-                &mut target,
-                &display_stat(request.card.attack),
-                style.stat_atk_x as f32,
-                style.stat_top as f32,
-                style.stat_size as f32,
-                220.0,
-                tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                tiny_skia::Color::TRANSPARENT,
-                style.stat_font_family,
-                TextAlign::Right,
-                language,
-                style.stat_letter_spacing,
-            );
+        draw_stats(bundle, &mut target, request, &style, base, language);
+        draw_password(&mut target, request, &style, base, language);
 
-            if request.card.is_link() {
-                draw_text_line(
-                    &mut target,
-                    &request.card.level.max(1).to_string(),
-                    style.stat_link_x as f32,
-                    style.link_top as f32,
-                    style.link_size as f32,
-                    120.0,
-                    tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                    tiny_skia::Color::TRANSPARENT,
-                    style.link_font_family,
-                    TextAlign::Right,
-                    language,
-                    style.stat_letter_spacing,
-                );
-            } else {
-                draw_text_line(
-                    &mut target,
-                    &display_stat(request.card.defense),
-                    style.stat_def_x as f32,
-                    style.stat_top as f32,
-                    style.stat_size as f32,
-                    220.0,
-                    tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                    tiny_skia::Color::TRANSPARENT,
-                    style.stat_font_family,
-                    TextAlign::Right,
-                    language,
-                    style.stat_letter_spacing,
-                );
-            }
-        }
-
-        if request.card.is_pendulum() {
-            draw_text_line(
-                &mut target,
-                &request.card.lscale.to_string(),
-                145.0,
-                1370.0,
-                98.0,
-                120.0,
-                tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                tiny_skia::Color::TRANSPARENT,
-                style.stat_font_family,
-                TextAlign::Center,
-                language,
-                -10.0,
-            );
-            draw_text_line(
-                &mut target,
-                &request.card.rscale.to_string(),
-                1249.0,
-                1370.0,
-                98.0,
-                120.0,
-                tiny_skia::Color::from_rgba8(17, 17, 17, 255),
-                tiny_skia::Color::TRANSPARENT,
-                style.stat_font_family,
-                TextAlign::Center,
-                language,
-                -10.0,
-            );
-        }
-
-        draw_text_line(
-            &mut target,
-            &format!("ID {}", request.card.code),
-            66.0,
-            1932.0,
-            28.0,
-            260.0,
-            tiny_skia::Color::from_rgba8(93, 81, 70, 255),
-            tiny_skia::Color::TRANSPARENT,
-            style.password_font_family,
-            TextAlign::Left,
-            language,
-            0.0,
-        );
-
-        if request.card.is_monster() {
-            draw_text_line(
-                &mut target,
-                &build_scale_line(&request.card),
-                1284.0,
-                1936.0,
-                22.0,
-                320.0,
-                tiny_skia::Color::from_rgba8(93, 81, 70, 255),
-                tiny_skia::Color::TRANSPARENT,
-                style.base_font_family,
-                TextAlign::Right,
-                language,
-                0.0,
-            );
-        }
-
-        // Encode to PNG
         target
             .encode_png()
             .map_err(|e| RenderError::PngEncode(e.to_string()))
     }
 }
 
-fn auto_name_color(request: &RenderRequest) -> tiny_skia::Color {
-    if request.card.is_spell() || request.card.is_trap() {
-        tiny_skia::Color::from_rgba8(245, 245, 245, 255)
-    } else {
-        tiny_skia::Color::from_rgba8(22, 18, 15, 255)
+fn draw_frame(bundle: &AssetBundle, target: &mut Pixmap, asset_name: &str) -> Result<(), RenderError> {
+    bundle
+        .draw_image_at(target, asset_name, 0.0, 0.0)
+        .map_err(RenderError::Backend)
+}
+
+fn draw_art(
+    _bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    if let Some(art_path) = &request.options.art_image {
+        if let Ok(img) = image::open(art_path) {
+            let rgba = img.into_rgba8();
+            let w = rgba.width();
+            let h = rgba.height();
+            if let Some(art_pixmap) = Pixmap::from_vec(
+                rgba.into_raw(),
+                tiny_skia::IntSize::from_wh(w, h).unwrap(),
+            ) {
+                let (art_x, art_y, _w, _h) = image_frame(&request.card, base);
+                target.draw_pixmap(
+                    art_x as i32,
+                    art_y as i32,
+                    art_pixmap.as_ref(),
+                    &PixmapPaint::default(),
+                    Transform::default(),
+                    None,
+                );
+            }
+        }
     }
+    Ok(())
+}
+
+fn draw_mask(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    let mask = if request.card.is_pendulum() {
+        &base.mask.pendulum
+    } else {
+        &base.mask.normal
+    };
+    bundle
+        .draw_image_at(target, &mask.asset, mask.x as f32, mask.y as f32)
+        .map_err(RenderError::Backend)
+}
+
+fn draw_attribute(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    language: Option<&str>,
+) -> Result<(), RenderError> {
+    if let Some(asset) = attribute_asset_name(&request.card, language) {
+        if bundle.has_image(&asset) {
+            bundle
+                .draw_image_at(target, &asset, base.attribute.x as f32, base.attribute.y as f32)
+                .map_err(RenderError::Backend)?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_level_or_rank(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    let count = request.card.level.min(13);
+    if count == 0 || request.card.is_link() {
+        return Ok(());
+    }
+
+    let (layout, left_to_right) = if uses_rank(&request.card) {
+        (&base.rank, true)
+    } else {
+        (&base.level, false)
+    };
+
+    let start = if left_to_right {
+        if count < 13 {
+            layout.left_lt_13.unwrap_or(147)
+        } else {
+            layout.left_ge_13.unwrap_or(101)
+        }
+    } else if count < 13 {
+        layout.right_lt_13.unwrap_or(147)
+    } else {
+        layout.right_ge_13.unwrap_or(101)
+    };
+
+    for index in 0..count {
+        let x = if left_to_right {
+            start + index * (layout.star_width + layout.gap)
+        } else {
+            CARD_WIDTH - start - index * (layout.star_width + layout.gap) - layout.star_width
+        };
+        bundle
+            .draw_image_at(target, &layout.asset, x as f32, layout.y as f32)
+            .map_err(RenderError::Backend)?;
+    }
+    Ok(())
+}
+
+fn draw_link_arrows(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    if !request.card.is_link() {
+        return Ok(());
+    }
+
+    let arrows = [
+        (0x004_u32, "up"),
+        (0x080_u32, "right_up"),
+        (0x020_u32, "right"),
+        (0x100_u32, "right_down"),
+        (0x040_u32, "down"),
+        (0x008_u32, "left_down"),
+        (0x001_u32, "left"),
+        (0x002_u32, "left_up"),
+    ];
+
+    for (bit, name) in arrows {
+        if let Some(pair) = base.link_arrows.get(name) {
+            let state = if (request.card.link_marker & bit) != 0 {
+                &pair.on
+            } else {
+                &pair.off
+            };
+            bundle
+                .draw_image_at(target, &state.asset, state.x as f32, state.y as f32)
+                .map_err(RenderError::Backend)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_title(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+) {
+    let show_attribute =
+        request.card.attribute != 0 || request.card.is_spell() || request.card.is_trap();
+    let title_width = if show_attribute {
+        base.name.width_with_attribute
+    } else {
+        base.name.width_without_attribute
+    };
+
+    let title_layout = if request.options.title_width_compress {
+        fit_single_line_compressed(
+            &request.card.name,
+            language,
+            style.name_size,
+            &style.name_font_family,
+            title_width,
+            style.title_letter_spacing,
+            0.6,
+        )
+    } else {
+        fit_single_line(
+            &request.card.name,
+            language,
+            style.name_size,
+            &style.name_font_family,
+            title_width,
+            style.title_letter_spacing,
+            style.name_size.saturating_sub(26),
+        )
+    };
+
+    draw_text_line_scaled(
+        target,
+        &title_layout.text,
+        style.name_x as f32,
+        style.name_top as f32,
+        title_layout.font_size as f32,
+        title_layout.max_width as f32,
+        if auto_name_light(&request.card) {
+            Color::from_rgba8(245, 245, 245, 255)
+        } else {
+            Color::from_rgba8(22, 18, 15, 255)
+        },
+        Color::TRANSPARENT,
+        &style.name_font_family,
+        TextAlign::Left,
+        language,
+        title_layout.letter_spacing,
+        title_layout.scale_x,
+    );
 }
 
 fn draw_spell_trap_line(
+    bundle: &AssetBundle,
     target: &mut Pixmap,
     request: &RenderRequest,
-    style: &crate::layout::LayoutStyle,
+    style: &LayoutStyle,
+    base: &BaseLayout,
     language: Option<&str>,
-) {
-    let line = build_primary_line(&request.card, request.kind);
-    let left_text = line.trim_end_matches('】');
-    let right_text = "】";
+) -> Result<(), RenderError> {
+    let (left_bracket, right_bracket) = localized_brackets(language);
+    let left_text = format!("{left_bracket}{}", localized_spell_trap_name(&request.card, language));
+    let right_text = right_bracket;
     let font_size = style.type_size as f32;
     let letter_spacing = style.type_letter_spacing;
-    let text_color = tiny_skia::Color::from_rgba8(29, 20, 15, 255);
+    let text_color = Color::from_rgba8(29, 20, 15, 255);
 
-    // 贴近 JS 参考实现：右括号贴右侧，左半段和图标再向左回推。
-    let right_margin = 134.0_f32;
-    let icon_width = 72.0_f32;
-    let icon_margin_top = 8.0_f32;
-    let icon_margin_left = 4.0_f32;
-    let icon_margin_right = 0.0_f32;
-
+    let right_margin = style.type_right as f32;
     let right_width = estimate_text_width(
         right_text,
         language,
-        style.type_font_family,
+        &style.type_font_family,
         font_size,
         letter_spacing,
     );
@@ -388,38 +342,40 @@ fn draw_spell_trap_line(
         font_size,
         right_width.ceil().max(32.0),
         text_color,
-        tiny_skia::Color::TRANSPARENT,
-        style.type_font_family,
+        Color::TRANSPARENT,
+        &style.type_font_family,
         TextAlign::Left,
         language,
         letter_spacing,
     );
 
-    let icon_key = spell_trap_subtype_icon_key(&request.card);
-    let icon_x = if icon_key.is_some() {
+    let icon_asset = spell_trap_subtype_icon_asset(&request.card);
+    let icon_margin_top = bundle_style_icon_margin_top(language, bundle);
+    let icon_margin_left = bundle_style_icon_margin_left(language, bundle);
+    let icon_margin_right = bundle_style_icon_margin_right(language, bundle);
+    let icon_width = 72.0_f32;
+
+    let icon_x = if icon_asset.is_some() {
         right_x - icon_margin_right - icon_width
     } else {
         right_x
     };
 
-    if let Some(icon_key) = icon_key {
-        get_bundle().draw_sprite_at(
-            target,
-            icon_key,
-            icon_x,
-            style.type_top as f32 + icon_margin_top,
-        );
+    if let Some(icon_asset) = icon_asset {
+        bundle
+            .draw_image_at(target, icon_asset, icon_x, style.type_top as f32 + icon_margin_top)
+            .map_err(RenderError::Backend)?;
     }
 
     let left_width = estimate_text_width(
-        left_text,
+        &left_text,
         language,
-        style.type_font_family,
+        &style.type_font_family,
         font_size,
         letter_spacing,
     );
     let left_x = icon_x
-        - if icon_key.is_some() {
+        - if icon_asset.is_some() {
             icon_margin_left
         } else {
             0.0
@@ -428,77 +384,241 @@ fn draw_spell_trap_line(
 
     draw_text_line(
         target,
-        left_text,
+        &left_text,
         left_x,
         style.type_top as f32,
         font_size,
         left_width.ceil().max(80.0),
         text_color,
-        tiny_skia::Color::TRANSPARENT,
-        style.type_font_family,
+        Color::TRANSPARENT,
+        &style.type_font_family,
         TextAlign::Left,
         language,
         letter_spacing,
     );
+
+    let _ = base;
+    Ok(())
 }
 
-fn draw_link_arrows(
-    bundle: &crate::asset_bundle::AssetBundle,
+fn draw_stats(
+    bundle: &AssetBundle,
     target: &mut Pixmap,
-    link_marker: u32,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
 ) {
-    let arrows = [
-        (0x080_u32, "links/arrow_6"),
-        (0x100_u32, "links/arrow_5"),
-        (0x020_u32, "links/arrow_4"),
-        (0x004_u32, "links/arrow_0"),
-        (0x002_u32, "links/arrow_1"),
-        (0x001_u32, "links/arrow_2"),
-        (0x008_u32, "links/arrow_3"),
-        (0x040_u32, "links/arrow_7"),
-    ];
+    if request.card.is_monster() {
+        draw_stat_separator(bundle, target, request, base, language);
 
-    for (bit, sprite_name) in arrows {
-        if (link_marker & bit) != 0 {
-            bundle.draw_sprite(target, sprite_name, 0.0, 0.0);
+        let value_color = Color::BLACK;
+
+        draw_text_line(
+            target,
+            &display_stat(request.card.attack),
+            style.stat_atk_x as f32,
+            style.stat_top as f32,
+            style.stat_size as f32,
+            220.0,
+            value_color,
+            Color::TRANSPARENT,
+            &style.stat_font_family,
+            TextAlign::Right,
+            language,
+            style.stat_letter_spacing,
+        );
+
+        if request.card.is_link() {
+            let link_text = if language == Some("astral") {
+                &base.atk_def_link.link.astral
+            } else {
+                &base.atk_def_link.link.default
+            };
+
+            draw_text_line_scaled(
+                target,
+                &request.card.level.max(1).to_string(),
+                style.stat_link_x as f32,
+                style.link_top as f32,
+                style.link_size as f32,
+                120.0,
+                value_color,
+                Color::TRANSPARENT,
+                &style.link_font_family,
+                TextAlign::Right,
+                language,
+                style.stat_letter_spacing,
+                link_text.scale_x.unwrap_or(1.0),
+            );
+        } else {
+            draw_text_line(
+                target,
+                &display_stat(request.card.defense),
+                style.stat_def_x as f32,
+                style.stat_top as f32,
+                style.stat_size as f32,
+                220.0,
+                value_color,
+                Color::TRANSPARENT,
+                &style.stat_font_family,
+                TextAlign::Right,
+                language,
+                style.stat_letter_spacing,
+            );
         }
     }
-}
 
-fn get_attribute_key(attribute: u32) -> Option<&'static str> {
-    match attribute {
-        0x01 => Some("common/earth"),
-        0x02 => Some("common/water"),
-        0x04 => Some("common/fire"),
-        0x08 => Some("common/wind"),
-        0x10 => Some("common/light"),
-        0x20 => Some("common/dark"),
-        0x40 => Some("common/divine"),
-        _ => None,
+    if request.card.is_pendulum() {
+        let left = if language == Some("astral") {
+            &base.pendulum_scale.left.astral
+        } else {
+            &base.pendulum_scale.left.default
+        };
+        let right = if language == Some("astral") {
+            &base.pendulum_scale.right.astral
+        } else {
+            &base.pendulum_scale.right.default
+        };
+
+        draw_text_line(
+            target,
+            &request.card.lscale.to_string(),
+            left.x as f32,
+            left.y as f32,
+            if language == Some("astral") { 84.0 } else { 98.0 },
+            120.0,
+            Color::from_rgba8(17, 17, 17, 255),
+            Color::TRANSPARENT,
+            &style.stat_font_family,
+            TextAlign::Center,
+            language,
+            if language == Some("astral") { 0.0 } else { -10.0 },
+        );
+        draw_text_line(
+            target,
+            &request.card.rscale.to_string(),
+            right.x as f32,
+            right.y as f32,
+            if language == Some("astral") { 84.0 } else { 98.0 },
+            120.0,
+            Color::from_rgba8(17, 17, 17, 255),
+            Color::TRANSPARENT,
+            &style.stat_font_family,
+            TextAlign::Center,
+            language,
+            if language == Some("astral") { 0.0 } else { -10.0 },
+        );
     }
 }
 
-fn spell_trap_subtype_icon_key(card: &ygopro_cdb_encode_rs::CardDataEntry) -> Option<&'static str> {
-    const TYPE_QUICKPLAY: u32 = 0x1_0000;
-    const TYPE_CONTINUOUS: u32 = 0x2_0000;
-    const TYPE_EQUIP: u32 = 0x4_0000;
-    const TYPE_FIELD: u32 = 0x8_0000;
-    const TYPE_COUNTER: u32 = 0x10_0000;
-    const TYPE_RITUAL: u32 = 0x80;
-
-    if (card.type_ & TYPE_QUICKPLAY) != 0 {
-        Some("common/icon_quick-play")
-    } else if (card.type_ & TYPE_CONTINUOUS) != 0 {
-        Some("common/icon_continuous")
-    } else if (card.type_ & TYPE_EQUIP) != 0 {
-        Some("common/icon_equip")
-    } else if (card.type_ & TYPE_FIELD) != 0 {
-        Some("common/icon_field")
-    } else if (card.type_ & TYPE_COUNTER) != 0 {
-        Some("common/icon_counter")
-    } else if card.is_spell() && (card.type_ & TYPE_RITUAL) != 0 {
-        Some("common/icon_ritual")
+fn draw_stat_separator(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    language: Option<&str>,
+) {
+    let asset_name = if request.card.is_link() {
+        bundle
+            .layout
+            .resource_rules
+            .atk_link_asset
+            .get(if language == Some("astral") {
+                "astral"
+            } else {
+                "default"
+            })
     } else {
-        None
+        bundle
+            .layout
+            .resource_rules
+            .atk_def_asset
+            .get(if language == Some("astral") {
+                "astral"
+            } else {
+                "default"
+            })
+    };
+
+    if let Some(asset_name) = asset_name {
+        let _ = bundle.draw_image_at(
+            target,
+            asset_name,
+            base.atk_def_link.background.x as f32,
+            base.atk_def_link.background.y as f32,
+        );
     }
+}
+
+fn draw_password(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+) {
+    draw_text_line(
+        target,
+        &format!("ID {}", request.card.code),
+        base.password.x as f32,
+        base.password.y as f32,
+        base.password.font_size as f32,
+        260.0,
+        Color::from_rgba8(93, 81, 70, 255),
+        Color::TRANSPARENT,
+        &style.password_font_family,
+        TextAlign::Left,
+        language,
+        0.0,
+    );
+
+    if request.card.is_monster() {
+        draw_text_line(
+            target,
+            &build_scale_line(&request.card),
+            (CARD_WIDTH - base.copyright.right) as f32,
+            base.copyright.y as f32,
+            22.0,
+            320.0,
+            Color::from_rgba8(93, 81, 70, 255),
+            Color::TRANSPARENT,
+            &style.base_font_family,
+            TextAlign::Right,
+            language,
+            0.0,
+        );
+    }
+}
+fn bundle_style_icon_margin_top(language: Option<&str>, bundle: &AssetBundle) -> f32 {
+    bundle
+        .layout
+        .styles
+        .get(language.unwrap_or("sc"))
+        .or_else(|| bundle.layout.styles.get("sc"))
+        .and_then(|style| style.spell_trap.icon.as_ref())
+        .and_then(|icon| icon.margin_top)
+        .unwrap_or(8.0)
+}
+
+fn bundle_style_icon_margin_left(language: Option<&str>, bundle: &AssetBundle) -> f32 {
+    bundle
+        .layout
+        .styles
+        .get(language.unwrap_or("sc"))
+        .or_else(|| bundle.layout.styles.get("sc"))
+        .and_then(|style| style.spell_trap.icon.as_ref())
+        .and_then(|icon| icon.margin_left)
+        .unwrap_or(0.0)
+}
+
+fn bundle_style_icon_margin_right(language: Option<&str>, bundle: &AssetBundle) -> f32 {
+    bundle
+        .layout
+        .styles
+        .get(language.unwrap_or("sc"))
+        .or_else(|| bundle.layout.styles.get("sc"))
+        .and_then(|style| style.spell_trap.icon.as_ref())
+        .and_then(|icon| icon.margin_right)
+        .unwrap_or(0.0)
 }
