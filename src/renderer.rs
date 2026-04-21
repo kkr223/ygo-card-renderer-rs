@@ -274,7 +274,7 @@ fn draw_title(
             &style.name_font_family,
             title_width,
             style.title_letter_spacing,
-            0.6,
+            0.3,
         )
     } else {
         fit_single_line(
