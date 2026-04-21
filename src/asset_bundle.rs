@@ -567,16 +567,22 @@ pub fn decode_webp(bytes: &[u8]) -> Result<Pixmap, String> {
     )
     .ok_or_else(|| "Failed to create Pixmap".to_string())?;
 
-    let pixels = pixmap.pixels_mut();
-    for pixel in pixels.iter_mut() {
-        let color = pixel.demultiply();
-        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-            color.red(),
-            color.green(),
-            color.blue(),
-            color.alpha(),
-        )
-        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    // `image` delivers straight-alpha RGBA; tiny_skia's Pixmap expects premultiplied alpha.
+    // Opaque pixels (α = 255) are already correct and need no adjustment.
+    for pixel in pixmap.pixels_mut() {
+        let a = pixel.alpha();
+        if a == 255 {
+            continue;
+        }
+        if a == 0 {
+            *pixel = tiny_skia::PremultipliedColorU8::TRANSPARENT;
+            continue;
+        }
+        let r = (pixel.red() as u16 * a as u16 / 255) as u8;
+        let g = (pixel.green() as u16 * a as u16 / 255) as u8;
+        let b = (pixel.blue() as u16 * a as u16 / 255) as u8;
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
+            .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
     }
 
     Ok(pixmap)

@@ -1,13 +1,69 @@
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Mutex;
 use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 
 use crate::asset_bundle::get_bundle;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-character advance cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maps `(char, family_id, font_size_bits)` → advance width in pixels.
+///
+/// `family_id` is a compact integer assigned the first time a family name is
+/// seen; `font_size_bits` is `f32::to_bits(font_size)` to allow exact-match
+/// keying without floating-point equality hazards.
+///
+/// The cache lives inside `TextEngine` and is populated lazily: on the first
+/// call for a given character the advance is measured via a single-character
+/// `cosmic_text::Buffer`, then stored permanently for the lifetime of the
+/// process (which is the same as the `LazyLock<Mutex<TextEngine>>`).
+struct GlyphWidthCache {
+    family_ids: HashMap<String, u32>,
+    next_id: u32,
+    advances: HashMap<(char, u32, u32), f32>,
+}
+
+impl GlyphWidthCache {
+    fn new() -> Self {
+        Self {
+            family_ids: HashMap::new(),
+            next_id: 0,
+            advances: HashMap::new(),
+        }
+    }
+
+    /// Returns the numeric id for `name`, creating one if not yet known.
+    fn family_id(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.family_ids.get(name) {
+            return id;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.family_ids.insert(name.to_string(), id);
+        id
+    }
+
+    fn get(&self, ch: char, family_id: u32, font_size: f32) -> Option<f32> {
+        self.advances
+            .get(&(ch, family_id, font_size.to_bits()))
+            .copied()
+    }
+
+    fn insert(&mut self, ch: char, family_id: u32, font_size: f32, advance: f32) {
+        self.advances
+            .insert((ch, family_id, font_size.to_bits()), advance);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 pub struct TextEngine {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
+    glyph_cache: GlyphWidthCache,
 }
 
 #[derive(Debug, Clone)]
@@ -57,8 +113,94 @@ pub static TEXT_ENGINE: std::sync::LazyLock<Mutex<TextEngine>> = std::sync::Lazy
     Mutex::new(TextEngine {
         font_system,
         swash_cache,
+        glyph_cache: GlyphWidthCache::new(),
     })
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Advance measurement helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl TextEngine {
+    /// Returns `(sum_of_glyph_advances, char_count)` for `text`.
+    ///
+    /// Letter-spacing is intentionally **excluded** from the return value so
+    /// callers can apply it once with the correct span:
+    /// ```text
+    /// rendered_width = raw + letter_spacing * (count - 1)
+    /// ```
+    ///
+    /// Each character is measured individually and the result is cached; on
+    /// the second call for the same `(char, family, font_size)` triple no
+    /// `Buffer` allocation occurs at all.
+    pub(crate) fn measure_raw_advances(
+        &mut self,
+        text: &str,
+        family_name: &str,
+        font_size: f32,
+    ) -> (f32, usize) {
+        let resolved = primary_family_name(family_name);
+        let weight = font_weight_for_family(resolved.as_str());
+        let family_id = self.glyph_cache.family_id(resolved.as_str());
+
+        let mut raw = 0.0_f32;
+        let mut count = 0usize;
+
+        for ch in text.chars() {
+            let advance = match self.glyph_cache.get(ch, family_id, font_size) {
+                Some(a) => a,
+                None => {
+                    let a = measure_char_advance(
+                        &mut self.font_system,
+                        ch,
+                        resolved.as_str(),
+                        font_size,
+                        weight,
+                    );
+                    self.glyph_cache.insert(ch, family_id, font_size, a);
+                    a
+                }
+            };
+            raw += advance;
+            count += 1;
+        }
+
+        (raw, count)
+    }
+}
+
+/// Measure the advance width of a single character by building a minimal
+/// `cosmic_text::Buffer`.  This is the slow path; results are cached by
+/// `TextEngine::measure_raw_advances` so it executes at most once per
+/// `(char, family, font_size)` combination.
+fn measure_char_advance(
+    font_system: &mut FontSystem,
+    ch: char,
+    family: &str,
+    font_size: f32,
+    weight: Weight,
+) -> f32 {
+    let mut tmp = [0u8; 4];
+    let s = ch.encode_utf8(&mut tmp);
+
+    let metrics = Metrics::new(font_size, font_size);
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_size(font_system, None, Some(font_size * 2.0));
+
+    let attrs = Attrs::new().family(Family::Name(family)).weight(weight);
+    buffer.set_text(font_system, s, &attrs, Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, true);
+
+    let mut advance = 0.0_f32;
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            advance += glyph.w;
+        }
+    }
+    advance
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn fit_single_line(
     text: &str,
@@ -468,6 +610,7 @@ pub fn draw_text_shadowed_scaled(
     let TextEngine {
         font_system,
         swash_cache,
+        ..
     } = &mut *engine;
 
     let metrics = Metrics::new(font_size, font_size);
@@ -593,7 +736,7 @@ fn draw_buffer_to_pixmap(
 
 fn wrap_text(
     text: &str,
-    language: Option<&str>,
+    _language: Option<&str>,
     family_name: &str,
     max_width: f32,
     font_size: f32,
@@ -601,38 +744,64 @@ fn wrap_text(
 ) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
+    // Running totals for the current line (letter-spacing excluded).
+    let mut current_raw = 0.0_f32;
+    let mut current_chars = 0usize;
 
     for raw_line in text.replace("\r\n", "\n").split('\n') {
         if raw_line.is_empty() {
             if !current.is_empty() {
                 lines.push(std::mem::take(&mut current));
+                current_raw = 0.0;
+                current_chars = 0;
             }
             lines.push(String::new());
             continue;
         }
 
         for token in tokenize_line(raw_line) {
-            let candidate = if current.is_empty() {
-                token.clone()
-            } else {
-                format!("{current}{token}")
-            };
+            let (tok_raw, tok_chars) = TEXT_ENGINE
+                .lock()
+                .unwrap()
+                .measure_raw_advances(&token, family_name, font_size);
 
-            let width =
-                estimate_text_width(&candidate, language, family_name, font_size, letter_spacing);
-            if !current.is_empty() && width > max_width {
+            // Width of the line *if* we append this token.
+            let proposed_chars = current_chars + tok_chars;
+            let proposed_width = current_raw
+                + tok_raw
+                + letter_spacing * proposed_chars.saturating_sub(1) as f32;
+
+            if !current.is_empty() && proposed_width > max_width {
+                // Current line is full – flush it and start a new one.
                 lines.push(std::mem::take(&mut current));
+                current_raw = 0.0;
+                current_chars = 0;
+
                 if token.trim().is_empty() {
+                    // Leading whitespace on a new line is discarded.
                     continue;
                 }
-                current.push_str(token.trim_start());
+
+                let trimmed = token.trim_start();
+                let (trim_raw, trim_chars) = TEXT_ENGINE
+                    .lock()
+                    .unwrap()
+                    .measure_raw_advances(trimmed, family_name, font_size);
+
+                current.push_str(trimmed);
+                current_raw = trim_raw;
+                current_chars = trim_chars;
             } else {
                 current.push_str(&token);
+                current_raw += tok_raw;
+                current_chars += tok_chars;
             }
         }
 
         if !current.is_empty() {
             lines.push(std::mem::take(&mut current));
+            current_raw = 0.0;
+            current_chars = 0;
         }
     }
 
@@ -718,25 +887,39 @@ fn first_line_scale(
 
 fn truncate_text_to_width(
     text: &str,
-    language: Option<&str>,
+    _language: Option<&str>,
     family_name: &str,
     font_size: f32,
     letter_spacing: f32,
     max_width: f32,
 ) -> String {
-    if estimate_text_width(text, language, family_name, font_size, letter_spacing) <= max_width {
+    // Fast path: full string already fits.
+    let mut engine = TEXT_ENGINE.lock().unwrap();
+    let (full_raw, full_count) = engine.measure_raw_advances(text, family_name, font_size);
+    if full_raw + letter_spacing * full_count.saturating_sub(1) as f32 <= max_width {
         return text.to_string();
     }
 
+    // Slow path: accumulate character advances until we overflow.
     let mut fitted = String::new();
+    let mut raw_acc = 0.0_f32;
+    let mut char_count = 0usize;
+
     for ch in text.chars() {
-        let candidate = format!("{fitted}{ch}");
-        if estimate_text_width(&candidate, language, family_name, font_size, letter_spacing)
-            > max_width
-        {
+        // Reuse the already-locked engine for each character; the cache will
+        // almost always hit after the first call.
+        let (ch_raw, _) = engine.measure_raw_advances(&ch.to_string(), family_name, font_size);
+        // Width after appending this character:
+        //   (raw_acc + ch_raw) + letter_spacing * char_count
+        //   ^^^^^^^^^^^^^^^^^    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //       sum of advances   (char_count) gaps between the new n+1 chars
+        let new_width = raw_acc + ch_raw + letter_spacing * char_count as f32;
+        if new_width > max_width {
             break;
         }
         fitted.push(ch);
+        raw_acc += ch_raw;
+        char_count += 1;
     }
 
     fitted
@@ -765,24 +948,8 @@ pub(crate) fn estimate_text_width_scaled(
     }
 
     let mut engine = TEXT_ENGINE.lock().unwrap();
-    let TextEngine { font_system, .. } = &mut *engine;
-
-    let metrics = Metrics::new(font_size, font_size);
-    let mut buffer = Buffer::new(font_system, metrics);
-    buffer.set_size(font_system, None, Some(font_size * 2.0));
-
-    let resolved_family = primary_family_name(family_name);
-    let attrs = Attrs::new()
-        .family(Family::Name(resolved_family.as_str()))
-        .weight(font_weight_for_family(resolved_family.as_str()));
-    buffer.set_text(font_system, text, &attrs, Shaping::Advanced);
-    buffer.shape_until_scroll(font_system, true);
-
-    let mut width = 0.0_f32;
-    for run in buffer.layout_runs() {
-        width = width.max(layout_run_width(text, &run.glyphs, letter_spacing));
-    }
-
+    let (raw, count) = engine.measure_raw_advances(text, family_name, font_size);
+    let width = raw + letter_spacing * count.saturating_sub(1) as f32;
     (width * scale_x).max(0.0)
 }
 
@@ -796,17 +963,6 @@ fn cluster_spacing_offset(text: &str, cluster_start: usize, letter_spacing: f32)
         .map(|prefix| prefix.chars().count())
         .unwrap_or(0);
     letter_spacing * preceding_chars as f32
-}
-
-fn layout_run_width(text: &str, glyphs: &[cosmic_text::LayoutGlyph], letter_spacing: f32) -> f32 {
-    let mut width = 0.0_f32;
-
-    for glyph in glyphs {
-        let glyph_right = glyph.x + glyph.w + cluster_spacing_offset(text, glyph.start, letter_spacing);
-        width = width.max(glyph_right);
-    }
-
-    width
 }
 
 fn primary_family_name(stack: &str) -> String {
@@ -831,5 +987,454 @@ fn font_weight_for_family(family: &str) -> Weight {
         "ygo-password" => Weight::MEDIUM,
         other if other.starts_with("rd-") => Weight::MEDIUM,
         _ => Weight::NORMAL,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Ruby / Furigana rendering
+// ═══════════════════════════════════════════════════════════════════════════════
+
+use crate::ruby::{
+    contains_ruby_markup, parse_ruby_text, RubyToken, RT_COMPRESS_RATE, RT_STRETCH_RATE,
+    RUBY_PADDING_MAX,
+};
+
+/// Per-token slot computed by `measure_ruby_slots`.
+struct RubySlot {
+    token: RubyToken,
+    /// Width of the base text (unscaled, at line font_size).
+    base_width: f32,
+    /// Natural width of the rt text (unscaled, at rt_font_size, no letter-spacing).
+    rt_natural_width: f32,
+    /// Extra left padding added to widen the slot so rt doesn't overflow.
+    padding_left: f32,
+    /// Extra right padding added to widen the slot so rt doesn't overflow.
+    padding_right: f32,
+    /// Horizontal scale applied to rt *glyphs* (in addition to line scale_x).
+    rt_scale_x: f32,
+    /// Letter-spacing applied between rt characters (to stretch rt to fill base width).
+    rt_letter_spacing: f32,
+}
+
+impl RubySlot {
+    /// Full width of the slot in unscaled coordinates.
+    fn slot_width(&self) -> f32 {
+        self.padding_left + self.base_width + self.padding_right
+    }
+}
+
+/// Decide how to fit the rt text over its base text.
+///
+/// Returns `(padding_left, padding_right, rt_scale_x, rt_letter_spacing)`.
+fn compute_rt_strategy(
+    base_width: f32,
+    rt_natural_width: f32,
+    rt_font_scale_x_override: f32,
+    font_size: f32,
+    rt_font_size: f32,
+    rt_char_count: usize,
+) -> (f32, f32, f32, f32) {
+    // ① Override scale set by asset bundle – use directly, no padding or letter-spacing.
+    if (rt_font_scale_x_override - 1.0).abs() > f32::EPSILON {
+        return (0.0, 0.0, rt_font_scale_x_override, 0.0);
+    }
+
+    if rt_natural_width <= 0.0 || base_width <= 0.0 {
+        return (0.0, 0.0, 1.0, 0.0);
+    }
+
+    let ratio = rt_natural_width / base_width;
+
+    if ratio < RT_STRETCH_RATE && rt_char_count > 1 {
+        // ② Stretch: distribute extra space as inter-character letter-spacing.
+        let max_ls = font_size - rt_font_size / 2.0;
+        let needed = (base_width - rt_natural_width) / (rt_char_count.saturating_sub(1) as f32);
+        let ls = needed.min(max_ls).max(0.0);
+        (0.0, 0.0, 1.0, ls)
+    } else if rt_natural_width > base_width {
+        // ③ Compress.
+        let compress_ratio = base_width / rt_natural_width;
+        if compress_ratio < RT_COMPRESS_RATE {
+            // Very wide rt → clamp to RT_COMPRESS_RATE and add side padding.
+            let padded_width = rt_natural_width * RT_COMPRESS_RATE;
+            let total_pad = padded_width - base_width;
+            let pad = (total_pad / 2.0).min(RUBY_PADDING_MAX);
+            (pad, pad, RT_COMPRESS_RATE, 0.0)
+        } else {
+            // Mild compression via scaleX alone.
+            (0.0, 0.0, compress_ratio, 0.0)
+        }
+    } else {
+        // ④ rt fits inside base with room to spare – leave as-is.
+        (0.0, 0.0, 1.0, 0.0)
+    }
+}
+
+/// Measure every token and compute its slot geometry.
+fn measure_ruby_slots(
+    tokens: &[RubyToken],
+    family: &str,
+    font_size: f32,
+    rt_font_size: f32,
+    letter_spacing: f32,
+    rt_font_scale_x_override: f32,
+) -> Vec<RubySlot> {
+    tokens
+        .iter()
+        .map(|token| {
+            let base_text = token.base_text();
+            let base_width =
+                estimate_text_width(base_text, None, family, font_size, letter_spacing);
+
+            if let RubyToken::Ruby { rt, .. } = token {
+                let rt_w = estimate_text_width(rt, None, family, rt_font_size, 0.0);
+                let rt_chars = rt.chars().count();
+                let (pl, pr, rs, rls) = compute_rt_strategy(
+                    base_width,
+                    rt_w,
+                    rt_font_scale_x_override,
+                    font_size,
+                    rt_font_size,
+                    rt_chars,
+                );
+                RubySlot {
+                    token: token.clone(),
+                    base_width,
+                    rt_natural_width: rt_w,
+                    padding_left: pl,
+                    padding_right: pr,
+                    rt_scale_x: rs,
+                    rt_letter_spacing: rls,
+                }
+            } else {
+                RubySlot {
+                    token: token.clone(),
+                    base_width,
+                    rt_natural_width: 0.0,
+                    padding_left: 0.0,
+                    padding_right: 0.0,
+                    rt_scale_x: 1.0,
+                    rt_letter_spacing: 0.0,
+                }
+            }
+        })
+        .collect()
+}
+
+/// Compute the `scale_x` required to fit all tokens within `max_width`.
+pub(crate) fn fit_ruby_text_scale(
+    tokens: &[RubyToken],
+    family: &str,
+    font_size: f32,
+    rt_font_size: f32,
+    letter_spacing: f32,
+    rt_font_scale_x_override: f32,
+    max_width: f32,
+) -> f32 {
+    let slots = measure_ruby_slots(
+        tokens,
+        family,
+        font_size,
+        rt_font_size,
+        letter_spacing,
+        rt_font_scale_x_override,
+    );
+    let total: f32 = slots.iter().map(|s| s.slot_width()).sum();
+    if total <= 0.0 {
+        return 1.0;
+    }
+    (max_width / total).min(1.0)
+}
+
+/// Draw one line of ruby-annotated text.
+///
+/// `y` is the visual top of the *base* text line (same convention as `draw_text_shadowed_scaled`).
+/// `rt_top` is a signed vertical offset from `y` to the top of the rt text (typically negative,
+/// meaning "above").
+/// `scale_x` is the overall line horizontal compression factor.
+pub(crate) fn draw_ruby_text_line(
+    pixmap: &mut Pixmap,
+    tokens: &[RubyToken],
+    x: f32,
+    y: f32,
+    font_size: f32,
+    rt_font_size: f32,
+    rt_top: f32,
+    rt_font_scale_x_override: f32,
+    color: Color,
+    shadow_color: Color,
+    family: &str,
+    _language: Option<&str>,
+    letter_spacing: f32,
+    scale_x: f32,
+) {
+    if tokens.is_empty() {
+        return;
+    }
+
+    let slots = measure_ruby_slots(
+        tokens,
+        family,
+        font_size,
+        rt_font_size,
+        letter_spacing,
+        rt_font_scale_x_override,
+    );
+
+    let rt_y = y + rt_top;
+    let mut cursor_x = 0.0_f32; // accumulator in unscaled layout space
+
+    for slot in &slots {
+        // ── Base text ────────────────────────────────────────────────────────
+        let base_text = slot.token.base_text();
+        if !base_text.trim().is_empty() {
+            let base_draw_x = x + (cursor_x + slot.padding_left) * scale_x;
+            // Give the buffer extra room so it never wraps the single token.
+            let layout_w = slot.base_width / scale_x.max(0.01) + 200.0;
+            draw_text_shadowed_scaled(
+                pixmap,
+                base_text,
+                base_draw_x,
+                y,
+                font_size,
+                layout_w,
+                font_size * 1.4,
+                color,
+                shadow_color,
+                family,
+                letter_spacing,
+                scale_x,
+            );
+        }
+
+        // ── Ruby annotation ──────────────────────────────────────────────────
+        if let RubyToken::Ruby { rt, .. } = &slot.token {
+            if !rt.is_empty() && rt_font_size > 0.0 {
+                // Combined glyph-level scale: line compression × rt-specific compression.
+                let combined_scale = slot.rt_scale_x * scale_x;
+
+                let base_draw_x = x + (cursor_x + slot.padding_left) * scale_x;
+                let base_screen_w = slot.base_width * scale_x;
+                let base_center_screen = base_draw_x + base_screen_w / 2.0;
+
+                let rt_draw_x = if slot.rt_letter_spacing > 0.0 {
+                    // Stretched: rt is widened to match base, so align it with base start.
+                    base_draw_x
+                } else {
+                    // Normal / compressed: centre rt over base text.
+                    let eff_rt_w = slot.rt_natural_width * combined_scale;
+                    base_center_screen - eff_rt_w / 2.0
+                };
+
+                let rt_layout_w = slot.rt_natural_width / slot.rt_scale_x.max(0.01) + 200.0;
+                draw_text_shadowed_scaled(
+                    pixmap,
+                    rt,
+                    rt_draw_x,
+                    rt_y,
+                    rt_font_size,
+                    rt_layout_w,
+                    rt_font_size * 1.4,
+                    color,
+                    shadow_color,
+                    family,
+                    slot.rt_letter_spacing,
+                    combined_scale,
+                );
+            }
+        }
+
+        cursor_x += slot.slot_width();
+    }
+}
+
+/// Wrap ruby-annotated text into lines that fit within `max_width`.
+///
+/// Ruby tokens are kept atomic; Plain tokens are split character-by-character
+/// (suitable for CJK text, which is the primary use-case for ruby in this project).
+pub(crate) fn wrap_ruby_tokens(
+    text: &str,
+    family_name: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    rt_font_size: f32,
+    rt_font_scale_x_override: f32,
+    max_width: f32,
+) -> Vec<Vec<RubyToken>> {
+    let all_tokens = parse_ruby_text(text);
+    let mut result: Vec<Vec<RubyToken>> = Vec::new();
+    let mut current_line: Vec<RubyToken> = Vec::new();
+    let mut current_width = 0.0_f32;
+
+    for token in all_tokens {
+        match token {
+            RubyToken::Newline => {
+                result.push(std::mem::take(&mut current_line));
+                current_width = 0.0;
+            }
+            RubyToken::Ruby { .. } => {
+                // Ruby tokens are atomic – measure and place whole.
+                let slot_w = {
+                    let slots = measure_ruby_slots(
+                        &[token.clone()],
+                        family_name,
+                        font_size,
+                        rt_font_size,
+                        letter_spacing,
+                        rt_font_scale_x_override,
+                    );
+                    slots[0].slot_width()
+                };
+                if !current_line.is_empty() && current_width + slot_w > max_width {
+                    result.push(std::mem::take(&mut current_line));
+                    current_width = 0.0;
+                }
+                current_line.push(token);
+                current_width += slot_w;
+            }
+            RubyToken::Plain(ref s) => {
+                // Split plain text character-by-character.
+                for ch in s.chars() {
+                    let ch_str = ch.to_string();
+                    let ch_w = estimate_text_width(
+                        &ch_str,
+                        None,
+                        family_name,
+                        font_size,
+                        letter_spacing,
+                    );
+                    if !current_line.is_empty() && current_width + ch_w > max_width {
+                        result.push(std::mem::take(&mut current_line));
+                        current_width = 0.0;
+                    }
+                    // Coalesce consecutive Plain characters.
+                    match current_line.last_mut() {
+                        Some(RubyToken::Plain(last)) => last.push(ch),
+                        _ => current_line.push(RubyToken::Plain(ch_str)),
+                    }
+                    current_width += ch_w;
+                }
+            }
+        }
+    }
+
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
+
+    result
+}
+
+/// Render multi-line ruby-annotated text.
+///
+/// Falls back transparently to `draw_multiline_text` when the text has no ruby markup or
+/// ruby rendering is disabled (`rt_font_size == 0`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_multiline_ruby_text(
+    pixmap: &mut Pixmap,
+    text: &str,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    family: &str,
+    color: Color,
+    shadow_color: Color,
+    language: Option<&str>,
+    base_font_size: u32,
+    rt_font_size: u32,
+    rt_top: f32,
+    rt_font_scale_x: f32,
+    line_height: f32,
+    letter_spacing: f32,
+    min_font_size: u32,
+    first_line_compress: bool,
+) {
+    let text = text.trim_end();
+    if text.is_empty() {
+        return;
+    }
+
+    // Fall back to plain rendering when ruby is disabled or not present.
+    if rt_font_size == 0 || !contains_ruby_markup(text) {
+        draw_multiline_text(
+            pixmap,
+            text,
+            x,
+            y,
+            width,
+            height,
+            family,
+            color,
+            shadow_color,
+            language,
+            base_font_size,
+            line_height,
+            letter_spacing,
+            min_font_size,
+            first_line_compress,
+        );
+        return;
+    }
+
+    let mut font_size = base_font_size;
+    let mut lines = wrap_ruby_tokens(
+        text,
+        family,
+        font_size as f32,
+        letter_spacing,
+        rt_font_size as f32,
+        rt_font_scale_x,
+        width,
+    );
+
+    while font_size > min_font_size
+        && total_text_height(lines.len(), font_size, line_height) > height
+    {
+        font_size -= 1;
+        lines = wrap_ruby_tokens(
+            text,
+            family,
+            font_size as f32,
+            letter_spacing,
+            rt_font_size as f32,
+            rt_font_scale_x,
+            width,
+        );
+    }
+
+    let max_lines = max_lines_for_height(height, font_size, line_height);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+    }
+
+    let eff_rt_font_size = if rt_font_size > 0 {
+        rt_font_size as f32
+    } else {
+        font_size as f32 * 0.5
+    };
+
+    for (index, line_tokens) in lines.iter().enumerate() {
+        let line_y = if index == 0 {
+            y
+        } else {
+            y + index as f32 * font_size as f32 * line_height
+        };
+        draw_ruby_text_line(
+            pixmap,
+            line_tokens,
+            x,
+            line_y,
+            font_size as f32,
+            eff_rt_font_size,
+            rt_top,
+            rt_font_scale_x,
+            color,
+            shadow_color,
+            family,
+            language,
+            letter_spacing,
+            1.0,
+        );
     }
 }

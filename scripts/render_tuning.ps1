@@ -6,14 +6,14 @@
 $ErrorActionPreference = "Stop"
 
 # 二选一：优先用 code，其次 name 模糊匹配
-$YGO_RENDER_CARD_CODE = "2511"                      # 示例卡号
+$YGO_RENDER_CARD_CODE = "483"                      # 示例卡号
 $YGO_RENDER_CARD_NAME = ""                         # 留空表示不用名称模糊匹配
 
 # 输出文件后缀，会生成到 export/<code>-<name>-<label>.png
 $YGO_RENDER_LABEL = "tuning"                       # 示例标签
 
 # 其他基础选项
-$YGO_LANGUAGE = "sc"                               # 原值: sc
+$YGO_LANGUAGE = "jp"                               # 原值: sc
 $YGO_SCALE = "1.0"                                 # 原值: 1.0
 $YGO_ART_IMAGE = ""                                # 原值: 无自定义图片
 $YGO_TITLE_WIDTH_COMPRESS = "true"                     # 原值: false，可填 true/false
@@ -43,7 +43,7 @@ $YGO_DESCRIPTION_SIZE = ""                         # 原值: 36
 $YGO_DESCRIPTION_LINE_HEIGHT = ""                  # 原值: 1.2
 $YGO_DESCRIPTION_X = ""                            # 原值: 109
 $YGO_DESCRIPTION_LETTER_SPACING = ""               # 原值: 2.0
-$YGO_BODY_MAX_WIDTH = "1175"                       # 原值: 1175
+$YGO_BODY_MAX_WIDTH = ""                       # 原值: 1175
 
 # 灵摆
 $YGO_PENDULUM_DESCRIPTION_TOP = ""                 # 原值: 1282

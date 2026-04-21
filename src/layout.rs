@@ -44,6 +44,20 @@ pub(crate) struct LayoutStyle {
     pub(crate) link_top: u32,
     pub(crate) link_size: u32,
     pub(crate) stat_letter_spacing: f32,
+
+    // Ruby/furigana annotation parameters (0 = disabled / non-JP language).
+    pub(crate) name_rt_font_size: u32,
+    pub(crate) name_rt_top: f32,
+    pub(crate) name_rt_font_scale_x: f32,
+    pub(crate) type_rt_font_size: u32,
+    pub(crate) type_rt_top: f32,
+    pub(crate) type_rt_font_scale_x: f32,
+    pub(crate) effect_rt_font_size: u32,
+    pub(crate) effect_rt_top: f32,
+    pub(crate) effect_rt_font_scale_x: f32,
+    pub(crate) description_rt_font_size: u32,
+    pub(crate) description_rt_top: f32,
+    pub(crate) description_rt_font_scale_x: f32,
 }
 
 fn quoted_font(name: &str) -> String {
@@ -60,6 +74,15 @@ fn style_for_language<'a>(layout: &'a LayoutPayload, language: &str) -> &'a Styl
 
 fn text_indent_px(value: Option<f32>) -> i32 {
     value.unwrap_or(0.0).round() as i32
+}
+
+/// Extract the three RT (ruby text) layout parameters from a `TextBlock`.
+fn text_block_rt(block: &crate::asset_bundle::TextBlock) -> (u32, f32, f32) {
+    (
+        block.rt_font_size.unwrap_or(0),
+        block.rt_top.unwrap_or(0) as f32,
+        block.rt_font_scale_x.unwrap_or(1.0),
+    )
 }
 
 fn apply_overrides(style: &mut LayoutStyle, ov: &LayoutOverrides) {
@@ -137,12 +160,24 @@ pub(crate) fn layout_style(
         quoted_font("ygo-link")
     };
 
+    // Font families and RT parameters are identical in both card-kind arms; compute them once.
+    let base_font_family = quoted_font(&style.font_family);
+    let name_font_family = quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family));
+    let type_font_family = quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family));
+    let effect_font_family = quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family));
+
+    let (name_rt_font_size, name_rt_top, name_rt_font_scale_x) = text_block_rt(&style.name);
+    let (type_rt_font_size, type_rt_top, type_rt_font_scale_x) = text_block_rt(&style.spell_trap);
+    let (effect_rt_font_size, effect_rt_top, effect_rt_font_scale_x) = text_block_rt(&style.effect);
+    let (description_rt_font_size, description_rt_top, description_rt_font_scale_x) =
+        text_block_rt(&style.description);
+
     let mut layout = match kind {
         CardKind::Yugioh => LayoutStyle {
-            base_font_family: quoted_font(&style.font_family),
-            name_font_family: quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family)),
-            type_font_family: quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family)),
-            effect_font_family: quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family)),
+            base_font_family,
+            name_font_family,
+            type_font_family,
+            effect_font_family,
             stat_font_family,
             link_font_family,
             password_font_family: quoted_font(&bundle_layout.base.password.font_family),
@@ -179,12 +214,24 @@ pub(crate) fn layout_style(
             link_top: link_text.y,
             link_size: link_text.font_size,
             stat_letter_spacing: if lang == "astral" { 0.0 } else { 2.0 },
+            name_rt_font_size,
+            name_rt_top,
+            name_rt_font_scale_x,
+            type_rt_font_size,
+            type_rt_top,
+            type_rt_font_scale_x,
+            effect_rt_font_size,
+            effect_rt_top,
+            effect_rt_font_scale_x,
+            description_rt_font_size,
+            description_rt_top,
+            description_rt_font_scale_x,
         },
         CardKind::RushDuel => LayoutStyle {
-            base_font_family: quoted_font(&style.font_family),
-            name_font_family: quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family)),
-            type_font_family: quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family)),
-            effect_font_family: quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family)),
+            base_font_family,
+            name_font_family,
+            type_font_family,
+            effect_font_family,
             stat_font_family: quoted_font("rd-atk-def"),
             link_font_family: quoted_font("rd-atk-def"),
             password_font_family: quoted_font("rd-tip"),
@@ -220,6 +267,18 @@ pub(crate) fn layout_style(
             link_top: 1820,
             link_size: 42,
             stat_letter_spacing: 1.5,
+            name_rt_font_size,
+            name_rt_top,
+            name_rt_font_scale_x,
+            type_rt_font_size,
+            type_rt_top,
+            type_rt_font_scale_x,
+            effect_rt_font_size,
+            effect_rt_top,
+            effect_rt_font_scale_x,
+            description_rt_font_size,
+            description_rt_top,
+            description_rt_font_scale_x,
         },
     };
 

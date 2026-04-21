@@ -4,6 +4,7 @@ mod constants;
 mod layout;
 pub mod model;
 pub mod renderer;
+pub mod ruby;
 mod text;
 
 pub use model::{CardKind, RenderError, RenderOptions, RenderRequest};

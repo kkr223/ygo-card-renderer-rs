@@ -252,5 +252,7 @@ pub(crate) fn localized_spell_trap_name(card: &CardDataEntry, language: Option<&
 }
 
 pub(crate) fn has_effect_line(card: &CardDataEntry) -> bool {
-    !card.is_spell() && !card.is_trap() && !build_effect_line(card, CardKind::Yugioh).unwrap_or_default().is_empty()
+    // `build_effect_line` returns None for spells/traps and always builds a
+    // non-empty string for monsters, so `.is_some()` is sufficient here.
+    build_effect_line(card, CardKind::Yugioh).is_some()
 }

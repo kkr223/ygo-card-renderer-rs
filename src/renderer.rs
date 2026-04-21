@@ -7,12 +7,17 @@ use crate::{
         description_height, description_y, display_stat, frame_asset_name, image_frame,
         localized_brackets, localized_spell_trap_name, spell_trap_subtype_icon_asset, uses_rank,
     },
-    constants::{CARD_HEIGHT, CARD_WIDTH},
+    constants::{
+        BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
+        PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
+    },
     layout::{layout_style, LayoutStyle},
     model::{RenderError, RenderRequest},
+    ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
-        draw_multiline_text, draw_text_line, draw_text_line_scaled, estimate_text_width,
-        fit_single_line, fit_single_line_compressed, TextAlign,
+        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line,
+        draw_text_line_scaled, estimate_text_width, fit_ruby_text_scale, fit_single_line,
+        fit_single_line_compressed, TextAlign,
     },
 };
 
@@ -37,7 +42,7 @@ impl Renderer {
 
         let mut target = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
-        target.fill(Color::from_rgba8(244, 239, 231, 255));
+        target.fill(Color::from_rgba8(BACKGROUND_CREAM.0, BACKGROUND_CREAM.1, BACKGROUND_CREAM.2, 255));
 
         draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
         draw_art(bundle, &mut target, request, base)?;
@@ -67,7 +72,7 @@ impl Renderer {
                 style.effect_top as f32,
                 line_layout.font_size as f32,
                 line_layout.max_width as f32,
-                Color::from_rgba8(17, 17, 17, 255),
+                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
                 Color::TRANSPARENT,
                 &style.effect_font_family,
                 TextAlign::Left,
@@ -76,7 +81,7 @@ impl Renderer {
             );
         }
 
-        draw_multiline_text(
+        draw_multiline_ruby_text(
             &mut target,
             &request.card.desc,
             style.description_x as f32,
@@ -88,6 +93,9 @@ impl Renderer {
             Color::TRANSPARENT,
             language,
             style.description_size,
+            style.description_rt_font_size,
+            style.description_rt_top,
+            style.description_rt_font_scale_x,
             style.description_line_height,
             style.description_letter_spacing,
             style.description_size.saturating_sub(8),
@@ -266,6 +274,45 @@ fn draw_title(
         base.name.width_without_attribute
     };
 
+    let name_color = if auto_name_light(&request.card) {
+        Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+    } else {
+        Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
+    };
+
+    // Ruby path: JP language with rt_font_size set and markup present.
+    if style.name_rt_font_size > 0 && contains_ruby_markup(&request.card.name) {
+        let tokens = parse_ruby_text(&request.card.name);
+        let scale_x = fit_ruby_text_scale(
+            &tokens,
+            &style.name_font_family,
+            style.name_size as f32,
+            style.name_rt_font_size as f32,
+            style.title_letter_spacing,
+            style.name_rt_font_scale_x,
+            title_width as f32,
+        )
+        .max(0.3);
+        draw_ruby_text_line(
+            target,
+            &tokens,
+            style.name_x as f32,
+            style.name_top as f32,
+            style.name_size as f32,
+            style.name_rt_font_size as f32,
+            style.name_rt_top,
+            style.name_rt_font_scale_x,
+            name_color,
+            Color::TRANSPARENT,
+            &style.name_font_family,
+            language,
+            style.title_letter_spacing,
+            scale_x,
+        );
+        return;
+    }
+
+    // Plain path (all other cases).
     let title_layout = if request.options.title_width_compress {
         fit_single_line_compressed(
             &request.card.name,
@@ -295,11 +342,7 @@ fn draw_title(
         style.name_top as f32,
         title_layout.font_size as f32,
         title_layout.max_width as f32,
-        if auto_name_light(&request.card) {
-            Color::from_rgba8(245, 245, 245, 255)
-        } else {
-            Color::from_rgba8(22, 18, 15, 255)
-        },
+        name_color,
         Color::TRANSPARENT,
         &style.name_font_family,
         TextAlign::Left,
@@ -322,7 +365,7 @@ fn draw_spell_trap_line(
     let right_text = right_bracket;
     let font_size = style.type_size as f32;
     let letter_spacing = style.type_letter_spacing;
-    let text_color = Color::from_rgba8(29, 20, 15, 255);
+    let text_color = Color::from_rgba8(TYPE_COLOR.0, TYPE_COLOR.1, TYPE_COLOR.2, 255);
 
     let right_margin = style.type_right as f32;
     let right_width = estimate_text_width(
@@ -350,25 +393,27 @@ fn draw_spell_trap_line(
     );
 
     let icon_asset = spell_trap_subtype_icon_asset(&request.card);
-    let icon_margin_top = bundle_style_icon_margin_top(language, bundle);
-    let icon_margin_left = bundle_style_icon_margin_left(language, bundle);
-    let icon_margin_right = bundle_style_icon_margin_right(language, bundle);
+    let icon_margins = bundle_style_icon_margins(language, bundle);
     let icon_width = 72.0_f32;
 
     let icon_x = if icon_asset.is_some() {
-        right_x - icon_margin_right - icon_width
+        right_x - icon_margins.right - icon_width
     } else {
         right_x
     };
 
     if let Some(icon_asset) = icon_asset {
+        let text_top_correction = font_size * 0.092;
+        let icon_y = style.type_top as f32 + icon_margins.top - text_top_correction;
         bundle
-            .draw_image_at(target, icon_asset, icon_x, style.type_top as f32 + icon_margin_top)
+            .draw_image_at(target, icon_asset, icon_x, icon_y)
             .map_err(RenderError::Backend)?;
     }
 
+    // Strip ruby markup when measuring layout width (the plain base text drives spacing).
+    let left_text_stripped = strip_ruby_markup(&left_text);
     let left_width = estimate_text_width(
-        &left_text,
+        &left_text_stripped,
         language,
         &style.type_font_family,
         font_size,
@@ -376,26 +421,47 @@ fn draw_spell_trap_line(
     );
     let left_x = icon_x
         - if icon_asset.is_some() {
-            icon_margin_left
+            icon_margins.left
         } else {
             0.0
         }
         - left_width;
 
-    draw_text_line(
-        target,
-        &left_text,
-        left_x,
-        style.type_top as f32,
-        font_size,
-        left_width.ceil().max(80.0),
-        text_color,
-        Color::TRANSPARENT,
-        &style.type_font_family,
-        TextAlign::Left,
-        language,
-        letter_spacing,
-    );
+    // Draw: use ruby path when markup is present and rt_font_size is configured.
+    if style.type_rt_font_size > 0 && contains_ruby_markup(&left_text) {
+        let tokens = parse_ruby_text(&left_text);
+        draw_ruby_text_line(
+            target,
+            &tokens,
+            left_x,
+            style.type_top as f32,
+            font_size,
+            style.type_rt_font_size as f32,
+            style.type_rt_top,
+            style.type_rt_font_scale_x,
+            text_color,
+            Color::TRANSPARENT,
+            &style.type_font_family,
+            language,
+            letter_spacing,
+            1.0,
+        );
+    } else {
+        draw_text_line(
+            target,
+            &left_text,
+            left_x,
+            style.type_top as f32,
+            font_size,
+            left_width.ceil().max(80.0),
+            text_color,
+            Color::TRANSPARENT,
+            &style.type_font_family,
+            TextAlign::Left,
+            language,
+            letter_spacing,
+        );
+    }
 
     let _ = base;
     Ok(())
@@ -488,7 +554,7 @@ fn draw_stats(
             left.y as f32,
             if language == Some("astral") { 84.0 } else { 98.0 },
             120.0,
-            Color::from_rgba8(17, 17, 17, 255),
+            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
             Color::TRANSPARENT,
             &style.stat_font_family,
             TextAlign::Center,
@@ -502,7 +568,7 @@ fn draw_stats(
             right.y as f32,
             if language == Some("astral") { 84.0 } else { 98.0 },
             120.0,
-            Color::from_rgba8(17, 17, 17, 255),
+            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
             Color::TRANSPARENT,
             &style.stat_font_family,
             TextAlign::Center,
@@ -565,7 +631,7 @@ fn draw_password(
         base.password.y as f32,
         base.password.font_size as f32,
         260.0,
-        Color::from_rgba8(93, 81, 70, 255),
+        Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
         Color::TRANSPARENT,
         &style.password_font_family,
         TextAlign::Left,
@@ -581,7 +647,7 @@ fn draw_password(
             base.copyright.y as f32,
             22.0,
             320.0,
-            Color::from_rgba8(93, 81, 70, 255),
+            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
             Color::TRANSPARENT,
             &style.base_font_family,
             TextAlign::Right,
@@ -590,35 +656,24 @@ fn draw_password(
         );
     }
 }
-fn bundle_style_icon_margin_top(language: Option<&str>, bundle: &AssetBundle) -> f32 {
-    bundle
-        .layout
-        .styles
-        .get(language.unwrap_or("sc"))
-        .or_else(|| bundle.layout.styles.get("sc"))
-        .and_then(|style| style.spell_trap.icon.as_ref())
-        .and_then(|icon| icon.margin_top)
-        .unwrap_or(8.0)
+/// Margins for the spell/trap subtype icon, looked up from the bundle's language-specific style.
+struct IconMargins {
+    top: f32,
+    left: f32,
+    right: f32,
 }
 
-fn bundle_style_icon_margin_left(language: Option<&str>, bundle: &AssetBundle) -> f32 {
-    bundle
+fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> IconMargins {
+    let icon = bundle
         .layout
         .styles
         .get(language.unwrap_or("sc"))
         .or_else(|| bundle.layout.styles.get("sc"))
-        .and_then(|style| style.spell_trap.icon.as_ref())
-        .and_then(|icon| icon.margin_left)
-        .unwrap_or(0.0)
-}
+        .and_then(|style| style.spell_trap.icon.as_ref());
 
-fn bundle_style_icon_margin_right(language: Option<&str>, bundle: &AssetBundle) -> f32 {
-    bundle
-        .layout
-        .styles
-        .get(language.unwrap_or("sc"))
-        .or_else(|| bundle.layout.styles.get("sc"))
-        .and_then(|style| style.spell_trap.icon.as_ref())
-        .and_then(|icon| icon.margin_right)
-        .unwrap_or(0.0)
+    IconMargins {
+        top: icon.and_then(|i| i.margin_top).unwrap_or(8.0),
+        left: icon.and_then(|i| i.margin_left).unwrap_or(0.0),
+        right: icon.and_then(|i| i.margin_right).unwrap_or(0.0),
+    }
 }
