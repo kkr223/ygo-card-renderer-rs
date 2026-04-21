@@ -1,4 +1,5 @@
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
+use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
     asset_bundle::{get_bundle, AssetBundle, BaseLayout},
@@ -12,7 +13,7 @@ use crate::{
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
     layout::{layout_style, LayoutStyle},
-    model::{RenderError, RenderRequest},
+    model::{NameColor, RenderError, RenderRequest},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line,
@@ -104,6 +105,8 @@ impl Renderer {
 
         draw_stats(bundle, &mut target, request, &style, base, language);
         draw_password(&mut target, request, &style, base, language);
+        draw_package(&mut target, request, &style, base, language);
+        draw_copyright_text(&mut target, request, &style, base, language);
 
         target
             .encode_png()
@@ -274,11 +277,7 @@ fn draw_title(
         base.name.width_without_attribute
     };
 
-    let name_color = if auto_name_light(&request.card) {
-        Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
-    } else {
-        Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
-    };
+    let name_color = resolve_name_color(&request.card.name_color, &request.card);
 
     // Ruby path: JP language with rt_font_size set and markup present.
     if style.name_rt_font_size > 0 && contains_ruby_markup(&request.card.name) {
@@ -617,6 +616,65 @@ fn draw_stat_separator(
     }
 }
 
+/// Resolve a [`NameColor`] to a concrete `tiny_skia` [`Color`].
+///
+/// - `Auto` defers to `auto_name_light` which checks card type flags.
+/// - `Dark` / `Light` force the standard palette values.
+/// - `Custom` parses a CSS hex string (`#rrggbb` or `#rgb`); falls back to
+///   `Auto` if parsing fails.
+fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -> Color {
+    match name_color {
+        NameColor::Auto => {
+            if auto_name_light(card) {
+                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+            } else {
+                Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
+            }
+        }
+        NameColor::Dark => {
+            Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
+        }
+        NameColor::Light => {
+            Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+        }
+        NameColor::Custom(hex) => parse_hex_color(hex).unwrap_or_else(|| {
+            if auto_name_light(card) {
+                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+            } else {
+                Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
+            }
+        }),
+    }
+}
+
+/// Parse a CSS-style hex color string (`#rrggbb`, `#rrggbbaa`, `#rgb`).
+/// Returns `None` if the string is not a recognised hex format.
+fn parse_hex_color(s: &str) -> Option<Color> {
+    let hex = s.trim().strip_prefix('#')?;
+    match hex.len() {
+        3 => {
+            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+            Some(Color::from_rgba8(r, g, b, 255))
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some(Color::from_rgba8(r, g, b, 255))
+        }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            Some(Color::from_rgba8(r, g, b, a))
+        }
+        _ => None,
+    }
+}
+
 fn draw_password(
     target: &mut Pixmap,
     request: &RenderRequest,
@@ -624,11 +682,14 @@ fn draw_password(
     base: &BaseLayout,
     language: Option<&str>,
 ) {
+    let ov = &request.options.layout_overrides;
+    let password_x = ov.password_x.unwrap_or(base.password.x);
+    let password_y = ov.password_y.unwrap_or(base.password.y);
     draw_text_line(
         target,
-        &format!("ID {}", request.card.code),
-        base.password.x as f32,
-        base.password.y as f32,
+        &request.card.code.to_string(),
+        password_x as f32,
+        password_y as f32,
         base.password.font_size as f32,
         260.0,
         Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
@@ -640,11 +701,21 @@ fn draw_password(
     );
 
     if request.card.is_monster() {
+        let copyright_right = request
+            .options
+            .layout_overrides
+            .copyright_right
+            .unwrap_or(base.copyright.right);
+        let copyright_y = request
+            .options
+            .layout_overrides
+            .copyright_y
+            .unwrap_or(base.copyright.y);
         draw_text_line(
             target,
             &build_scale_line(&request.card),
-            (CARD_WIDTH - base.copyright.right) as f32,
-            base.copyright.y as f32,
+            (CARD_WIDTH - copyright_right) as f32,
+            copyright_y as f32,
             22.0,
             320.0,
             Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
@@ -656,6 +727,91 @@ fn draw_password(
         );
     }
 }
+
+fn draw_package(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+) {
+    if let Some(package) = &request.card.package {
+        let ov = &request.options.layout_overrides;
+        let y = if request.card.is_pendulum() {
+            ov.package_y_pendulum.unwrap_or(base.package.pendulum.y)
+        } else if request.card.is_link() {
+            ov.package_y_link.unwrap_or(base.package.link.y)
+        } else {
+            ov.package_y.unwrap_or(base.package.default.y)
+        };
+
+        // Package position is right-aligned in bundle (like copyright)
+        let right = if request.card.is_pendulum() {
+            base.package.pendulum.right.unwrap_or(base.package.pendulum.x.unwrap_or(116)) // Pendulum often uses x, fallback to 116
+        } else if request.card.is_link() {
+            base.package.link.right.unwrap_or(252)
+        } else {
+            base.package.default.right.unwrap_or(148)
+        };
+
+        let x = if request.card.is_pendulum() && base.package.pendulum.x.is_some() {
+             base.package.pendulum.x.unwrap() as f32
+        } else {
+            (CARD_WIDTH - right) as f32
+        };
+
+        let align = if request.card.is_pendulum() && base.package.pendulum.x.is_some() {
+            TextAlign::Left
+        } else {
+            TextAlign::Right
+        };
+
+        draw_text_line(
+            target,
+            package,
+            x,
+            y as f32,
+            base.package.font_size as f32,
+            400.0,
+            Color::BLACK,
+            Color::TRANSPARENT,
+            &style.password_font_family,
+            align,
+            language,
+            0.0,
+        );
+    }
+}
+
+fn draw_copyright_text(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+) {
+    if let Some(copyright) = &request.card.copyright {
+        let ov = &request.options.layout_overrides;
+        let right = ov.copyright_right.unwrap_or(base.copyright.right);
+        let y = ov.copyright_y.unwrap_or(base.copyright.y);
+
+        draw_text_line(
+            target,
+            copyright,
+            (CARD_WIDTH - right) as f32,
+            y as f32,
+            22.0, // Matches draw_password's scale line size
+            500.0,
+            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+            Color::TRANSPARENT,
+            &style.base_font_family,
+            TextAlign::Right,
+            language,
+            0.0,
+        );
+    }
+}
+
 /// Margins for the spell/trap subtype icon, looked up from the bundle's language-specific style.
 struct IconMargins {
     top: f32,

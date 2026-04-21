@@ -13,7 +13,7 @@ $YGO_RENDER_CARD_NAME = ""                         # 留空表示不用名称模
 $YGO_RENDER_LABEL = "tuning"                       # 示例标签
 
 # 其他基础选项
-$YGO_LANGUAGE = "jp"                               # 原值: sc
+$YGO_LANGUAGE = "sc"                               # 原值: sc
 $YGO_SCALE = "1.0"                                 # 原值: 1.0
 $YGO_ART_IMAGE = ""                                # 原值: 无自定义图片
 $YGO_TITLE_WIDTH_COMPRESS = "true"                     # 原值: false，可填 true/false
@@ -58,6 +58,23 @@ $YGO_STAT_SIZE = ""                                # 原值: 62
 $YGO_STAT_LETTER_SPACING = ""                      # 原值: 2.0
 $YGO_LINK_TOP = "1860"                                 # 原值: 1855
 $YGO_LINK_SIZE = ""                                # 原值: 44
+
+# 版权行位置（right = 距卡片右边缘距离，y = 顶部偏移）
+$YGO_COPYRIGHT_RIGHT = ""                          # 原值: 141
+$YGO_COPYRIGHT_Y = ""                              # 原值: 1936
+# 版权行文本内容（留空则不显示）
+$YGO_COPYRIGHT_TEXT = "© 1996 KAZUKI TAKAHASHI"                           # 示例: "© 1996 KAZUKI TAKAHASHI"
+
+# 卡包编码文本 y 坐标（普通/灵摆/link 三种变体）
+$YGO_PACKAGE_Y = ""                                # 原值: 1455
+$YGO_PACKAGE_Y_PENDULUM = ""                       # 原值: 1859
+$YGO_PACKAGE_Y_LINK = ""                           # 原值: 1455
+# 卡包编码文本内容（留空则不显示）
+$YGO_PACKAGE_TEXT = "RC04-JP000"                             # 示例: "RC04-JP000"
+
+# 左下角 ID（密码）文本位置
+$YGO_PASSWORD_X = ""                               # 原值: 66
+$YGO_PASSWORD_Y = "1936"                               # 原值: 1932
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $cargoArgs = @("test", "render_single_card_for_tuning", "--", "--ignored", "--nocapture")
@@ -129,6 +146,15 @@ try {
     Set-YgoEnvIfSet "YGO_STAT_LETTER_SPACING" $YGO_STAT_LETTER_SPACING
     Set-YgoEnvIfSet "YGO_LINK_TOP" $YGO_LINK_TOP
     Set-YgoEnvIfSet "YGO_LINK_SIZE" $YGO_LINK_SIZE
+    Set-YgoEnvIfSet "YGO_COPYRIGHT_RIGHT" $YGO_COPYRIGHT_RIGHT
+    Set-YgoEnvIfSet "YGO_COPYRIGHT_Y" $YGO_COPYRIGHT_Y
+    Set-YgoEnvIfSet "YGO_COPYRIGHT_TEXT" $YGO_COPYRIGHT_TEXT
+    Set-YgoEnvIfSet "YGO_PACKAGE_Y" $YGO_PACKAGE_Y
+    Set-YgoEnvIfSet "YGO_PACKAGE_Y_PENDULUM" $YGO_PACKAGE_Y_PENDULUM
+    Set-YgoEnvIfSet "YGO_PACKAGE_Y_LINK" $YGO_PACKAGE_Y_LINK
+    Set-YgoEnvIfSet "YGO_PACKAGE_TEXT" $YGO_PACKAGE_TEXT
+    Set-YgoEnvIfSet "YGO_PASSWORD_X" $YGO_PASSWORD_X
+    Set-YgoEnvIfSet "YGO_PASSWORD_Y" $YGO_PASSWORD_Y
 
     Write-Host "Effective YGO_* environment:" -ForegroundColor Cyan
     $activeYgoEnv = @(Get-ChildItem Env:YGO_* -ErrorAction SilentlyContinue | Sort-Object Name)

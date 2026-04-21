@@ -3,7 +3,7 @@ use std::sync::Once;
 
 use ygo_card_renderer_rs::{
     CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle,
-    model::LayoutOverrides,
+    model::{LayoutOverrides, YgoCardMeta},
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
@@ -93,6 +93,13 @@ fn layout_overrides_from_env() -> LayoutOverrides {
         stat_letter_spacing: env_opt_f32("YGO_STAT_LETTER_SPACING"),
         link_top: env_opt_u32("YGO_LINK_TOP"),
         link_size: env_opt_u32("YGO_LINK_SIZE"),
+        copyright_right: env_opt_u32("YGO_COPYRIGHT_RIGHT"),
+        copyright_y: env_opt_u32("YGO_COPYRIGHT_Y"),
+        package_y: env_opt_u32("YGO_PACKAGE_Y"),
+        package_y_pendulum: env_opt_u32("YGO_PACKAGE_Y_PENDULUM"),
+        package_y_link: env_opt_u32("YGO_PACKAGE_Y_LINK"),
+        password_x: env_opt_u32("YGO_PASSWORD_X"),
+        password_y: env_opt_u32("YGO_PASSWORD_Y"),
     }
 }
 
@@ -155,7 +162,7 @@ fn render_cards_from_cdb() {
 
         let request = RenderRequest {
             kind: CardKind::Yugioh,
-            card: card.clone(),
+            card: card.clone().into(),
             options: RenderOptions {
                 resource_path: PathBuf::new(),
                 language: Some("sc".to_string()),
@@ -212,17 +219,28 @@ fn render_single_card_for_tuning() {
     let title_width_compress = env_opt_bool("YGO_TITLE_WIDTH_COMPRESS").unwrap_or(false);
     let description_first_line_compress =
         env_opt_bool("YGO_DESCRIPTION_FIRST_LINE_COMPRESS").unwrap_or(false);
+    let copyright_text = env_opt_string("YGO_COPYRIGHT_TEXT");
+    let package_text = env_opt_string("YGO_PACKAGE_TEXT");
 
     println!("Selected card: [{}] {}", card.code, card.name);
     println!("language={language}, scale={scale}, label={label}");
     println!(
         "title_width_compress={title_width_compress}, description_first_line_compress={description_first_line_compress}"
     );
+    println!("copyright_text={copyright_text:?}, package_text={package_text:?}");
     println!("layout_overrides={layout_overrides:#?}");
+
+    let mut card_meta: YgoCardMeta = card.clone().into();
+    if copyright_text.is_some() {
+        card_meta.copyright = copyright_text;
+    }
+    if package_text.is_some() {
+        card_meta.package = package_text;
+    }
 
     let request = RenderRequest {
         kind: CardKind::Yugioh,
-        card: card.clone(),
+        card: card_meta,
         options: RenderOptions {
             resource_path: PathBuf::new(),
             language: Some(language.clone()),
