@@ -18,7 +18,7 @@ use crate::{
     text::{
         draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line,
         draw_text_line_scaled, estimate_text_width, fit_ruby_text_scale, fit_single_line,
-        fit_single_line_compressed, TextAlign,
+        fit_single_line_compressed, DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign,
     },
 };
 
@@ -68,39 +68,43 @@ impl Renderer {
             );
             draw_text_line(
                 &mut target,
-                &line_layout.text,
-                style.effect_x as f32,
-                style.effect_top as f32,
-                line_layout.font_size as f32,
-                line_layout.max_width as f32,
-                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-                Color::TRANSPARENT,
-                &style.effect_font_family,
-                TextAlign::Left,
-                language,
-                line_layout.letter_spacing,
+                DrawTextLine::unscaled(
+                    &line_layout.text,
+                    style.effect_x as f32,
+                    style.effect_top as f32,
+                    line_layout.font_size as f32,
+                    line_layout.max_width as f32,
+                    Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                    Color::TRANSPARENT,
+                    &style.effect_font_family,
+                    TextAlign::Left,
+                    language,
+                    line_layout.letter_spacing,
+                ),
             );
         }
 
         draw_multiline_ruby_text(
             &mut target,
-            &request.card.desc,
-            style.description_x as f32,
-            description_y(&request.card, &style) as f32,
-            style.body_max_width as f32,
-            description_height(&request.card, &style, base) as f32,
-            &style.base_font_family,
-            Color::BLACK,
-            Color::TRANSPARENT,
-            language,
-            style.description_size,
-            style.description_rt_font_size,
-            style.description_rt_top,
-            style.description_rt_font_scale_x,
-            style.description_line_height,
-            style.description_letter_spacing,
-            style.description_size.saturating_sub(8),
-            request.options.description_first_line_compress,
+            RubyMultilineParams {
+                text: &request.card.desc,
+                x: style.description_x as f32,
+                y: description_y(&request.card, &style) as f32,
+                width: style.body_max_width as f32,
+                height: description_height(&request.card, &style, base) as f32,
+                family: &style.base_font_family,
+                color: Color::BLACK,
+                shadow_color: Color::TRANSPARENT,
+                language,
+                base_font_size: style.description_size,
+                rt_font_size: style.description_rt_font_size,
+                rt_top: style.description_rt_top,
+                rt_font_scale_x: style.description_rt_font_scale_x,
+                line_height: style.description_line_height,
+                letter_spacing: style.description_letter_spacing,
+                min_font_size: style.description_size.saturating_sub(8),
+                first_line_compress: request.options.description_first_line_compress,
+            },
         );
 
         draw_stats(bundle, &mut target, request, &style, base, language);
@@ -294,19 +298,21 @@ fn draw_title(
         .max(0.3);
         draw_ruby_text_line(
             target,
-            &tokens,
-            style.name_x as f32,
-            style.name_top as f32,
-            style.name_size as f32,
-            style.name_rt_font_size as f32,
-            style.name_rt_top,
-            style.name_rt_font_scale_x,
-            name_color,
-            Color::TRANSPARENT,
-            &style.name_font_family,
-            language,
-            style.title_letter_spacing,
-            scale_x,
+            RubyLineParams {
+                tokens: &tokens,
+                x: style.name_x as f32,
+                y: style.name_top as f32,
+                font_size: style.name_size as f32,
+                rt_font_size: style.name_rt_font_size as f32,
+                rt_top: style.name_rt_top,
+                rt_font_scale_x_override: style.name_rt_font_scale_x,
+                color: name_color,
+                shadow_color: Color::TRANSPARENT,
+                family: &style.name_font_family,
+                language,
+                letter_spacing: style.title_letter_spacing,
+                scale_x,
+            },
         );
         return;
     }
@@ -336,18 +342,20 @@ fn draw_title(
 
     draw_text_line_scaled(
         target,
-        &title_layout.text,
-        style.name_x as f32,
-        style.name_top as f32,
-        title_layout.font_size as f32,
-        title_layout.max_width as f32,
-        name_color,
-        Color::TRANSPARENT,
-        &style.name_font_family,
-        TextAlign::Left,
-        language,
-        title_layout.letter_spacing,
-        title_layout.scale_x,
+        DrawTextLine {
+            text: &title_layout.text,
+            x: style.name_x as f32,
+            y: style.name_top as f32,
+            font_size: title_layout.font_size as f32,
+            max_width: title_layout.max_width as f32,
+            color: name_color,
+            shadow_color: Color::TRANSPARENT,
+            family_name: &style.name_font_family,
+            align: TextAlign::Left,
+            language,
+            letter_spacing: title_layout.letter_spacing,
+            scale_x: title_layout.scale_x,
+        },
     );
 }
 
@@ -378,17 +386,19 @@ fn draw_spell_trap_line(
 
     draw_text_line(
         target,
-        right_text,
-        right_x,
-        style.type_top as f32,
-        font_size,
-        right_width.ceil().max(32.0),
-        text_color,
-        Color::TRANSPARENT,
-        &style.type_font_family,
-        TextAlign::Left,
-        language,
-        letter_spacing,
+        DrawTextLine::unscaled(
+            right_text,
+            right_x,
+            style.type_top as f32,
+            font_size,
+            right_width.ceil().max(32.0),
+            text_color,
+            Color::TRANSPARENT,
+            &style.type_font_family,
+            TextAlign::Left,
+            language,
+            letter_spacing,
+        ),
     );
 
     let icon_asset = spell_trap_subtype_icon_asset(&request.card);
@@ -431,34 +441,38 @@ fn draw_spell_trap_line(
         let tokens = parse_ruby_text(&left_text);
         draw_ruby_text_line(
             target,
-            &tokens,
-            left_x,
-            style.type_top as f32,
-            font_size,
-            style.type_rt_font_size as f32,
-            style.type_rt_top,
-            style.type_rt_font_scale_x,
-            text_color,
-            Color::TRANSPARENT,
-            &style.type_font_family,
-            language,
-            letter_spacing,
-            1.0,
+            RubyLineParams {
+                tokens: &tokens,
+                x: left_x,
+                y: style.type_top as f32,
+                font_size,
+                rt_font_size: style.type_rt_font_size as f32,
+                rt_top: style.type_rt_top,
+                rt_font_scale_x_override: style.type_rt_font_scale_x,
+                color: text_color,
+                shadow_color: Color::TRANSPARENT,
+                family: &style.type_font_family,
+                language,
+                letter_spacing,
+                scale_x: 1.0,
+            },
         );
     } else {
         draw_text_line(
             target,
-            &left_text,
-            left_x,
-            style.type_top as f32,
-            font_size,
-            left_width.ceil().max(80.0),
-            text_color,
-            Color::TRANSPARENT,
-            &style.type_font_family,
-            TextAlign::Left,
-            language,
-            letter_spacing,
+            DrawTextLine::unscaled(
+                &left_text,
+                left_x,
+                style.type_top as f32,
+                font_size,
+                left_width.ceil().max(80.0),
+                text_color,
+                Color::TRANSPARENT,
+                &style.type_font_family,
+                TextAlign::Left,
+                language,
+                letter_spacing,
+            ),
         );
     }
 
@@ -481,17 +495,19 @@ fn draw_stats(
 
         draw_text_line(
             target,
-            &display_stat(request.card.attack),
-            style.stat_atk_x as f32,
-            style.stat_top as f32,
-            style.stat_size as f32,
-            220.0,
-            value_color,
-            Color::TRANSPARENT,
-            &style.stat_font_family,
-            TextAlign::Right,
-            language,
-            style.stat_letter_spacing,
+            DrawTextLine::unscaled(
+                &display_stat(request.card.attack),
+                style.stat_atk_x as f32,
+                style.stat_top as f32,
+                style.stat_size as f32,
+                220.0,
+                value_color,
+                Color::TRANSPARENT,
+                &style.stat_font_family,
+                TextAlign::Right,
+                language,
+                style.stat_letter_spacing,
+            ),
         );
 
         if request.card.is_link() {
@@ -503,33 +519,37 @@ fn draw_stats(
 
             draw_text_line_scaled(
                 target,
-                &request.card.level.max(1).to_string(),
-                style.stat_link_x as f32,
-                style.link_top as f32,
-                style.link_size as f32,
-                120.0,
-                value_color,
-                Color::TRANSPARENT,
-                &style.link_font_family,
-                TextAlign::Right,
-                language,
-                style.stat_letter_spacing,
-                link_text.scale_x.unwrap_or(1.0),
+                DrawTextLine {
+                    text: &request.card.level.max(1).to_string(),
+                    x: style.stat_link_x as f32,
+                    y: style.link_top as f32,
+                    font_size: style.link_size as f32,
+                    max_width: 120.0,
+                    color: value_color,
+                    shadow_color: Color::TRANSPARENT,
+                    family_name: &style.link_font_family,
+                    align: TextAlign::Right,
+                    language,
+                    letter_spacing: style.stat_letter_spacing,
+                    scale_x: link_text.scale_x.unwrap_or(1.0),
+                },
             );
         } else {
             draw_text_line(
                 target,
-                &display_stat(request.card.defense),
-                style.stat_def_x as f32,
-                style.stat_top as f32,
-                style.stat_size as f32,
-                220.0,
-                value_color,
-                Color::TRANSPARENT,
-                &style.stat_font_family,
-                TextAlign::Right,
-                language,
-                style.stat_letter_spacing,
+                DrawTextLine::unscaled(
+                    &display_stat(request.card.defense),
+                    style.stat_def_x as f32,
+                    style.stat_top as f32,
+                    style.stat_size as f32,
+                    220.0,
+                    value_color,
+                    Color::TRANSPARENT,
+                    &style.stat_font_family,
+                    TextAlign::Right,
+                    language,
+                    style.stat_letter_spacing,
+                ),
             );
         }
     }
@@ -548,31 +568,35 @@ fn draw_stats(
 
         draw_text_line(
             target,
-            &request.card.lscale.to_string(),
-            left.x as f32,
-            left.y as f32,
-            if language == Some("astral") { 84.0 } else { 98.0 },
-            120.0,
-            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-            Color::TRANSPARENT,
-            &style.stat_font_family,
-            TextAlign::Center,
-            language,
-            if language == Some("astral") { 0.0 } else { -10.0 },
+            DrawTextLine::unscaled(
+                &request.card.lscale.to_string(),
+                left.x as f32,
+                left.y as f32,
+                if language == Some("astral") { 84.0 } else { 98.0 },
+                120.0,
+                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                Color::TRANSPARENT,
+                &style.stat_font_family,
+                TextAlign::Center,
+                language,
+                if language == Some("astral") { 0.0 } else { -10.0 },
+            ),
         );
         draw_text_line(
             target,
-            &request.card.rscale.to_string(),
-            right.x as f32,
-            right.y as f32,
-            if language == Some("astral") { 84.0 } else { 98.0 },
-            120.0,
-            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-            Color::TRANSPARENT,
-            &style.stat_font_family,
-            TextAlign::Center,
-            language,
-            if language == Some("astral") { 0.0 } else { -10.0 },
+            DrawTextLine::unscaled(
+                &request.card.rscale.to_string(),
+                right.x as f32,
+                right.y as f32,
+                if language == Some("astral") { 84.0 } else { 98.0 },
+                120.0,
+                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                Color::TRANSPARENT,
+                &style.stat_font_family,
+                TextAlign::Center,
+                language,
+                if language == Some("astral") { 0.0 } else { -10.0 },
+            ),
         );
     }
 }
@@ -687,17 +711,19 @@ fn draw_password(
     let password_y = ov.password_y.unwrap_or(base.password.y);
     draw_text_line(
         target,
-        &request.card.code.to_string(),
-        password_x as f32,
-        password_y as f32,
-        base.password.font_size as f32,
-        260.0,
-        Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
-        Color::TRANSPARENT,
-        &style.password_font_family,
-        TextAlign::Left,
-        language,
-        0.0,
+        DrawTextLine::unscaled(
+            &request.card.code.to_string(),
+            password_x as f32,
+            password_y as f32,
+            base.password.font_size as f32,
+            260.0,
+            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+            Color::TRANSPARENT,
+            &style.password_font_family,
+            TextAlign::Left,
+            language,
+            0.0,
+        ),
     );
 
     if request.card.is_monster() {
@@ -713,17 +739,19 @@ fn draw_password(
             .unwrap_or(base.copyright.y);
         draw_text_line(
             target,
-            &build_scale_line(&request.card),
-            (CARD_WIDTH - copyright_right) as f32,
-            copyright_y as f32,
-            22.0,
-            320.0,
-            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
-            Color::TRANSPARENT,
-            &style.base_font_family,
-            TextAlign::Right,
-            language,
-            0.0,
+            DrawTextLine::unscaled(
+                &build_scale_line(&request.card),
+                (CARD_WIDTH - copyright_right) as f32,
+                copyright_y as f32,
+                22.0,
+                320.0,
+                Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                Color::TRANSPARENT,
+                &style.base_font_family,
+                TextAlign::Right,
+                language,
+                0.0,
+            ),
         );
     }
 }
@@ -768,17 +796,19 @@ fn draw_package(
 
         draw_text_line(
             target,
-            package,
-            x,
-            y as f32,
-            base.package.font_size as f32,
-            400.0,
-            Color::BLACK,
-            Color::TRANSPARENT,
-            &style.password_font_family,
-            align,
-            language,
-            0.0,
+            DrawTextLine::unscaled(
+                package,
+                x,
+                y as f32,
+                base.package.font_size as f32,
+                400.0,
+                Color::BLACK,
+                Color::TRANSPARENT,
+                &style.password_font_family,
+                align,
+                language,
+                0.0,
+            ),
         );
     }
 }
@@ -797,17 +827,19 @@ fn draw_copyright_text(
 
         draw_text_line(
             target,
-            copyright,
-            (CARD_WIDTH - right) as f32,
-            y as f32,
-            22.0, // Matches draw_password's scale line size
-            500.0,
-            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
-            Color::TRANSPARENT,
-            &style.base_font_family,
-            TextAlign::Right,
-            language,
-            0.0,
+            DrawTextLine::unscaled(
+                copyright,
+                (CARD_WIDTH - right) as f32,
+                y as f32,
+                32.0,
+                500.0,
+                Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                Color::TRANSPARENT,
+                &style.base_font_family,
+                TextAlign::Right,
+                language,
+                0.0,
+            ),
         );
     }
 }

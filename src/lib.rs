@@ -5,7 +5,7 @@ mod layout;
 pub mod model;
 pub mod renderer;
 pub mod ruby;
-mod text;
+pub mod text;
 
 pub use model::{CardKind, RenderError, RenderOptions, RenderRequest};
 pub use renderer::Renderer;

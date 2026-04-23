@@ -2,7 +2,7 @@ use image::ImageFormat;
 use resvg::{self, usvg};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use tiny_skia::{Pixmap, Transform};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -345,6 +345,9 @@ pub struct AssetBundle {
     pub layout: LayoutPayload,
     payload: Vec<u8>,
     atlas_pixmap: Option<Pixmap>,
+    /// Cache of atlas sprites already cropped from the atlas.
+    /// Keyed by asset name; populated lazily on first draw.
+    sprite_cache: RwLock<HashMap<String, Pixmap>>,
 }
 
 impl AssetBundle {
@@ -381,6 +384,7 @@ impl AssetBundle {
             payload,
             layout,
             atlas_pixmap: None,
+            sprite_cache: RwLock::new(HashMap::new()),
         };
 
         if let Some(buffer) = &bundle.index.atlas.buffer {
@@ -460,6 +464,22 @@ impl AssetBundle {
         match entry.kind.as_str() {
             "raster" => match entry.storage.as_str() {
                 "atlas" => {
+                    // Fast path: look up the already-cropped sprite in the cache.
+                    {
+                        let cache = self.sprite_cache.read().unwrap();
+                        if let Some(cached) = cache.get(name) {
+                            target.draw_pixmap(
+                                x as i32,
+                                y as i32,
+                                cached.as_ref(),
+                                &tiny_skia::PixmapPaint::default(),
+                                Transform::default(),
+                                None,
+                            );
+                            return Ok(());
+                        }
+                    }
+                    // Slow path: crop from atlas, cache for future calls.
                     let sprite = entry
                         .atlas
                         .as_ref()
@@ -486,6 +506,10 @@ impl AssetBundle {
                         Transform::default(),
                         None,
                     );
+                    // Store in cache (ignore poisoned lock — just skip caching).
+                    if let Ok(mut cache) = self.sprite_cache.write() {
+                        cache.insert(name.to_string(), cropped);
+                    }
                     Ok(())
                 }
                 "buffer" => {

@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use ygo_card_renderer_rs::{
     CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle,
@@ -26,6 +27,21 @@ fn artifact_dir() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("export");
     fs::create_dir_all(&path).expect("create artifact dir");
     path
+}
+
+fn test_cdb_path() -> Option<PathBuf> {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let preferred = repo_root.join("cards3.cdb");
+    if preferred.exists() {
+        return Some(preferred);
+    }
+
+    let fallback = repo_root.join("cards.cdb");
+    if fallback.exists() {
+        return Some(fallback);
+    }
+
+    None
 }
 
 fn env_opt_u32(key: &str) -> Option<u32> {
@@ -127,7 +143,7 @@ fn pick_tuning_card(cards: &[ygopro_cdb_encode_rs::CardDataEntry]) -> ygopro_cdb
         .find(|card| !card.desc.trim().is_empty() && !card.is_spell() && !card.is_trap())
         .cloned()
         .or_else(|| cards.first().cloned())
-        .expect("cards.cdb did not contain any cards")
+        .expect("selected cdb did not contain any cards")
 }
 
 /// 从 CDB 中读取几张经典卡，覆盖各种类型。
@@ -135,11 +151,10 @@ fn pick_tuning_card(cards: &[ygopro_cdb_encode_rs::CardDataEntry]) -> ygopro_cdb
 fn render_cards_from_cdb() {
     init_bundle();
 
-    let cdb_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cards.cdb");
-    if !cdb_path.exists() {
-        eprintln!("Skipping CDB test: cards.cdb not found at {:?}", cdb_path);
+    let Some(cdb_path) = test_cdb_path() else {
+        eprintln!("Skipping CDB test: neither cards3.cdb nor cards.cdb exists in repo root");
         return;
-    }
+    };
 
     let cdb = YgoProCdb::from_path(&cdb_path).expect("open cdb");
     let mut cards = cdb.find_all().expect("read all cards from cdb");
@@ -150,7 +165,7 @@ fn render_cards_from_cdb() {
 
     assert!(
         !cards.is_empty(),
-        "cards.cdb did not contain any cards to render"
+        "selected cdb did not contain any cards to render"
     );
 
     let mut rendered = 0;
@@ -197,11 +212,10 @@ fn render_cards_from_cdb() {
 fn render_single_card_for_tuning() {
     init_bundle();
 
-    let cdb_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cards.cdb");
-    if !cdb_path.exists() {
-        eprintln!("Skipping tuning test: cards.cdb not found at {:?}", cdb_path);
+    let Some(cdb_path) = test_cdb_path() else {
+        eprintln!("Skipping tuning test: neither cards3.cdb nor cards.cdb exists in repo root");
         return;
-    }
+    };
 
     let cdb = YgoProCdb::from_path(&cdb_path).expect("open cdb");
     let mut cards = cdb.find_all().expect("read all cards from cdb");
@@ -283,4 +297,185 @@ fn sanitize_name(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// 大批量渲染性能测试。
+///
+/// 运行方式：
+///   `cargo test bench_bulk_render -- --ignored --nocapture`
+///
+/// 控制参数（环境变量）：
+///   YGO_BENCH_REPEAT   每张卡重复渲染次数（默认 3）
+///   YGO_BENCH_THREADS  并行线程数（默认 1，单线程）；设为 0 使用所有 CPU 核心
+///   YGO_BENCH_WRITE    是否将 PNG 写入磁盘（默认 false，纯内存测速）
+#[test]
+#[ignore = "performance benchmark; run explicitly with --ignored"]
+fn bench_bulk_render() {
+    use std::sync::Arc;
+    use std::thread;
+
+    init_bundle();
+
+    let Some(cdb_path) = test_cdb_path() else {
+        eprintln!("Skipping bench: neither cards3.cdb nor cards.cdb exists in repo root");
+        return;
+    };
+
+    let repeat: usize = std::env::var("YGO_BENCH_REPEAT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+
+    let thread_count: usize = {
+        let raw = std::env::var("YGO_BENCH_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1);
+        if raw == 0 { thread::available_parallelism().map(|n| n.get()).unwrap_or(1) } else { raw }
+    };
+
+    let write_png = std::env::var("YGO_BENCH_WRITE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+
+    let cdb = YgoProCdb::from_path(&cdb_path).expect("open cdb");
+    let mut cards = cdb.find_all().expect("read all cards from cdb");
+    cards.sort_by_key(|card| card.code);
+
+    assert!(!cards.is_empty(), "selected cdb contains no cards");
+
+    let total_renders = cards.len() * repeat;
+    let out_dir = if write_png { Some(artifact_dir()) } else { None };
+
+    println!("\n=== bench_bulk_render ===");
+    println!("  cards in CDB  : {}", cards.len());
+    println!("  repeat        : {repeat}");
+    println!("  total renders : {total_renders}");
+    println!("  threads       : {thread_count}");
+    println!("  write PNG     : {write_png}");
+    println!();
+
+    // Build the full work list: (card, repeat_index)
+    let work: Arc<Vec<_>> = Arc::new(
+        cards
+            .iter()
+            .flat_map(|c| std::iter::repeat_n(c.clone(), repeat))
+            .collect(),
+    );
+    let out_dir = Arc::new(out_dir);
+
+    let wall_start = Instant::now();
+
+    if thread_count <= 1 {
+        // ── single-threaded ─────────────────────────────────────────────────
+        let renderer = Renderer::new();
+        let mut per_card: Vec<Duration> = Vec::with_capacity(work.len());
+
+        for (i, card) in work.iter().enumerate() {
+            let request = RenderRequest {
+                kind: CardKind::Yugioh,
+                card: card.clone().into(),
+                options: RenderOptions {
+                    resource_path: PathBuf::new(),
+                    language: Some("sc".to_string()),
+                    scale: 1.0,
+                    art_image: None,
+                    ..RenderOptions::default()
+                },
+            };
+
+            let t = Instant::now();
+            let png = renderer.render_png(&request).expect("render_png failed");
+            per_card.push(t.elapsed());
+
+            if let Some(dir) = out_dir.as_ref() {
+                let name = sanitize_name(&card.name);
+                let path = dir.join(format!("bench-{i:05}-{}-{name}.png", card.code));
+                fs::write(path, &png).expect("write png");
+            }
+        }
+
+        let wall = wall_start.elapsed();
+        print_bench_stats(&per_card, wall, total_renders);
+    } else {
+        // ── multi-threaded ──────────────────────────────────────────────────
+        let chunk_size = (work.len() + thread_count - 1) / thread_count;
+        let mut handles = Vec::with_capacity(thread_count);
+
+        for chunk in work.chunks(chunk_size) {
+            let chunk: Vec<_> = chunk.to_vec();
+            let out_dir = Arc::clone(&out_dir);
+            let offset = handles.len() * chunk_size;
+
+            let handle = thread::spawn(move || {
+                let renderer = Renderer::new();
+                let mut durations = Vec::with_capacity(chunk.len());
+
+                for (j, card) in chunk.iter().enumerate() {
+                    let request = RenderRequest {
+                        kind: CardKind::Yugioh,
+                        card: card.clone().into(),
+                        options: RenderOptions {
+                            resource_path: PathBuf::new(),
+                            language: Some("sc".to_string()),
+                            scale: 1.0,
+                            art_image: None,
+                            ..RenderOptions::default()
+                        },
+                    };
+
+                    let t = Instant::now();
+                    let png = renderer.render_png(&request).expect("render_png failed");
+                    durations.push(t.elapsed());
+
+                    if let Some(dir) = out_dir.as_ref() {
+                        let i = offset + j;
+                        let name = sanitize_name(&card.name);
+                        let path = dir.join(format!("bench-{i:05}-{}-{name}.png", card.code));
+                        fs::write(path, &png).expect("write png");
+                    }
+                }
+
+                durations
+            });
+
+            handles.push(handle);
+        }
+
+        let per_card: Vec<Duration> = handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("thread panicked"))
+            .collect();
+
+        let wall = wall_start.elapsed();
+        print_bench_stats(&per_card, wall, total_renders);
+    }
+}
+
+fn print_bench_stats(per_card: &[Duration], wall: Duration, total: usize) {
+    let total_cpu_ms: f64 = per_card.iter().map(|d| d.as_secs_f64() * 1000.0).sum();
+    let mean_ms = total_cpu_ms / total as f64;
+
+    let mut sorted = per_card.to_vec();
+    sorted.sort_unstable();
+    let p50 = sorted[sorted.len() / 2].as_secs_f64() * 1000.0;
+    let p95 = sorted[(sorted.len() as f64 * 0.95) as usize].as_secs_f64() * 1000.0;
+    let p99 = sorted[(sorted.len() as f64 * 0.99).min((sorted.len() - 1) as f64) as usize]
+        .as_secs_f64()
+        * 1000.0;
+    let min_ms = sorted.first().unwrap().as_secs_f64() * 1000.0;
+    let max_ms = sorted.last().unwrap().as_secs_f64() * 1000.0;
+    let throughput = total as f64 / wall.as_secs_f64();
+
+    println!("=== results ===");
+    println!("  wall time     : {:.2}s", wall.as_secs_f64());
+    println!("  throughput    : {throughput:.1} cards/s");
+    println!("  mean          : {mean_ms:.1}ms");
+    println!("  min           : {min_ms:.1}ms");
+    println!("  p50           : {p50:.1}ms");
+    println!("  p95           : {p95:.1}ms");
+    println!("  p99           : {p99:.1}ms");
+    println!("  max           : {max_ms:.1}ms");
+    println!();
 }
