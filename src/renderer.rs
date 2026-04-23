@@ -140,6 +140,7 @@ impl Renderer {
         draw_password(&mut target, request, &style, base, language);
         draw_package(&mut target, request, &style, base, language);
         draw_copyright_text(&mut target, request, &style, base, language);
+        draw_laser(bundle, &mut target, request, base)?;
 
         let output_scale = effective_output_scale(request);
         let output = if (output_scale - 1.0).abs() > f32::EPSILON {
@@ -180,6 +181,17 @@ fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
     );
 
     Ok(target)
+}
+
+fn laser_asset_name(laser: &str) -> Option<String> {
+    let laser = laser.trim();
+    if laser.is_empty() {
+        None
+    } else if laser.ends_with(".webp") {
+        Some(laser.to_string())
+    } else {
+        Some(format!("{laser}.webp"))
+    }
 }
 
 fn draw_pendulum_description(
@@ -989,6 +1001,25 @@ fn draw_copyright_text(
     }
 }
 
+fn draw_laser(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    let Some(laser) = request.card.laser.as_deref().and_then(laser_asset_name) else {
+        return Ok(());
+    };
+
+    if bundle.has_image(&laser) {
+        bundle
+            .draw_image_at(target, &laser, base.laser.x as f32, base.laser.y as f32)
+            .map_err(RenderError::Backend)?;
+    }
+
+    Ok(())
+}
+
 /// Margins for the spell/trap subtype icon, looked up from the bundle's language-specific style.
 struct IconMargins {
     top: f32,
@@ -1013,7 +1044,17 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 
 #[cfg(test)]
 mod tests {
-    use super::scale_pixmap;
+    use super::{laser_asset_name, scale_pixmap};
+
+    #[test]
+    fn builds_laser_asset_names() {
+        assert_eq!(laser_asset_name("laser1").as_deref(), Some("laser1.webp"));
+        assert_eq!(
+            laser_asset_name("laser2.webp").as_deref(),
+            Some("laser2.webp")
+        );
+        assert_eq!(laser_asset_name("  ").as_deref(), None);
+    }
 
     #[test]
     fn scales_pixmap_dimensions() {
