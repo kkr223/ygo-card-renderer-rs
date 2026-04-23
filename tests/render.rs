@@ -1,9 +1,10 @@
-use std::{fs, path::PathBuf};
 use std::sync::Once;
 use std::time::{Duration, Instant};
+use std::{fs, path::PathBuf};
 
 use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle,
+    CardKind, RenderOptions, RenderRequest, Renderer,
+    asset_bundle::init_global_bundle,
     model::{LayoutOverrides, YgoCardMeta},
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
@@ -31,14 +32,11 @@ fn artifact_dir() -> PathBuf {
 
 fn test_cdb_path() -> Option<PathBuf> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let preferred = repo_root.join("cards3.cdb");
-    if preferred.exists() {
-        return Some(preferred);
-    }
-
-    let fallback = repo_root.join("cards.cdb");
-    if fallback.exists() {
-        return Some(fallback);
+    for filename in ["cards2.cdb", "cards3.cdb", "cards.cdb"] {
+        let path = repo_root.join(filename);
+        if path.exists() {
+            return Some(path);
+        }
     }
 
     None
@@ -57,13 +55,13 @@ fn env_opt_f32(key: &str) -> Option<f32> {
 }
 
 fn env_opt_bool(key: &str) -> Option<bool> {
-    std::env::var(key).ok().and_then(|v| {
-        match v.trim().to_ascii_lowercase().as_str() {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => Some(true),
             "0" | "false" | "no" | "off" => Some(false),
             _ => None,
-        }
-    })
+        })
 }
 
 fn env_string(key: &str, default: &str) -> String {
@@ -75,6 +73,20 @@ fn env_opt_string(key: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// Return the art image path for a card from `YGO_ART_DIR`, if set and found.
+/// Tries `<dir>/<code>.jpg` then `<dir>/<code>.png`; returns `None` if either
+/// the env var is unset or no matching file exists.
+fn find_art(card_code: u32) -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("YGO_ART_DIR")?);
+    for ext in &["jpg", "png"] {
+        let path = dir.join(format!("{card_code}.{ext}"));
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn layout_overrides_from_env() -> LayoutOverrides {
@@ -119,7 +131,9 @@ fn layout_overrides_from_env() -> LayoutOverrides {
     }
 }
 
-fn pick_tuning_card(cards: &[ygopro_cdb_encode_rs::CardDataEntry]) -> ygopro_cdb_encode_rs::CardDataEntry {
+fn pick_tuning_card(
+    cards: &[ygopro_cdb_encode_rs::CardDataEntry],
+) -> ygopro_cdb_encode_rs::CardDataEntry {
     if let Some(code) = env_opt_u32("YGO_RENDER_CARD_CODE") {
         if let Some(card) = cards.iter().find(|card| card.code == code) {
             return card.clone();
@@ -179,10 +193,9 @@ fn render_cards_from_cdb() {
             kind: CardKind::Yugioh,
             card: card.clone().into(),
             options: RenderOptions {
-                resource_path: PathBuf::new(),
                 language: Some("sc".to_string()),
                 scale: 1.0,
-                art_image: None,
+                art_image: find_art(card.code),
                 ..RenderOptions::default()
             },
         };
@@ -251,14 +264,14 @@ fn render_single_card_for_tuning() {
     if package_text.is_some() {
         card_meta.package = package_text;
     }
+    card_meta.scale = Some(scale);
 
     let request = RenderRequest {
         kind: CardKind::Yugioh,
         card: card_meta,
         options: RenderOptions {
-            resource_path: PathBuf::new(),
             language: Some(language.clone()),
-            scale,
+            scale: 1.0,
             art_image,
             title_width_compress,
             description_first_line_compress,
@@ -279,7 +292,11 @@ fn render_single_card_for_tuning() {
     ));
     fs::write(&png_path, &png).expect("write png");
 
-    println!("Rendered tuning image to {:?} ({} bytes)", png_path, png.len());
+    println!(
+        "Rendered tuning image to {:?} ({} bytes)",
+        png_path,
+        png.len()
+    );
 }
 
 fn sanitize_name(name: &str) -> String {
@@ -331,7 +348,13 @@ fn bench_bulk_render() {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1);
-        if raw == 0 { thread::available_parallelism().map(|n| n.get()).unwrap_or(1) } else { raw }
+        if raw == 0 {
+            thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        } else {
+            raw
+        }
     };
 
     let write_png = std::env::var("YGO_BENCH_WRITE")
@@ -346,7 +369,11 @@ fn bench_bulk_render() {
     assert!(!cards.is_empty(), "selected cdb contains no cards");
 
     let total_renders = cards.len() * repeat;
-    let out_dir = if write_png { Some(artifact_dir()) } else { None };
+    let out_dir = if write_png {
+        Some(artifact_dir())
+    } else {
+        None
+    };
 
     println!("\n=== bench_bulk_render ===");
     println!("  cards in CDB  : {}", cards.len());
@@ -377,10 +404,9 @@ fn bench_bulk_render() {
                 kind: CardKind::Yugioh,
                 card: card.clone().into(),
                 options: RenderOptions {
-                    resource_path: PathBuf::new(),
                     language: Some("sc".to_string()),
                     scale: 1.0,
-                    art_image: None,
+                    art_image: find_art(card.code),
                     ..RenderOptions::default()
                 },
             };
@@ -417,10 +443,9 @@ fn bench_bulk_render() {
                         kind: CardKind::Yugioh,
                         card: card.clone().into(),
                         options: RenderOptions {
-                            resource_path: PathBuf::new(),
                             language: Some("sc".to_string()),
                             scale: 1.0,
-                            art_image: None,
+                            art_image: find_art(card.code),
                             ..RenderOptions::default()
                         },
                     };

@@ -110,6 +110,10 @@ pub struct YgoCardMeta {
     /// Show the 20th anniversary mark overlay.
     #[serde(default)]
     pub twentieth: bool,
+
+    /// Output image scale. `None` falls back to [`RenderOptions::scale`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
 }
 
 impl YgoCardMeta {
@@ -123,6 +127,7 @@ impl YgoCardMeta {
             copyright: None,
             laser: None,
             twentieth: false,
+            scale: None,
         }
     }
 }
@@ -208,11 +213,9 @@ pub struct LayoutOverrides {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderOptions {
-    pub resource_path: PathBuf,
     pub language: Option<String>,
     pub art_image: Option<PathBuf>,
     pub scale: f32,
-    pub output_kind: Option<CardKind>,
     /// Override the description text color (CSS-style hex or named color).
     pub description_color_override: Option<String>,
     #[serde(default)]
@@ -227,11 +230,9 @@ pub struct RenderOptions {
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
-            resource_path: PathBuf::new(),
             language: None,
             art_image: None,
             scale: 1.0,
-            output_kind: None,
             description_color_override: None,
             title_width_compress: false,
             description_first_line_compress: false,

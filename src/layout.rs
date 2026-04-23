@@ -25,6 +25,8 @@ pub(crate) struct LayoutStyle {
     pub(crate) description_line_height: f32,
     pub(crate) pendulum_description_top: u32,
     pub(crate) pendulum_description_size: u32,
+    pub(crate) pendulum_description_line_height: f32,
+    pub(crate) pendulum_description_letter_spacing: f32,
     pub(crate) title_max_width_with_attribute: u32,
     pub(crate) title_max_width_without_attribute: u32,
     pub(crate) body_max_width: u32,
@@ -162,9 +164,27 @@ pub(crate) fn layout_style(
 
     // Font families and RT parameters are identical in both card-kind arms; compute them once.
     let base_font_family = quoted_font(&style.font_family);
-    let name_font_family = quoted_font(style.name.font_family.as_deref().unwrap_or(&style.font_family));
-    let type_font_family = quoted_font(style.spell_trap.font_family.as_deref().unwrap_or(&style.font_family));
-    let effect_font_family = quoted_font(style.effect.font_family.as_deref().unwrap_or(&style.font_family));
+    let name_font_family = quoted_font(
+        style
+            .name
+            .font_family
+            .as_deref()
+            .unwrap_or(&style.font_family),
+    );
+    let type_font_family = quoted_font(
+        style
+            .spell_trap
+            .font_family
+            .as_deref()
+            .unwrap_or(&style.font_family),
+    );
+    let effect_font_family = quoted_font(
+        style
+            .effect
+            .font_family
+            .as_deref()
+            .unwrap_or(&style.font_family),
+    );
 
     let (name_rt_font_size, name_rt_top, name_rt_font_scale_x) = text_block_rt(&style.name);
     let (type_rt_font_size, type_rt_top, type_rt_font_scale_x) = text_block_rt(&style.spell_trap);
@@ -194,6 +214,11 @@ pub(crate) fn layout_style(
             description_line_height: style.description.line_height.unwrap_or(1.2),
             pendulum_description_top: style.pendulum_description.top.unwrap_or(1282),
             pendulum_description_size: style.pendulum_description.font_size.unwrap_or(36),
+            pendulum_description_line_height: style.pendulum_description.line_height.unwrap_or(1.2),
+            pendulum_description_letter_spacing: style
+                .pendulum_description
+                .letter_spacing
+                .unwrap_or(0.0),
             title_max_width_with_attribute: bundle_layout.base.name.width_with_attribute,
             title_max_width_without_attribute: bundle_layout.base.name.width_without_attribute,
             body_max_width: bundle_layout.base.description.width,
@@ -203,8 +228,9 @@ pub(crate) fn layout_style(
             description_letter_spacing: style.description.letter_spacing.unwrap_or(0.0),
             name_x: bundle_layout.base.name.x,
             description_x: bundle_layout.base.description.x,
-            effect_x: ((bundle_layout.base.effect.x as i32) + text_indent_px(style.effect.text_indent))
-                .max(0) as u32,
+            effect_x: ((bundle_layout.base.effect.x as i32)
+                + text_indent_px(style.effect.text_indent))
+            .max(0) as u32,
             effect_text_indent: text_indent_px(style.effect.text_indent),
             stat_atk_x: atk_text.x,
             stat_def_x: def_text.x,
@@ -248,6 +274,8 @@ pub(crate) fn layout_style(
             description_line_height: 1.39,
             pendulum_description_top: 1282,
             pendulum_description_size: 36,
+            pendulum_description_line_height: 1.2,
+            pendulum_description_letter_spacing: 0.0,
             title_max_width_with_attribute: 1033,
             title_max_width_without_attribute: 1161,
             body_max_width: 1175,

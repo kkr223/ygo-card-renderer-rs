@@ -1,5 +1,5 @@
 use ygopro_cdb_encode_rs::{
-    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ,
+    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_TOKEN, TYPE_XYZ,
 };
 
 const TYPE_QUICKPLAY: u32 = 0x1_0000;
@@ -8,17 +8,15 @@ const TYPE_EQUIP: u32 = 0x4_0000;
 const TYPE_FIELD: u32 = 0x8_0000;
 const TYPE_COUNTER: u32 = 0x10_0000;
 
-use crate::{
-    asset_bundle::BaseLayout,
-    layout::LayoutStyle,
-    model::CardKind,
-};
+use crate::{asset_bundle::BaseLayout, layout::LayoutStyle, model::CardKind};
 
 pub(crate) fn frame_asset_name(card: &CardDataEntry) -> &'static str {
     if card.is_spell() {
         "card-spell.webp"
     } else if card.is_trap() {
         "card-trap.webp"
+    } else if (card.type_ & TYPE_TOKEN) != 0 {
+        "card-token.webp"
     } else if card.is_pendulum() {
         if (card.type_ & TYPE_XYZ) != 0 {
             "card-xyz-pendulum.webp"
@@ -125,7 +123,11 @@ pub(crate) fn description_y(card: &CardDataEntry, style: &LayoutStyle) -> u32 {
     }
 }
 
-pub(crate) fn description_height(card: &CardDataEntry, style: &LayoutStyle, base: &BaseLayout) -> u32 {
+pub(crate) fn description_height(
+    card: &CardDataEntry,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+) -> u32 {
     let mut height = base.description.base_height;
     if !card.is_spell() && !card.is_trap() {
         let effect_height = if has_effect_line(card) {
@@ -194,7 +196,10 @@ pub(crate) fn spell_trap_subtype_icon_asset(card: &CardDataEntry) -> Option<&'st
 }
 
 pub(crate) fn auto_name_light(card: &CardDataEntry) -> bool {
-    card.is_spell() || card.is_trap() || (card.type_ & TYPE_XYZ) != 0 || (card.type_ & TYPE_LINK) != 0
+    card.is_spell()
+        || card.is_trap()
+        || (card.type_ & TYPE_XYZ) != 0
+        || (card.type_ & TYPE_LINK) != 0
 }
 
 pub(crate) fn localized_brackets(language: Option<&str>) -> (&'static str, &'static str) {
@@ -204,7 +209,10 @@ pub(crate) fn localized_brackets(language: Option<&str>) -> (&'static str, &'sta
     }
 }
 
-pub(crate) fn localized_spell_trap_name(card: &CardDataEntry, language: Option<&str>) -> &'static str {
+pub(crate) fn localized_spell_trap_name(
+    card: &CardDataEntry,
+    language: Option<&str>,
+) -> &'static str {
     match language.unwrap_or("sc") {
         "sc" | "tc" => {
             if card.is_spell() {
@@ -255,4 +263,104 @@ pub(crate) fn has_effect_line(card: &CardDataEntry) -> bool {
     // `build_effect_line` returns None for spells/traps and always builds a
     // non-empty string for monsters, so `.is_some()` is sufficient here.
     build_effect_line(card, CardKind::Yugioh).is_some()
+}
+
+pub(crate) struct PendulumTextSections {
+    pub(crate) pendulum_effect: Option<String>,
+    pub(crate) monster_effect: String,
+}
+
+pub(crate) fn split_pendulum_description(desc: &str) -> PendulumTextSections {
+    let normalized = desc.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<&str> = normalized.lines().collect();
+
+    if is_pendulum_header(lines.first().copied().unwrap_or_default()) {
+        lines.remove(0);
+    }
+
+    let marker_index = lines.iter().position(|line| is_monster_effect_marker(line));
+    let Some(marker_index) = marker_index else {
+        return PendulumTextSections {
+            pendulum_effect: None,
+            monster_effect: desc.to_string(),
+        };
+    };
+
+    let pendulum_effect = join_trimmed_lines(&lines[..marker_index]);
+    let monster_effect = join_trimmed_lines(&lines[marker_index + 1..]);
+
+    PendulumTextSections {
+        pendulum_effect: if pendulum_effect.is_empty() {
+            None
+        } else {
+            Some(pendulum_effect)
+        },
+        monster_effect,
+    }
+}
+
+fn is_pendulum_header(line: &str) -> bool {
+    let trimmed = line.trim();
+    (trimmed.contains("【灵摆】")
+        || trimmed.contains("[Pendulum")
+        || trimmed.contains("ペンデュラム"))
+        && (trimmed.contains('←')
+            || trimmed.contains('→')
+            || trimmed.contains('<')
+            || trimmed.contains('>'))
+}
+
+fn is_monster_effect_marker(line: &str) -> bool {
+    matches!(
+        line.trim(),
+        "【怪兽效果】"
+            | "[Monster Effect]"
+            | "【Monster Effect】"
+            | "【モンスター効果】"
+            | "【몬스터 효과】"
+    )
+}
+
+fn join_trimmed_lines(lines: &[&str]) -> String {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{frame_asset_name, split_pendulum_description};
+    use ygopro_cdb_encode_rs::{CardDataEntry, TYPE_MONSTER, TYPE_TOKEN};
+
+    #[test]
+    fn token_cards_use_token_frame() {
+        let card = CardDataEntry {
+            type_: TYPE_MONSTER | TYPE_TOKEN,
+            ..CardDataEntry::default()
+        };
+
+        assert_eq!(frame_asset_name(&card), "card-token.webp");
+    }
+
+    #[test]
+    fn splits_sc_pendulum_description() {
+        let sections = split_pendulum_description(
+            "←6 【灵摆】 6→\r\n灵摆效果。\r\n【怪兽效果】\r\n怪兽效果。",
+        );
+
+        assert_eq!(sections.pendulum_effect.as_deref(), Some("灵摆效果。"));
+        assert_eq!(sections.monster_effect, "怪兽效果。");
+    }
+
+    #[test]
+    fn leaves_unmarked_text_unchanged() {
+        let sections = split_pendulum_description("没有分隔标记。");
+
+        assert_eq!(sections.pendulum_effect, None);
+        assert_eq!(sections.monster_effect, "没有分隔标记。");
+    }
 }

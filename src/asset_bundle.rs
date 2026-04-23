@@ -460,26 +460,27 @@ impl AssetBundle {
         x: f32,
         y: f32,
     ) -> Result<(), String> {
+        // Fast path: all asset types share the same cache.
+        {
+            let cache = self.sprite_cache.read().unwrap();
+            if let Some(cached) = cache.get(name) {
+                target.draw_pixmap(
+                    x as i32,
+                    y as i32,
+                    cached.as_ref(),
+                    &tiny_skia::PixmapPaint::default(),
+                    Transform::default(),
+                    None,
+                );
+                return Ok(());
+            }
+        }
+
+        // Slow path: decode once, then cache.
         let entry = self.image(name)?;
-        match entry.kind.as_str() {
+        let pixmap = match entry.kind.as_str() {
             "raster" => match entry.storage.as_str() {
                 "atlas" => {
-                    // Fast path: look up the already-cropped sprite in the cache.
-                    {
-                        let cache = self.sprite_cache.read().unwrap();
-                        if let Some(cached) = cache.get(name) {
-                            target.draw_pixmap(
-                                x as i32,
-                                y as i32,
-                                cached.as_ref(),
-                                &tiny_skia::PixmapPaint::default(),
-                                Transform::default(),
-                                None,
-                            );
-                            return Ok(());
-                        }
-                    }
-                    // Slow path: crop from atlas, cache for future calls.
                     let sprite = entry
                         .atlas
                         .as_ref()
@@ -495,51 +496,32 @@ impl AssetBundle {
                         sprite.h,
                     )
                     .ok_or_else(|| format!("Invalid atlas rect for {name}"))?;
-                    let cropped = atlas
+                    atlas
                         .clone_rect(rect)
-                        .ok_or_else(|| format!("Failed to crop atlas rect for {name}"))?;
-                    target.draw_pixmap(
-                        x as i32,
-                        y as i32,
-                        cropped.as_ref(),
-                        &tiny_skia::PixmapPaint::default(),
-                        Transform::default(),
-                        None,
-                    );
-                    // Store in cache (ignore poisoned lock — just skip caching).
-                    if let Ok(mut cache) = self.sprite_cache.write() {
-                        cache.insert(name.to_string(), cropped);
-                    }
-                    Ok(())
+                        .ok_or_else(|| format!("Failed to crop atlas rect for {name}"))?
                 }
-                "buffer" => {
-                    let pixmap = self.decode_raster(name)?;
-                    target.draw_pixmap(
-                        x as i32,
-                        y as i32,
-                        pixmap.as_ref(),
-                        &tiny_skia::PixmapPaint::default(),
-                        Transform::default(),
-                        None,
-                    );
-                    Ok(())
-                }
-                other => Err(format!("Unsupported raster storage '{other}' for {name}")),
+                "buffer" => self.decode_raster(name)?,
+                other => return Err(format!("Unsupported raster storage '{other}' for {name}")),
             },
-            "svg" => {
-                let pixmap = self.decode_svg(name)?;
-                target.draw_pixmap(
-                    x as i32,
-                    y as i32,
-                    pixmap.as_ref(),
-                    &tiny_skia::PixmapPaint::default(),
-                    Transform::default(),
-                    None,
-                );
-                Ok(())
-            }
-            other => Err(format!("Unsupported asset kind '{other}' for {name}")),
+            "svg" => self.decode_svg(name)?,
+            other => return Err(format!("Unsupported asset kind '{other}' for {name}")),
+        };
+
+        target.draw_pixmap(
+            x as i32,
+            y as i32,
+            pixmap.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::default(),
+            None,
+        );
+
+        // Populate cache for subsequent calls (ignore poisoned lock — just skip caching).
+        if let Ok(mut cache) = self.sprite_cache.write() {
+            cache.insert(name.to_string(), pixmap);
         }
+
+        Ok(())
     }
 
     pub fn decode_svg(&self, name: &str) -> Result<Pixmap, String> {

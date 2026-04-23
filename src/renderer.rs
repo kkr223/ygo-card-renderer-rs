@@ -2,23 +2,24 @@ use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
-    asset_bundle::{get_bundle, AssetBundle, BaseLayout},
+    asset_bundle::{AssetBundle, BaseLayout, get_bundle},
     card_logic::{
         attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
         description_height, description_y, display_stat, frame_asset_name, image_frame,
-        localized_brackets, localized_spell_trap_name, spell_trap_subtype_icon_asset, uses_rank,
+        localized_brackets, localized_spell_trap_name, spell_trap_subtype_icon_asset,
+        split_pendulum_description, uses_rank,
     },
     constants::{
         BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
-    layout::{layout_style, LayoutStyle},
+    layout::{LayoutStyle, layout_style},
     model::{NameColor, RenderError, RenderRequest},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
-        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line,
-        draw_text_line_scaled, estimate_text_width, fit_ruby_text_scale, fit_single_line,
-        fit_single_line_compressed, DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign,
+        DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, draw_multiline_ruby_text,
+        draw_ruby_text_line, draw_text_line, draw_text_line_scaled, estimate_text_width,
+        fit_ruby_text_scale, fit_single_line, fit_single_line_compressed,
     },
 };
 
@@ -39,11 +40,21 @@ impl Renderer {
         let bundle = get_bundle();
         let base = &bundle.layout.base;
         let language = request.options.language.as_deref();
-        let style = layout_style(request.kind, language, &bundle.layout, &request.options.layout_overrides);
+        let style = layout_style(
+            request.kind,
+            language,
+            &bundle.layout,
+            &request.options.layout_overrides,
+        );
 
         let mut target = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
-        target.fill(Color::from_rgba8(BACKGROUND_CREAM.0, BACKGROUND_CREAM.1, BACKGROUND_CREAM.2, 255));
+        target.fill(Color::from_rgba8(
+            BACKGROUND_CREAM.0,
+            BACKGROUND_CREAM.1,
+            BACKGROUND_CREAM.2,
+            255,
+        ));
 
         draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
         draw_art(bundle, &mut target, request, base)?;
@@ -84,10 +95,28 @@ impl Renderer {
             );
         }
 
+        let description_text;
+        if request.card.is_pendulum() {
+            let sections = split_pendulum_description(&request.card.desc);
+            if let Some(pendulum_effect) = sections.pendulum_effect.as_deref() {
+                draw_pendulum_description(
+                    &mut target,
+                    request,
+                    &style,
+                    base,
+                    language,
+                    pendulum_effect,
+                );
+            }
+            description_text = sections.monster_effect;
+        } else {
+            description_text = request.card.desc.clone();
+        }
+
         draw_multiline_ruby_text(
             &mut target,
             RubyMultilineParams {
-                text: &request.card.desc,
+                text: &description_text,
                 x: style.description_x as f32,
                 y: description_y(&request.card, &style) as f32,
                 width: style.body_max_width as f32,
@@ -112,13 +141,84 @@ impl Renderer {
         draw_package(&mut target, request, &style, base, language);
         draw_copyright_text(&mut target, request, &style, base, language);
 
-        target
+        let output_scale = effective_output_scale(request);
+        let output = if (output_scale - 1.0).abs() > f32::EPSILON {
+            scale_pixmap(&target, output_scale)?
+        } else {
+            target
+        };
+
+        output
             .encode_png()
             .map_err(|e| RenderError::PngEncode(e.to_string()))
     }
 }
 
-fn draw_frame(bundle: &AssetBundle, target: &mut Pixmap, asset_name: &str) -> Result<(), RenderError> {
+fn effective_output_scale(request: &RenderRequest) -> f32 {
+    let scale = request.card.scale.unwrap_or(request.options.scale);
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
+    let width = ((source.width() as f32 * scale).round() as u32).max(1);
+    let height = ((source.height() as f32 * scale).round() as u32).max(1);
+    let mut target = Pixmap::new(width, height).ok_or_else(|| {
+        RenderError::Backend(format!("Failed to allocate scaled Pixmap {width}x{height}"))
+    })?;
+
+    target.draw_pixmap(
+        0,
+        0,
+        source.as_ref(),
+        &PixmapPaint::default(),
+        Transform::from_scale(scale, scale),
+        None,
+    );
+
+    Ok(target)
+}
+
+fn draw_pendulum_description(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+    text: &str,
+) {
+    draw_multiline_ruby_text(
+        target,
+        RubyMultilineParams {
+            text,
+            x: base.pendulum_description.x as f32,
+            y: style.pendulum_description_top as f32,
+            width: base.pendulum_description.width as f32,
+            height: base.pendulum_description.height as f32,
+            family: &style.base_font_family,
+            color: Color::BLACK,
+            shadow_color: Color::TRANSPARENT,
+            language,
+            base_font_size: style.pendulum_description_size,
+            rt_font_size: style.description_rt_font_size,
+            rt_top: style.description_rt_top,
+            rt_font_scale_x: style.description_rt_font_scale_x,
+            line_height: style.pendulum_description_line_height,
+            letter_spacing: style.pendulum_description_letter_spacing,
+            min_font_size: style.pendulum_description_size.saturating_sub(8),
+            first_line_compress: request.options.description_first_line_compress,
+        },
+    );
+}
+
+fn draw_frame(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    asset_name: &str,
+) -> Result<(), RenderError> {
     bundle
         .draw_image_at(target, asset_name, 0.0, 0.0)
         .map_err(RenderError::Backend)
@@ -135,17 +235,22 @@ fn draw_art(
             let rgba = img.into_rgba8();
             let w = rgba.width();
             let h = rgba.height();
-            if let Some(art_pixmap) = Pixmap::from_vec(
-                rgba.into_raw(),
-                tiny_skia::IntSize::from_wh(w, h).unwrap(),
-            ) {
-                let (art_x, art_y, _w, _h) = image_frame(&request.card, base);
+            if let Some(art_pixmap) =
+                Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
+            {
+                let (art_x, art_y, frame_w, frame_h) = image_frame(&request.card, base);
+                let scale_x = frame_w as f32 / w as f32;
+                let scale_y = frame_h as f32 / h as f32;
+                // tiny-skia's draw_pixmap transform applies to the source pixmap
+                // in destination space. Pass x=0/y=0 and encode the full
+                // translate+scale in the transform so they don't double-apply.
                 target.draw_pixmap(
-                    art_x as i32,
-                    art_y as i32,
+                    0,
+                    0,
                     art_pixmap.as_ref(),
                     &PixmapPaint::default(),
-                    Transform::default(),
+                    Transform::from_scale(scale_x, scale_y)
+                        .post_translate(art_x as f32, art_y as f32),
                     None,
                 );
             }
@@ -180,7 +285,12 @@ fn draw_attribute(
     if let Some(asset) = attribute_asset_name(&request.card, language) {
         if bundle.has_image(&asset) {
             bundle
-                .draw_image_at(target, &asset, base.attribute.x as f32, base.attribute.y as f32)
+                .draw_image_at(
+                    target,
+                    &asset,
+                    base.attribute.x as f32,
+                    base.attribute.y as f32,
+                )
                 .map_err(RenderError::Backend)?;
         }
     }
@@ -368,7 +478,10 @@ fn draw_spell_trap_line(
     language: Option<&str>,
 ) -> Result<(), RenderError> {
     let (left_bracket, right_bracket) = localized_brackets(language);
-    let left_text = format!("{left_bracket}{}", localized_spell_trap_name(&request.card, language));
+    let left_text = format!(
+        "{left_bracket}{}",
+        localized_spell_trap_name(&request.card, language)
+    );
     let right_text = right_bracket;
     let font_size = style.type_size as f32;
     let letter_spacing = style.type_letter_spacing;
@@ -572,14 +685,22 @@ fn draw_stats(
                 &request.card.lscale.to_string(),
                 left.x as f32,
                 left.y as f32,
-                if language == Some("astral") { 84.0 } else { 98.0 },
+                if language == Some("astral") {
+                    84.0
+                } else {
+                    98.0
+                },
                 120.0,
                 Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
                 Color::TRANSPARENT,
                 &style.stat_font_family,
                 TextAlign::Center,
                 language,
-                if language == Some("astral") { 0.0 } else { -10.0 },
+                if language == Some("astral") {
+                    0.0
+                } else {
+                    -10.0
+                },
             ),
         );
         draw_text_line(
@@ -588,14 +709,22 @@ fn draw_stats(
                 &request.card.rscale.to_string(),
                 right.x as f32,
                 right.y as f32,
-                if language == Some("astral") { 84.0 } else { 98.0 },
+                if language == Some("astral") {
+                    84.0
+                } else {
+                    98.0
+                },
                 120.0,
                 Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
                 Color::TRANSPARENT,
                 &style.stat_font_family,
                 TextAlign::Center,
                 language,
-                if language == Some("astral") { 0.0 } else { -10.0 },
+                if language == Some("astral") {
+                    0.0
+                } else {
+                    -10.0
+                },
             ),
         );
     }
@@ -650,7 +779,12 @@ fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -> Color {
     match name_color {
         NameColor::Auto => {
             if auto_name_light(card) {
-                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+                Color::from_rgba8(
+                    NAME_COLOR_LIGHT.0,
+                    NAME_COLOR_LIGHT.1,
+                    NAME_COLOR_LIGHT.2,
+                    255,
+                )
             } else {
                 Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
             }
@@ -658,12 +792,20 @@ fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -> Color {
         NameColor::Dark => {
             Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
         }
-        NameColor::Light => {
-            Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
-        }
+        NameColor::Light => Color::from_rgba8(
+            NAME_COLOR_LIGHT.0,
+            NAME_COLOR_LIGHT.1,
+            NAME_COLOR_LIGHT.2,
+            255,
+        ),
         NameColor::Custom(hex) => parse_hex_color(hex).unwrap_or_else(|| {
             if auto_name_light(card) {
-                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+                Color::from_rgba8(
+                    NAME_COLOR_LIGHT.0,
+                    NAME_COLOR_LIGHT.1,
+                    NAME_COLOR_LIGHT.2,
+                    255,
+                )
             } else {
                 Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
             }
@@ -775,7 +917,10 @@ fn draw_package(
 
         // Package position is right-aligned in bundle (like copyright)
         let right = if request.card.is_pendulum() {
-            base.package.pendulum.right.unwrap_or(base.package.pendulum.x.unwrap_or(116)) // Pendulum often uses x, fallback to 116
+            base.package
+                .pendulum
+                .right
+                .unwrap_or(base.package.pendulum.x.unwrap_or(116)) // Pendulum often uses x, fallback to 116
         } else if request.card.is_link() {
             base.package.link.right.unwrap_or(252)
         } else {
@@ -783,7 +928,7 @@ fn draw_package(
         };
 
         let x = if request.card.is_pendulum() && base.package.pendulum.x.is_some() {
-             base.package.pendulum.x.unwrap() as f32
+            base.package.pendulum.x.unwrap() as f32
         } else {
             (CARD_WIDTH - right) as f32
         };
@@ -863,5 +1008,19 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
         top: icon.and_then(|i| i.margin_top).unwrap_or(8.0),
         left: icon.and_then(|i| i.margin_left).unwrap_or(0.0),
         right: icon.and_then(|i| i.margin_right).unwrap_or(0.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_pixmap;
+
+    #[test]
+    fn scales_pixmap_dimensions() {
+        let source = tiny_skia::Pixmap::new(10, 20).expect("source pixmap");
+        let scaled = scale_pixmap(&source, 0.5).expect("scale pixmap");
+
+        assert_eq!(scaled.width(), 5);
+        assert_eq!(scaled.height(), 10);
     }
 }
