@@ -13,33 +13,22 @@
 //! All public items that `renderer.rs` (and any future callers) need are
 //! re-exported here so the import path stays `crate::text::*`.
 
-mod engine;
-mod util;
-pub mod measure;
 pub mod draw;
+mod engine;
+pub mod measure;
 pub mod ruby;
+mod util;
 
 // ── measure ──────────────────────────────────────────────────────────────────
-pub use measure::{
-    estimate_text_width,
-    fit_single_line,
-    fit_single_line_compressed,
-};
+pub use measure::{estimate_text_width, fit_single_line, fit_single_line_compressed};
 
 // ── draw ─────────────────────────────────────────────────────────────────────
 pub use draw::{
-    TextAlign,
-    DrawTextLine,
-    draw_text_line,
-    draw_text_line_scaled,
-    draw_multiline_text,
+    draw_multiline_text, draw_text_line, draw_text_line_scaled, DrawTextLine, TextAlign, TextBrush,
 };
 
 // ── ruby ─────────────────────────────────────────────────────────────────────
 pub use ruby::{
-    RubyLineParams,
+    draw_multiline_ruby_text, draw_ruby_text_line, fit_ruby_text_scale, RubyLineParams,
     RubyMultilineParams,
-    fit_ruby_text_scale,
-    draw_ruby_text_line,
-    draw_multiline_ruby_text,
 };

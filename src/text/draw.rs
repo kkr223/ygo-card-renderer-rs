@@ -16,11 +16,11 @@ use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 use super::{
     engine::{with_text_engine, TextEngine},
     measure::{
-        estimate_text_width, estimate_text_width_scaled, first_line_scale,
-        max_lines_for_height, split_first_explicit_line, total_text_height, wrap_text,
+        estimate_text_width, estimate_text_width_scaled, first_line_scale, max_lines_for_height,
+        split_first_explicit_line, total_text_height, wrap_text,
     },
-    util::primary_family_name,
     util::font_weight_for_family,
+    util::primary_family_name,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +42,8 @@ pub struct DrawTextLine<'a> {
     pub max_width: f32,
     pub color: Color,
     pub shadow_color: Color,
+    pub brush: Option<TextBrush>,
+    pub shadow_brush: Option<TextBrush>,
     pub family_name: &'a str,
     pub align: TextAlign,
     pub language: Option<&'a str>,
@@ -74,12 +76,24 @@ impl<'a> DrawTextLine<'a> {
             max_width,
             color,
             shadow_color,
+            brush: None,
+            shadow_brush: None,
             family_name,
             align,
             language,
             letter_spacing,
             scale_x: 1.0,
         }
+    }
+
+    pub fn with_brushes(
+        mut self,
+        brush: Option<TextBrush>,
+        shadow_brush: Option<TextBrush>,
+    ) -> Self {
+        self.brush = brush;
+        self.shadow_brush = shadow_brush;
+        self
     }
 }
 
@@ -95,6 +109,8 @@ pub struct DrawMultiline<'a> {
     pub family_name: &'a str,
     pub color: Color,
     pub shadow_color: Color,
+    pub brush: Option<TextBrush>,
+    pub shadow_brush: Option<TextBrush>,
     pub language: Option<&'a str>,
     pub base_font_size: u32,
     pub line_height: f32,
@@ -112,6 +128,62 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
+}
+
+/// Fill used for text pixels.
+#[derive(Debug, Clone)]
+pub enum TextBrush {
+    Solid(Color),
+    LinearGradient {
+        start: Color,
+        end: Color,
+        x0: f32,
+        x1: f32,
+    },
+}
+
+impl TextBrush {
+    pub fn solid(color: Color) -> Self {
+        Self::Solid(color)
+    }
+
+    pub fn horizontal_gradient(start: Color, end: Color, x: f32, width: f32) -> Self {
+        Self::LinearGradient {
+            start,
+            end,
+            x0: x,
+            x1: x + width.max(1.0),
+        }
+    }
+
+    fn alpha(&self) -> f32 {
+        match self {
+            Self::Solid(color) => color.alpha(),
+            Self::LinearGradient { start, end, .. } => start.alpha().max(end.alpha()),
+        }
+    }
+
+    fn sample(&self, x: f32) -> Color {
+        match self {
+            Self::Solid(color) => *color,
+            Self::LinearGradient { start, end, x0, x1 } => {
+                let span = (*x1 - *x0).abs().max(1.0);
+                let t = ((x - *x0) / span).clamp(0.0, 1.0);
+                lerp_color(*start, *end, t)
+            }
+        }
+    }
+}
+
+fn lerp_color(start: Color, end: Color, t: f32) -> Color {
+    let lerp = |a: f32, b: f32| a + (b - a) * t;
+    Color::from_rgba(
+        lerp(start.red(), end.red()),
+        lerp(start.green(), end.green()),
+        lerp(start.blue(), end.blue()),
+        lerp(start.alpha(), end.alpha()),
+    )
+    .unwrap_or(start)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,8 +205,13 @@ fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
         return;
     }
 
-    let unscaled_width =
-        estimate_text_width(p.text, p.language, p.family_name, p.font_size, p.letter_spacing);
+    let unscaled_width = estimate_text_width(
+        p.text,
+        p.language,
+        p.family_name,
+        p.font_size,
+        p.letter_spacing,
+    );
     let estimated = estimate_text_width_scaled(
         p.text,
         p.language,
@@ -167,6 +244,8 @@ fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
             height: p.font_size * 1.4,
             base_color: p.color,
             shadow_color: p.shadow_color,
+            base_brush: p.brush.clone(),
+            shadow_brush: p.shadow_brush.clone(),
             family_name: p.family_name,
             letter_spacing: p.letter_spacing,
             scale_x: p.scale_x,
@@ -209,7 +288,17 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
         p.height,
         p.base_font_size,
         p.min_font_size,
-        |fs| wrap_text(text, p.language, p.family_name, p.width, fs, p.letter_spacing).len(),
+        |fs| {
+            wrap_text(
+                text,
+                p.language,
+                p.family_name,
+                p.width,
+                fs,
+                p.letter_spacing,
+            )
+            .len()
+        },
     );
 
     let mut lines = wrap_text(
@@ -242,6 +331,8 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
                 height: font_size as f32 * 1.4,
                 base_color: p.color,
                 shadow_color: p.shadow_color,
+                base_brush: p.brush.clone(),
+                shadow_brush: p.shadow_brush.clone(),
                 family_name: p.family_name,
                 letter_spacing: p.letter_spacing,
                 scale_x: 1.0,
@@ -264,6 +355,8 @@ pub struct ShadowedText<'a> {
     pub height: f32,
     pub base_color: Color,
     pub shadow_color: Color,
+    pub base_brush: Option<TextBrush>,
+    pub shadow_brush: Option<TextBrush>,
     pub family_name: &'a str,
     pub letter_spacing: f32,
     pub scale_x: f32,
@@ -303,7 +396,12 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
 
         // Skip the shadow pass entirely when the shadow colour is fully
         // transparent — the common case (~10-20% time saved).
-        if p.shadow_color.alpha() > 0.0 {
+        let shadow_brush = p
+            .shadow_brush
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TextBrush::solid(p.shadow_color));
+        if shadow_brush.alpha() > 0.0 {
             draw_buffer_to_pixmap(
                 font_system,
                 swash_cache,
@@ -312,11 +410,16 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
                 pixmap,
                 p.x + 1.0,
                 baseline_y + 1.0,
-                p.shadow_color,
+                &shadow_brush,
                 p.letter_spacing,
                 p.scale_x,
             );
         }
+        let base_brush = p
+            .base_brush
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TextBrush::solid(p.base_color));
         draw_buffer_to_pixmap(
             font_system,
             swash_cache,
@@ -325,7 +428,7 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
             pixmap,
             p.x,
             baseline_y,
-            p.base_color,
+            &base_brush,
             p.letter_spacing,
             p.scale_x,
         );
@@ -345,18 +448,12 @@ pub(super) fn draw_buffer_to_pixmap(
     pixmap: &mut Pixmap,
     offset_x: f32,
     offset_y: f32,
-    color: Color,
+    brush: &TextBrush,
     letter_spacing: f32,
     scale_x: f32,
 ) {
     let pm_width = pixmap.width() as i32;
     let pm_height = pixmap.height() as i32;
-
-    // Pre-compute premultiplied source colour components (0–255 scale).
-    let src_r = (color.red() * 255.0) as u32;
-    let src_g = (color.green() * 255.0) as u32;
-    let src_b = (color.blue() * 255.0) as u32;
-    let color_alpha = color.alpha();
 
     // Build a byte-offset → char-index table for O(1) letter-spacing lookup.
     // Only constructed when letter_spacing is non-zero.
@@ -389,8 +486,7 @@ pub(super) fn draw_buffer_to_pixmap(
                 letter_spacing * char_idx as f32
             };
 
-            let physical_glyph =
-                glyph.physical((offset_x + letter_spacing_offset, offset_y), 1.0);
+            let physical_glyph = glyph.physical((offset_x + letter_spacing_offset, offset_y), 1.0);
             let image = match swash_cache.get_image(font_system, physical_glyph.cache_key) {
                 Some(img) => img,
                 None => continue,
@@ -408,15 +504,12 @@ pub(super) fn draw_buffer_to_pixmap(
             let gx = scaled_left.round() as i32;
             let gy = physical_glyph.y - image.placement.top;
 
-            let scaled_glyph_width =
-                ((glyph_width as f32) * scale_x).ceil().max(1.0) as usize;
+            let scaled_glyph_width = ((glyph_width as f32) * scale_x).ceil().max(1.0) as usize;
 
             let clip_x0 = gx.max(0) as usize;
             let clip_y0 = gy.max(0) as usize;
-            let clip_x1 =
-                ((gx + scaled_glyph_width as i32) as usize).min(pm_width as usize);
-            let clip_y1 =
-                ((gy + glyph_height as i32) as usize).min(pm_height as usize);
+            let clip_x1 = ((gx + scaled_glyph_width as i32) as usize).min(pm_width as usize);
+            let clip_y1 = ((gy + glyph_height as i32) as usize).min(pm_height as usize);
 
             if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 {
                 continue;
@@ -427,8 +520,7 @@ pub(super) fn draw_buffer_to_pixmap(
             let inv_scale_x = if scale_x > 0.0 { 1.0 / scale_x } else { 1.0 };
             let max_src_cx = (glyph_width - 1) as f32;
 
-            for cy in local_y_start as usize
-                ..(clip_y1 - clip_y0 as usize + local_y_start as usize)
+            for cy in local_y_start as usize..(clip_y1 - clip_y0 as usize + local_y_start as usize)
             {
                 if cy >= glyph_height {
                     break;
@@ -437,11 +529,9 @@ pub(super) fn draw_buffer_to_pixmap(
                 let py = clip_y0 + cy - local_y_start as usize;
                 let row_base = py * pm_width as usize;
 
-                for dest_cx in
-                    local_x_start as usize..scaled_glyph_width.min(clip_x1 - gx as usize)
+                for dest_cx in local_x_start as usize..scaled_glyph_width.min(clip_x1 - gx as usize)
                 {
-                    let src_cx =
-                        ((dest_cx as f32) * inv_scale_x).floor().min(max_src_cx) as usize;
+                    let src_cx = ((dest_cx as f32) * inv_scale_x).floor().min(max_src_cx) as usize;
                     let alpha = row[src_cx];
                     if alpha == 0 {
                         continue;
@@ -450,6 +540,11 @@ pub(super) fn draw_buffer_to_pixmap(
                     let px = clip_x0 + dest_cx - local_x_start as usize;
                     let idx = row_base + px;
 
+                    let color = brush.sample(px as f32);
+                    let src_r = (color.red() * 255.0) as u32;
+                    let src_g = (color.green() * 255.0) as u32;
+                    let src_b = (color.blue() * 255.0) as u32;
+                    let color_alpha = color.alpha();
                     let sa = (alpha as f32 * color_alpha) as u32;
                     let inv_sa = 255 - sa;
 
@@ -498,6 +593,8 @@ fn draw_multiline_with_first_line_compress(
             max_width: p.width,
             color: p.color,
             shadow_color: p.shadow_color,
+            brush: p.brush.clone(),
+            shadow_brush: p.shadow_brush.clone(),
             family_name: p.family_name,
             align: TextAlign::Left,
             language: p.language,
@@ -544,9 +641,7 @@ fn binary_search_font_size(
     min_font_size: u32,
     line_count_fn: impl Fn(f32) -> usize,
 ) -> u32 {
-    let fits = |fs: u32| {
-        total_text_height(line_count_fn(fs as f32), fs, line_height) <= height
-    };
+    let fits = |fs: u32| total_text_height(line_count_fn(fs as f32), fs, line_height) <= height;
 
     // Fast path: base size already fits.
     if fits(base_font_size) {

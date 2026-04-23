@@ -2,7 +2,7 @@ use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
-    asset_bundle::{AssetBundle, BaseLayout, get_bundle},
+    asset_bundle::{get_bundle, AssetBundle, BaseLayout},
     card_logic::{
         attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
         description_height, description_y, display_stat, frame_asset_name, image_frame,
@@ -13,13 +13,13 @@ use crate::{
         BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
-    layout::{LayoutStyle, layout_style},
-    model::{NameColor, RenderError, RenderRequest},
+    layout::{layout_style, LayoutStyle},
+    model::{NameColor, RenderError, RenderRequest, TextGradient, TextPaint},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
-        DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, draw_multiline_ruby_text,
-        draw_ruby_text_line, draw_text_line, draw_text_line_scaled, estimate_text_width,
-        fit_ruby_text_scale, fit_single_line, fit_single_line_compressed,
+        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line, draw_text_line_scaled,
+        estimate_text_width, fit_ruby_text_scale, fit_single_line, fit_single_line_compressed,
+        DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
     },
 };
 
@@ -91,6 +91,27 @@ impl Renderer {
                     TextAlign::Left,
                     language,
                     line_layout.letter_spacing,
+                )
+                .with_brushes(
+                    text_brush(
+                        request.options.text_colors.effect.as_ref(),
+                        None,
+                        Color::from_rgba8(
+                            TEXT_COLOR_DARK.0,
+                            TEXT_COLOR_DARK.1,
+                            TEXT_COLOR_DARK.2,
+                            255,
+                        ),
+                        style.effect_x as f32,
+                        line_layout.max_width as f32,
+                    ),
+                    text_brush(
+                        request.options.text_colors.effect_shadow.as_ref(),
+                        None,
+                        Color::TRANSPARENT,
+                        style.effect_x as f32,
+                        line_layout.max_width as f32,
+                    ),
                 ),
             );
         }
@@ -124,6 +145,20 @@ impl Renderer {
                 family: &style.base_font_family,
                 color: Color::BLACK,
                 shadow_color: Color::TRANSPARENT,
+                brush: text_brush(
+                    request.options.text_colors.description.as_ref(),
+                    request.options.description_color_override.as_deref(),
+                    Color::BLACK,
+                    style.description_x as f32,
+                    style.body_max_width as f32,
+                ),
+                shadow_brush: text_brush(
+                    request.options.text_colors.description_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    style.description_x as f32,
+                    style.body_max_width as f32,
+                ),
                 language,
                 base_font_size: style.description_size,
                 rt_font_size: style.description_rt_font_size,
@@ -213,6 +248,20 @@ fn draw_pendulum_description(
             family: &style.base_font_family,
             color: Color::BLACK,
             shadow_color: Color::TRANSPARENT,
+            brush: text_brush(
+                request.options.text_colors.description.as_ref(),
+                request.options.description_color_override.as_deref(),
+                Color::BLACK,
+                base.pendulum_description.x as f32,
+                base.pendulum_description.width as f32,
+            ),
+            shadow_brush: text_brush(
+                request.options.text_colors.description_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                base.pendulum_description.x as f32,
+                base.pendulum_description.width as f32,
+            ),
             language,
             base_font_size: style.pendulum_description_size,
             rt_font_size: style.description_rt_font_size,
@@ -404,6 +453,9 @@ fn draw_title(
     };
 
     let name_color = resolve_name_color(&request.card.name_color, &request.card);
+    let name_brush =
+        resolve_name_brush(request, name_color, style.name_x as f32, title_width as f32);
+    let name_shadow = resolve_name_shadow_brush(request, style.name_x as f32, title_width as f32);
 
     // Ruby path: JP language with rt_font_size set and markup present.
     if style.name_rt_font_size > 0 && contains_ruby_markup(&request.card.name) {
@@ -418,6 +470,29 @@ fn draw_title(
             title_width as f32,
         )
         .max(0.3);
+        if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
+            draw_ruby_text_line(
+                target,
+                RubyLineParams {
+                    tokens: &tokens,
+                    x: style.name_x as f32 + 7.0,
+                    y: style.name_top as f32 + 7.0,
+                    font_size: style.name_size as f32,
+                    rt_font_size: style.name_rt_font_size as f32,
+                    rt_top: style.name_rt_top,
+                    rt_font_scale_x_override: style.name_rt_font_scale_x,
+                    color: name_shadow.color,
+                    shadow_color: Color::TRANSPARENT,
+                    brush: name_shadow.brush.clone(),
+                    shadow_brush: None,
+                    family: &style.name_font_family,
+                    language,
+                    letter_spacing: style.title_letter_spacing,
+                    scale_x,
+                },
+            );
+        }
+
         draw_ruby_text_line(
             target,
             RubyLineParams {
@@ -428,8 +503,10 @@ fn draw_title(
                 rt_font_size: style.name_rt_font_size as f32,
                 rt_top: style.name_rt_top,
                 rt_font_scale_x_override: style.name_rt_font_scale_x,
-                color: name_color,
+                color: name_brush.color,
                 shadow_color: Color::TRANSPARENT,
+                brush: name_brush.brush,
+                shadow_brush: None,
                 family: &style.name_font_family,
                 language,
                 letter_spacing: style.title_letter_spacing,
@@ -462,6 +539,28 @@ fn draw_title(
         )
     };
 
+    if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
+        draw_text_line_scaled(
+            target,
+            DrawTextLine {
+                text: &title_layout.text,
+                x: style.name_x as f32 + 7.0,
+                y: style.name_top as f32 + 7.0,
+                font_size: title_layout.font_size as f32,
+                max_width: title_layout.max_width as f32,
+                color: name_shadow.color,
+                shadow_color: Color::TRANSPARENT,
+                brush: name_shadow.brush,
+                shadow_brush: None,
+                family_name: &style.name_font_family,
+                align: TextAlign::Left,
+                language,
+                letter_spacing: title_layout.letter_spacing,
+                scale_x: title_layout.scale_x,
+            },
+        );
+    }
+
     draw_text_line_scaled(
         target,
         DrawTextLine {
@@ -470,8 +569,10 @@ fn draw_title(
             y: style.name_top as f32,
             font_size: title_layout.font_size as f32,
             max_width: title_layout.max_width as f32,
-            color: name_color,
+            color: name_brush.color,
             shadow_color: Color::TRANSPARENT,
+            brush: name_brush.brush,
+            shadow_brush: None,
             family_name: &style.name_font_family,
             align: TextAlign::Left,
             language,
@@ -576,6 +677,20 @@ fn draw_spell_trap_line(
                 rt_font_scale_x_override: style.type_rt_font_scale_x,
                 color: text_color,
                 shadow_color: Color::TRANSPARENT,
+                brush: text_brush(
+                    request.options.text_colors.type_line.as_ref(),
+                    None,
+                    text_color,
+                    left_x,
+                    left_width,
+                ),
+                shadow_brush: text_brush(
+                    request.options.text_colors.type_line_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    left_x,
+                    left_width,
+                ),
                 family: &style.type_font_family,
                 language,
                 letter_spacing,
@@ -597,6 +712,22 @@ fn draw_spell_trap_line(
                 TextAlign::Left,
                 language,
                 letter_spacing,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.type_line.as_ref(),
+                    None,
+                    text_color,
+                    left_x,
+                    left_width,
+                ),
+                text_brush(
+                    request.options.text_colors.type_line_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    left_x,
+                    left_width,
+                ),
             ),
         );
     }
@@ -632,6 +763,22 @@ fn draw_stats(
                 TextAlign::Right,
                 language,
                 style.stat_letter_spacing,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.stats.as_ref(),
+                    None,
+                    value_color,
+                    style.stat_atk_x as f32 - 220.0,
+                    220.0,
+                ),
+                text_brush(
+                    request.options.text_colors.stats_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    style.stat_atk_x as f32 - 220.0,
+                    220.0,
+                ),
             ),
         );
 
@@ -652,6 +799,20 @@ fn draw_stats(
                     max_width: 120.0,
                     color: value_color,
                     shadow_color: Color::TRANSPARENT,
+                    brush: text_brush(
+                        request.options.text_colors.stats.as_ref(),
+                        None,
+                        value_color,
+                        style.stat_link_x as f32 - 120.0,
+                        120.0,
+                    ),
+                    shadow_brush: text_brush(
+                        request.options.text_colors.stats_shadow.as_ref(),
+                        None,
+                        Color::TRANSPARENT,
+                        style.stat_link_x as f32 - 120.0,
+                        120.0,
+                    ),
                     family_name: &style.link_font_family,
                     align: TextAlign::Right,
                     language,
@@ -674,6 +835,22 @@ fn draw_stats(
                     TextAlign::Right,
                     language,
                     style.stat_letter_spacing,
+                )
+                .with_brushes(
+                    text_brush(
+                        request.options.text_colors.stats.as_ref(),
+                        None,
+                        value_color,
+                        style.stat_def_x as f32 - 220.0,
+                        220.0,
+                    ),
+                    text_brush(
+                        request.options.text_colors.stats_shadow.as_ref(),
+                        None,
+                        Color::TRANSPARENT,
+                        style.stat_def_x as f32 - 220.0,
+                        220.0,
+                    ),
                 ),
             );
         }
@@ -713,6 +890,22 @@ fn draw_stats(
                 } else {
                     -10.0
                 },
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.stats.as_ref(),
+                    None,
+                    Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                    left.x as f32,
+                    120.0,
+                ),
+                text_brush(
+                    request.options.text_colors.stats_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    left.x as f32,
+                    120.0,
+                ),
             ),
         );
         draw_text_line(
@@ -737,6 +930,22 @@ fn draw_stats(
                 } else {
                     -10.0
                 },
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.stats.as_ref(),
+                    None,
+                    Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                    right.x as f32,
+                    120.0,
+                ),
+                text_brush(
+                    request.options.text_colors.stats_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    right.x as f32,
+                    120.0,
+                ),
             ),
         );
     }
@@ -825,10 +1034,136 @@ fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -> Color {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedPaint {
+    color: Color,
+    brush: Option<TextBrush>,
+}
+
+fn resolve_name_brush(
+    request: &RenderRequest,
+    fallback: Color,
+    x: f32,
+    width: f32,
+) -> ResolvedPaint {
+    let paint = request
+        .options
+        .text_colors
+        .name
+        .as_ref()
+        .cloned()
+        .or_else(|| {
+            request
+                .card
+                .name_gradient
+                .as_ref()
+                .map(|gradient| TextPaint {
+                    color: None,
+                    gradient: Some(gradient.clone()),
+                })
+        });
+    ResolvedPaint {
+        color: paint_color(paint.as_ref(), None, fallback),
+        brush: text_brush(paint.as_ref(), None, fallback, x, width),
+    }
+}
+
+fn resolve_name_shadow_brush(request: &RenderRequest, x: f32, width: f32) -> ResolvedPaint {
+    let paint = request
+        .options
+        .text_colors
+        .name_shadow
+        .as_ref()
+        .cloned()
+        .or_else(|| {
+            request
+                .card
+                .name_shadow_gradient
+                .as_ref()
+                .map(|gradient| TextPaint {
+                    color: request.card.name_shadow_color.clone(),
+                    gradient: Some(gradient.clone()),
+                })
+        })
+        .or_else(|| {
+            request
+                .card
+                .name_shadow_color
+                .as_ref()
+                .map(TextPaint::solid)
+        });
+
+    ResolvedPaint {
+        color: paint_color(paint.as_ref(), None, Color::TRANSPARENT),
+        brush: text_brush(paint.as_ref(), None, Color::TRANSPARENT, x, width),
+    }
+}
+
+fn text_brush(
+    paint: Option<&TextPaint>,
+    legacy_color: Option<&str>,
+    fallback: Color,
+    x: f32,
+    width: f32,
+) -> Option<TextBrush> {
+    let Some(paint) = paint else {
+        return legacy_color.and_then(parse_hex_color).map(TextBrush::solid);
+    };
+
+    if let Some(brush) = paint
+        .gradient
+        .as_ref()
+        .and_then(|gradient| gradient_brush(gradient, x, width))
+    {
+        return Some(brush);
+    }
+
+    paint
+        .color
+        .as_deref()
+        .or(legacy_color)
+        .and_then(parse_hex_color)
+        .map(TextBrush::solid)
+        .or_else(|| {
+            if fallback.alpha() > 0.0 {
+                Some(TextBrush::solid(fallback))
+            } else {
+                None
+            }
+        })
+}
+
+fn paint_color(paint: Option<&TextPaint>, legacy_color: Option<&str>, fallback: Color) -> Color {
+    paint
+        .and_then(|paint| paint.color.as_deref())
+        .or(legacy_color)
+        .and_then(parse_hex_color)
+        .or_else(|| {
+            paint.and_then(|paint| {
+                paint
+                    .gradient
+                    .as_ref()
+                    .and_then(|gradient| parse_hex_color(&gradient.start))
+            })
+        })
+        .unwrap_or(fallback)
+}
+
+fn gradient_brush(gradient: &TextGradient, x: f32, width: f32) -> Option<TextBrush> {
+    let start = parse_hex_color(&gradient.start)?;
+    let end = parse_hex_color(&gradient.end)?;
+    Some(TextBrush::horizontal_gradient(start, end, x, width))
+}
+
 /// Parse a CSS-style hex color string (`#rrggbb`, `#rrggbbaa`, `#rgb`).
 /// Returns `None` if the string is not a recognised hex format.
 fn parse_hex_color(s: &str) -> Option<Color> {
-    let hex = s.trim().strip_prefix('#')?;
+    let value = s.trim();
+    if let Some(color) = parse_named_color(value) {
+        return Some(color);
+    }
+
+    let hex = value.strip_prefix('#')?;
     match hex.len() {
         3 => {
             let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
@@ -851,6 +1186,22 @@ fn parse_hex_color(s: &str) -> Option<Color> {
         }
         _ => None,
     }
+}
+
+fn parse_named_color(s: &str) -> Option<Color> {
+    let (r, g, b, a) = match s.to_ascii_lowercase().as_str() {
+        "black" => (0, 0, 0, 255),
+        "white" => (255, 255, 255, 255),
+        "silver" => (192, 192, 192, 255),
+        "gold" => (255, 215, 0, 255),
+        "red" => (255, 0, 0, 255),
+        "blue" => (0, 0, 255, 255),
+        "green" => (0, 128, 0, 255),
+        "purple" => (128, 0, 128, 255),
+        "transparent" => (0, 0, 0, 0),
+        _ => return None,
+    };
+    Some(Color::from_rgba8(r, g, b, a))
 }
 
 fn draw_password(
@@ -877,6 +1228,22 @@ fn draw_password(
             TextAlign::Left,
             language,
             0.0,
+        )
+        .with_brushes(
+            text_brush(
+                request.options.text_colors.password.as_ref(),
+                None,
+                Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                password_x as f32,
+                260.0,
+            ),
+            text_brush(
+                request.options.text_colors.password_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                password_x as f32,
+                260.0,
+            ),
         ),
     );
 
@@ -905,6 +1272,22 @@ fn draw_password(
                 TextAlign::Right,
                 language,
                 0.0,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.copyright.as_ref(),
+                    None,
+                    Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                    (CARD_WIDTH - copyright_right - 320) as f32,
+                    320.0,
+                ),
+                text_brush(
+                    request.options.text_colors.copyright_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    (CARD_WIDTH - copyright_right - 320) as f32,
+                    320.0,
+                ),
             ),
         );
     }
@@ -965,6 +1348,30 @@ fn draw_package(
                 align,
                 language,
                 0.0,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.package.as_ref(),
+                    None,
+                    Color::BLACK,
+                    if matches!(align, TextAlign::Right) {
+                        x - 400.0
+                    } else {
+                        x
+                    },
+                    400.0,
+                ),
+                text_brush(
+                    request.options.text_colors.package_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    if matches!(align, TextAlign::Right) {
+                        x - 400.0
+                    } else {
+                        x
+                    },
+                    400.0,
+                ),
             ),
         );
     }
@@ -996,6 +1403,22 @@ fn draw_copyright_text(
                 TextAlign::Right,
                 language,
                 0.0,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.copyright.as_ref(),
+                    None,
+                    Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                    (CARD_WIDTH - right - 500) as f32,
+                    500.0,
+                ),
+                text_brush(
+                    request.options.text_colors.copyright_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    (CARD_WIDTH - right - 500) as f32,
+                    500.0,
+                ),
             ),
         );
     }

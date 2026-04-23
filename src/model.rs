@@ -75,6 +75,79 @@ pub enum NameColor {
     Custom(String),
 }
 
+/// CSS-style two-stop horizontal gradient for text rendering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextGradient {
+    pub start: String,
+    pub end: String,
+}
+
+impl TextGradient {
+    pub fn new(start: impl Into<String>, end: impl Into<String>) -> Self {
+        Self {
+            start: start.into(),
+            end: end.into(),
+        }
+    }
+}
+
+/// A serializable text paint descriptor accepted by render options.
+///
+/// `color` is used as a solid fallback. When `gradient` is present and both
+/// stops parse successfully, the renderer uses a horizontal gradient over the
+/// target text layout box.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPaint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<TextGradient>,
+}
+
+impl TextPaint {
+    pub fn solid(color: impl Into<String>) -> Self {
+        Self {
+            color: Some(color.into()),
+            gradient: None,
+        }
+    }
+
+    pub fn gradient(start: impl Into<String>, end: impl Into<String>) -> Self {
+        Self {
+            color: None,
+            gradient: Some(TextGradient::new(start, end)),
+        }
+    }
+}
+
+/// Optional color overrides for card text channels.
+///
+/// This mirrors DataEditorY's card-image controls for name fill/shadow while
+/// leaving room for later UI controls on effect, description, stats, and footer
+/// text without changing the render request shape again.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextColorOverrides {
+    pub name: Option<TextPaint>,
+    pub name_shadow: Option<TextPaint>,
+    pub effect: Option<TextPaint>,
+    pub effect_shadow: Option<TextPaint>,
+    pub description: Option<TextPaint>,
+    pub description_shadow: Option<TextPaint>,
+    pub type_line: Option<TextPaint>,
+    pub type_line_shadow: Option<TextPaint>,
+    pub stats: Option<TextPaint>,
+    pub stats_shadow: Option<TextPaint>,
+    pub password: Option<TextPaint>,
+    pub password_shadow: Option<TextPaint>,
+    pub package: Option<TextPaint>,
+    pub package_shadow: Option<TextPaint>,
+    pub copyright: Option<TextPaint>,
+    pub copyright_shadow: Option<TextPaint>,
+}
+
 /// Extended card data: wraps a [`CardDataEntry`] with display metadata that
 /// is not stored in the CDB format.
 ///
@@ -94,6 +167,20 @@ pub struct YgoCardMeta {
     /// Card name color. Defaults to [`NameColor::Auto`].
     #[serde(default)]
     pub name_color: NameColor,
+
+    /// Optional card-name gradient. Kept near `name_color` to align with
+    /// DataEditorY's current card-image form fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_gradient: Option<TextGradient>,
+
+    /// Optional card-name shadow color. `None` means no custom shadow layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_shadow_color: Option<String>,
+
+    /// Optional card-name shadow gradient. Takes precedence over
+    /// `name_shadow_color` when both stops are valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_shadow_gradient: Option<TextGradient>,
 
     /// Card set / package label shown near the bottom of the card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +210,9 @@ impl YgoCardMeta {
             entry,
             rare: None,
             name_color: NameColor::Auto,
+            name_gradient: None,
+            name_shadow_color: None,
+            name_shadow_gradient: None,
             package: None,
             copyright: None,
             laser: None,
@@ -218,6 +308,9 @@ pub struct RenderOptions {
     pub scale: f32,
     /// Override the description text color (CSS-style hex or named color).
     pub description_color_override: Option<String>,
+    /// Color/gradient overrides for text channels.
+    #[serde(default)]
+    pub text_colors: TextColorOverrides,
     #[serde(default)]
     pub title_width_compress: bool,
     #[serde(default)]
@@ -234,6 +327,7 @@ impl Default for RenderOptions {
             art_image: None,
             scale: 1.0,
             description_color_override: None,
+            text_colors: TextColorOverrides::default(),
             title_width_compress: false,
             description_first_line_compress: false,
             layout_overrides: LayoutOverrides::default(),

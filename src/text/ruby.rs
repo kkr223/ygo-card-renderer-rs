@@ -16,10 +16,10 @@ use crate::ruby::{
 };
 
 use super::{
-    draw::{draw_multiline_text, draw_text_shadowed_scaled, DrawMultiline, ShadowedText},
-    measure::{
-        estimate_text_width, max_lines_for_height, total_text_height,
+    draw::{
+        draw_multiline_text, draw_text_shadowed_scaled, DrawMultiline, ShadowedText, TextBrush,
     },
+    measure::{estimate_text_width, max_lines_for_height, total_text_height},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,6 +41,8 @@ pub struct RubyLineParams<'a> {
     pub rt_font_scale_x_override: f32,
     pub color: Color,
     pub shadow_color: Color,
+    pub brush: Option<TextBrush>,
+    pub shadow_brush: Option<TextBrush>,
     pub family: &'a str,
     pub language: Option<&'a str>,
     pub letter_spacing: f32,
@@ -58,6 +60,8 @@ pub struct RubyMultilineParams<'a> {
     pub family: &'a str,
     pub color: Color,
     pub shadow_color: Color,
+    pub brush: Option<TextBrush>,
+    pub shadow_brush: Option<TextBrush>,
     pub language: Option<&'a str>,
     pub base_font_size: u32,
     pub rt_font_size: u32,
@@ -117,8 +121,7 @@ fn compute_rt_strategy(
     if ratio < RT_STRETCH_RATE && rt_char_count > 1 {
         // ② Stretch: distribute extra space as inter-character letter-spacing.
         let max_ls = font_size - rt_font_size / 2.0;
-        let needed =
-            (base_width - rt_natural_width) / (rt_char_count.saturating_sub(1) as f32);
+        let needed = (base_width - rt_natural_width) / (rt_char_count.saturating_sub(1) as f32);
         let ls = needed.min(max_ls).max(0.0);
         (0.0, 0.0, 1.0, ls)
     } else if rt_natural_width > base_width {
@@ -252,6 +255,8 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
                     height: p.font_size * 1.4,
                     base_color: p.color,
                     shadow_color: p.shadow_color,
+                    base_brush: p.brush.clone(),
+                    shadow_brush: p.shadow_brush.clone(),
                     family_name: p.family,
                     letter_spacing: p.letter_spacing,
                     scale_x: p.scale_x,
@@ -287,6 +292,8 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
                         height: p.rt_font_size * 1.4,
                         base_color: p.color,
                         shadow_color: p.shadow_color,
+                        base_brush: p.brush.clone(),
+                        shadow_brush: p.shadow_brush.clone(),
                         family_name: p.family,
                         letter_spacing: slot.rt_letter_spacing,
                         scale_x: combined_scale,
@@ -345,13 +352,8 @@ pub fn wrap_ruby_tokens(
             RubyToken::Plain(ref s) => {
                 for ch in s.chars() {
                     let ch_str = ch.to_string();
-                    let ch_w = estimate_text_width(
-                        &ch_str,
-                        None,
-                        family_name,
-                        font_size,
-                        letter_spacing,
-                    );
+                    let ch_w =
+                        estimate_text_width(&ch_str, None, family_name, font_size, letter_spacing);
                     if !current_line.is_empty() && current_width + ch_w > max_width {
                         result.push(std::mem::take(&mut current_line));
                         current_width = 0.0;
@@ -394,6 +396,8 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 family_name: p.family,
                 color: p.color,
                 shadow_color: p.shadow_color,
+                brush: p.brush.clone(),
+                shadow_brush: p.shadow_brush.clone(),
                 language: p.language,
                 base_font_size: p.base_font_size,
                 line_height: p.line_height,
@@ -475,6 +479,8 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 rt_font_scale_x_override: p.rt_font_scale_x,
                 color: p.color,
                 shadow_color: p.shadow_color,
+                brush: p.brush.clone(),
+                shadow_brush: p.shadow_brush.clone(),
                 family: p.family,
                 language: p.language,
                 letter_spacing: p.letter_spacing,
