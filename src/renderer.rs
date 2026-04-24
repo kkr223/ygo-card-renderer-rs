@@ -14,7 +14,10 @@ use crate::{
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
     layout::{LayoutStyle, layout_style},
-    model::{NameColor, OutFrameEffectBox, RenderError, RenderRequest, TextGradient, TextPaint},
+    model::{
+        NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest,
+        TextGradient, TextPaint,
+    },
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
@@ -59,11 +62,12 @@ impl Renderer {
         draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
         draw_art(bundle, &mut target, request, base)?;
         draw_mask(bundle, &mut target, request, base)?;
+        draw_foreground_image(&mut target, request)?;
+        draw_out_frame_blocks(bundle, &mut target, request, base)?;
+        draw_anniversary_mark(bundle, &mut target, request, base)?;
         draw_attribute(bundle, &mut target, request, base, language)?;
         draw_level_or_rank(bundle, &mut target, request, base)?;
         draw_link_arrows(bundle, &mut target, request, base)?;
-        draw_out_frame_blocks(bundle, &mut target, request, base)?;
-        draw_anniversary_mark(bundle, &mut target, request, base)?;
 
         draw_title(&mut target, request, &style, base, language);
 
@@ -301,12 +305,7 @@ fn draw_art(
             if let Some(art_pixmap) =
                 Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
             {
-                let (art_x, art_y, frame_w, frame_h) = if request.card.out_frame {
-                    let rect = &base.out_frame.image;
-                    (rect.x, rect.y, rect.width, rect.height)
-                } else {
-                    image_frame(&request.card, base)
-                };
+                let (art_x, art_y, frame_w, frame_h) = image_frame(&request.card, base);
                 let scale_x = frame_w as f32 / w as f32;
                 let scale_y = frame_h as f32 / h as f32;
                 // tiny-skia's draw_pixmap transform applies to the source pixmap
@@ -333,10 +332,6 @@ fn draw_mask(
     request: &RenderRequest,
     base: &BaseLayout,
 ) -> Result<(), RenderError> {
-    if request.card.out_frame {
-        return Ok(());
-    }
-
     let mask = if request.card.is_pendulum() {
         &base.mask.pendulum
     } else {
@@ -345,6 +340,38 @@ fn draw_mask(
     bundle
         .draw_image_at(target, &mask.asset, mask.x as f32, mask.y as f32)
         .map_err(RenderError::Backend)
+}
+
+fn draw_foreground_image(target: &mut Pixmap, request: &RenderRequest) -> Result<(), RenderError> {
+    let Some(foreground) = request.options.foreground_image.as_ref() else {
+        return Ok(());
+    };
+
+    draw_positioned_render_image(target, foreground);
+    Ok(())
+}
+
+fn draw_positioned_render_image(target: &mut Pixmap, image: &PositionedRenderImage) {
+    let Ok(img) = image::open(&image.path) else {
+        return;
+    };
+
+    let rgba = img.into_rgba8();
+    let w = rgba.width();
+    let h = rgba.height();
+    let Some(pixmap) = Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
+    else {
+        return;
+    };
+
+    target.draw_pixmap(
+        image.x,
+        image.y,
+        pixmap.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
 }
 
 fn draw_out_frame_blocks(

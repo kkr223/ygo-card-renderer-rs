@@ -159,6 +159,18 @@ pub struct TextColorOverrides {
     pub copyright_shadow: Option<TextPaint>,
 }
 
+/// Additional alpha image composited over the card surface.
+///
+/// The image is drawn at its authored size; callers are responsible for
+/// preparing any scale/rotation externally.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PositionedRenderImage {
+    pub path: PathBuf,
+    pub x: i32,
+    pub y: i32,
+}
+
 /// Extended card data: wraps a [`CardDataEntry`] with display metadata that
 /// is not stored in the CDB format.
 ///
@@ -332,6 +344,8 @@ pub struct LayoutOverrides {
 pub struct RenderOptions {
     pub language: Option<String>,
     pub art_image: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_image: Option<PositionedRenderImage>,
     pub scale: f32,
     /// Override the description text color (CSS-style hex or named color).
     pub description_color_override: Option<String>,
@@ -352,6 +366,7 @@ impl Default for RenderOptions {
         Self {
             language: None,
             art_image: None,
+            foreground_image: None,
             scale: 1.0,
             description_color_override: None,
             text_colors: TextColorOverrides::default(),
