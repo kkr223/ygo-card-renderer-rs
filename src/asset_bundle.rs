@@ -157,6 +157,14 @@ pub struct MaskFrames {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct OutFrameLayout {
+    pub image: FrameRect,
+    pub name_block: PositionedAsset,
+    pub effect_box: PositionedAsset,
+    pub effect_box_colored: PositionedAsset,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct PendulumScaleSide {
     pub astral: Position,
     pub default: Position,
@@ -258,6 +266,7 @@ pub struct BaseLayout {
     pub spell_trap: SpellTrapAssetRule,
     pub image: ImageFrames,
     pub mask: MaskFrames,
+    pub out_frame: OutFrameLayout,
     pub pendulum_scale: PendulumScaleLayout,
     pub pendulum_description: BoxRect,
     pub package: PackageLayout,
@@ -270,6 +279,7 @@ pub struct BaseLayout {
     pub laser: Position,
     pub attribute_rare: PositionedAsset,
     pub twentieth: PositionedAsset,
+    pub twenty_fifth: PositionedAsset,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

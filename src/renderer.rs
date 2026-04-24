@@ -2,7 +2,7 @@ use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
-    asset_bundle::{get_bundle, AssetBundle, BaseLayout},
+    asset_bundle::{AssetBundle, BaseLayout, get_bundle},
     card_logic::{
         attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
         description_height, description_y, display_stat, frame_asset_name, image_frame,
@@ -13,13 +13,13 @@ use crate::{
         BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
-    layout::{layout_style, LayoutStyle},
-    model::{NameColor, RenderError, RenderRequest, TextGradient, TextPaint},
+    layout::{LayoutStyle, layout_style},
+    model::{NameColor, OutFrameEffectBox, RenderError, RenderRequest, TextGradient, TextPaint},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
+        DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
         draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line, draw_text_line_scaled,
         estimate_text_width, fit_ruby_text_scale, fit_single_line, fit_single_line_compressed,
-        DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
     },
 };
 
@@ -62,6 +62,8 @@ impl Renderer {
         draw_attribute(bundle, &mut target, request, base, language)?;
         draw_level_or_rank(bundle, &mut target, request, base)?;
         draw_link_arrows(bundle, &mut target, request, base)?;
+        draw_out_frame_blocks(bundle, &mut target, request, base)?;
+        draw_anniversary_mark(bundle, &mut target, request, base)?;
 
         draw_title(&mut target, request, &style, base, language);
 
@@ -299,7 +301,12 @@ fn draw_art(
             if let Some(art_pixmap) =
                 Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
             {
-                let (art_x, art_y, frame_w, frame_h) = image_frame(&request.card, base);
+                let (art_x, art_y, frame_w, frame_h) = if request.card.out_frame {
+                    let rect = &base.out_frame.image;
+                    (rect.x, rect.y, rect.width, rect.height)
+                } else {
+                    image_frame(&request.card, base)
+                };
                 let scale_x = frame_w as f32 / w as f32;
                 let scale_y = frame_h as f32 / h as f32;
                 // tiny-skia's draw_pixmap transform applies to the source pixmap
@@ -326,6 +333,10 @@ fn draw_mask(
     request: &RenderRequest,
     base: &BaseLayout,
 ) -> Result<(), RenderError> {
+    if request.card.out_frame {
+        return Ok(());
+    }
+
     let mask = if request.card.is_pendulum() {
         &base.mask.pendulum
     } else {
@@ -334,6 +345,65 @@ fn draw_mask(
     bundle
         .draw_image_at(target, &mask.asset, mask.x as f32, mask.y as f32)
         .map_err(RenderError::Backend)
+}
+
+fn draw_out_frame_blocks(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    if !request.card.out_frame {
+        return Ok(());
+    }
+
+    let name_block = &base.out_frame.name_block;
+    bundle
+        .draw_image_at(
+            target,
+            &name_block.asset,
+            name_block.x as f32,
+            name_block.y as f32,
+        )
+        .map_err(RenderError::Backend)?;
+
+    let effect_box = match request.card.out_frame_effect_box {
+        OutFrameEffectBox::Original => &base.out_frame.effect_box,
+        OutFrameEffectBox::Colored => &base.out_frame.effect_box_colored,
+    };
+    bundle
+        .draw_image_at(
+            target,
+            &effect_box.asset,
+            effect_box.x as f32,
+            effect_box.y as f32,
+        )
+        .map_err(RenderError::Backend)?;
+
+    Ok(())
+}
+
+fn draw_anniversary_mark(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    let mark = if request.card.twenty_fifth {
+        Some(&base.twenty_fifth)
+    } else if request.card.twentieth {
+        Some(&base.twentieth)
+    } else {
+        None
+    };
+
+    if let Some(mark) = mark {
+        bundle
+            .draw_image_at(target, &mark.asset, mark.x as f32, mark.y as f32)
+            .map_err(RenderError::Backend)?;
+    }
+
+    Ok(())
 }
 
 fn draw_attribute(

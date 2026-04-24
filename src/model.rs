@@ -36,6 +36,17 @@ pub enum RareType {
     Dt,
 }
 
+/// Effect text box used by out-frame cards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutFrameEffectBox {
+    /// Original out-frame effect box.
+    #[default]
+    Original,
+    /// Alternate-color out-frame effect box (`eblock-border-o.webp`).
+    Colored,
+}
+
 impl RareType {
     /// Asset filename stem, e.g. `"hr"` or `"pser-print"`.
     pub fn asset_stem(self) -> &'static str {
@@ -198,6 +209,19 @@ pub struct YgoCardMeta {
     #[serde(default)]
     pub twentieth: bool,
 
+    /// Show the 25th anniversary mark overlay.
+    #[serde(default)]
+    pub twenty_fifth: bool,
+
+    /// Render as an out-frame card, allowing transparent art to extend beyond
+    /// the normal illustration mask.
+    #[serde(default)]
+    pub out_frame: bool,
+
+    /// Which out-frame effect box resource to draw.
+    #[serde(default)]
+    pub out_frame_effect_box: OutFrameEffectBox,
+
     /// Output image scale. `None` falls back to [`RenderOptions::scale`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
@@ -217,6 +241,9 @@ impl YgoCardMeta {
             copyright: None,
             laser: None,
             twentieth: false,
+            twenty_fifth: false,
+            out_frame: false,
+            out_frame_effect_box: OutFrameEffectBox::default(),
             scale: None,
         }
     }
