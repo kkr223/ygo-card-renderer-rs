@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    model::{LayoutOverrides, YgoCardMeta},
+    model::{LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, YgoCardMeta},
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
@@ -89,6 +89,63 @@ fn find_art(card_code: u32) -> Option<PathBuf> {
     None
 }
 
+fn foreground_image_from_env() -> Option<PositionedRenderImage> {
+    Some(PositionedRenderImage {
+        path: PathBuf::from(env_opt_string("YGO_FOREGROUND_IMAGE")?),
+        x: env_opt_i32("YGO_FOREGROUND_X").unwrap_or(0),
+        y: env_opt_i32("YGO_FOREGROUND_Y").unwrap_or(0),
+    })
+}
+
+fn out_frame_image_from_env() -> Option<PositionedRenderImage> {
+    Some(PositionedRenderImage {
+        path: PathBuf::from(env_opt_string("YGO_OUT_FRAME_IMAGE")?),
+        x: env_opt_i32("YGO_OUT_FRAME_X").unwrap_or(0),
+        y: env_opt_i32("YGO_OUT_FRAME_Y").unwrap_or(0),
+    })
+}
+
+fn env_opt_out_frame_effect_box(key: &str) -> Option<OutFrameEffectBox> {
+    let value = env_opt_string(key)?.to_ascii_lowercase();
+    match value.as_str() {
+        "eblock-border" | "original" | "origin" | "normal" => Some(OutFrameEffectBox::EblockBorder),
+        "eblock-border-o" | "colored" | "colour" | "color" | "o" => {
+            Some(OutFrameEffectBox::EblockBorderO)
+        }
+        _ => panic!(
+            "{key} must be eblock-border or eblock-border-o, got {:?}",
+            value
+        ),
+    }
+}
+
+fn apply_out_frame_env(card_meta: &mut YgoCardMeta) {
+    let out_frame_image = out_frame_image_from_env();
+    if let Some(enabled) = env_opt_bool("YGO_OUT_FRAME") {
+        card_meta.out_frame = enabled;
+    } else if out_frame_image.is_some() {
+        card_meta.out_frame = true;
+    }
+
+    card_meta.out_frame_image = out_frame_image;
+
+    if let Some(enabled) = env_opt_bool("YGO_OUT_FRAME_EFFECT_ENABLED") {
+        card_meta.out_frame_effect_enabled = enabled;
+    }
+    if let Some(effect_box) = env_opt_out_frame_effect_box("YGO_OUT_FRAME_EFFECT_BOX") {
+        card_meta.out_frame_effect_box = effect_box;
+    }
+    if let Some(color) = env_opt_string("YGO_OUT_FRAME_EFFECT_BACKGROUND_COLOR") {
+        card_meta.out_frame_effect_background_color = Some(color);
+    }
+    if let Some(opacity) = env_opt_f32("YGO_OUT_FRAME_EFFECT_OPACITY") {
+        card_meta.out_frame_effect_opacity = Some(opacity);
+    }
+    if let Some(enabled) = env_opt_bool("YGO_OUT_FRAME_NAME_BLOCK_ENABLED") {
+        card_meta.out_frame_name_block_enabled = enabled;
+    }
+}
+
 fn layout_overrides_from_env() -> LayoutOverrides {
     LayoutOverrides {
         name_top: env_opt_u32("YGO_NAME_TOP"),
@@ -158,6 +215,86 @@ fn pick_tuning_card(
         .cloned()
         .or_else(|| cards.first().cloned())
         .expect("selected cdb did not contain any cards")
+}
+
+/// 单卡绘制测试。
+///
+/// 运行方式：
+/// `cargo test render_single_card_from_cdb -- --nocapture`
+///
+/// 常用环境变量：
+/// `$env:YGO_RENDER_CARD_CODE="41546"`
+/// `$env:YGO_RENDER_CARD_NAME="托马斯"`
+/// `$env:YGO_RENDER_LABEL="out-frame"`
+/// `$env:YGO_ART_IMAGE="D:\path\art.png"`
+/// `$env:YGO_OUT_FRAME="true"`
+/// `$env:YGO_OUT_FRAME_IMAGE="D:\path\foreground.png"`
+/// `$env:YGO_OUT_FRAME_X="0"`
+/// `$env:YGO_OUT_FRAME_Y="0"`
+/// `$env:YGO_OUT_FRAME_EFFECT_ENABLED="true"`
+/// `$env:YGO_OUT_FRAME_EFFECT_BOX="eblock-border-o"`
+/// `$env:YGO_OUT_FRAME_EFFECT_BACKGROUND_COLOR="#ffffff"`
+/// `$env:YGO_OUT_FRAME_EFFECT_OPACITY="0.75"`
+/// `$env:YGO_OUT_FRAME_NAME_BLOCK_ENABLED="true"`
+#[test]
+fn render_single_card_from_cdb() {
+    init_bundle();
+
+    let Some(cdb_path) = test_cdb_path() else {
+        eprintln!("Skipping single-card render test: no CDB exists in repo root");
+        return;
+    };
+
+    let cdb = YgoProCdb::from_path(&cdb_path).expect("open cdb");
+    let mut cards = cdb.find_all().expect("read all cards from cdb");
+    cards.sort_by_key(|card| card.code);
+
+    let card = pick_tuning_card(&cards);
+    let label = env_string("YGO_RENDER_LABEL", "single");
+    let language = env_string("YGO_LANGUAGE", "sc");
+    let art_image = env_opt_string("YGO_ART_IMAGE")
+        .map(PathBuf::from)
+        .or_else(|| find_art(card.code));
+    let foreground_image = foreground_image_from_env();
+    let mut card_meta: YgoCardMeta = card.clone().into();
+    apply_out_frame_env(&mut card_meta);
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card: card_meta,
+        options: RenderOptions {
+            language: Some(language.clone()),
+            scale: 1.0,
+            art_image,
+            foreground_image,
+            ..RenderOptions::default()
+        },
+    };
+
+    let renderer = Renderer::new();
+    let png = renderer.render_png(&request).expect("render png");
+
+    let out_dir = artifact_dir();
+    let png_path = out_dir.join(format!(
+        "single-{}-{}-{}.png",
+        card.code,
+        sanitize_name(&card.name),
+        sanitize_name(&label)
+    ));
+    fs::write(&png_path, &png).expect("write png");
+
+    println!("Selected CDB: {:?}", cdb_path);
+    println!("Selected card: [{}] {}", card.code, card.name);
+    println!("language={language}, label={label}");
+    println!(
+        "Rendered single-card image to {:?} ({} bytes)",
+        png_path,
+        png.len()
+    );
+    assert!(
+        !png.is_empty(),
+        "single-card render should produce png bytes"
+    );
 }
 
 /// 从 CDB 中读取几张经典卡，覆盖各种类型。
@@ -242,6 +379,7 @@ fn render_single_card_for_tuning() {
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(1.0);
     let art_image = env_opt_string("YGO_ART_IMAGE").map(PathBuf::from);
+    let foreground_image = foreground_image_from_env();
     let layout_overrides = layout_overrides_from_env();
     let title_width_compress = env_opt_bool("YGO_TITLE_WIDTH_COMPRESS").unwrap_or(false);
     let description_first_line_compress =
@@ -258,6 +396,7 @@ fn render_single_card_for_tuning() {
     println!("layout_overrides={layout_overrides:#?}");
 
     let mut card_meta: YgoCardMeta = card.clone().into();
+    apply_out_frame_env(&mut card_meta);
     if copyright_text.is_some() {
         card_meta.copyright = copyright_text;
     }
@@ -273,6 +412,7 @@ fn render_single_card_for_tuning() {
             language: Some(language.clone()),
             scale: 1.0,
             art_image,
+            foreground_image,
             title_width_compress,
             description_first_line_compress,
             layout_overrides,

@@ -1,4 +1,4 @@
-use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
+use tiny_skia::{Color, Paint, Pixmap, PixmapPaint, Rect, Transform};
 use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
@@ -298,29 +298,23 @@ fn draw_art(
     base: &BaseLayout,
 ) -> Result<(), RenderError> {
     if let Some(art_path) = &request.options.art_image {
-        if let Ok(img) = image::open(art_path) {
-            let rgba = img.into_rgba8();
-            let w = rgba.width();
-            let h = rgba.height();
-            if let Some(art_pixmap) =
-                Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
-            {
-                let (art_x, art_y, frame_w, frame_h) = image_frame(&request.card, base);
-                let scale_x = frame_w as f32 / w as f32;
-                let scale_y = frame_h as f32 / h as f32;
-                // tiny-skia's draw_pixmap transform applies to the source pixmap
-                // in destination space. Pass x=0/y=0 and encode the full
-                // translate+scale in the transform so they don't double-apply.
-                target.draw_pixmap(
-                    0,
-                    0,
-                    art_pixmap.as_ref(),
-                    &PixmapPaint::default(),
-                    Transform::from_scale(scale_x, scale_y)
-                        .post_translate(art_x as f32, art_y as f32),
-                    None,
-                );
-            }
+        if let Some(art_pixmap) = load_external_pixmap(art_path) {
+            let w = art_pixmap.width();
+            let h = art_pixmap.height();
+            let (art_x, art_y, frame_w, frame_h) = image_frame(&request.card, base);
+            let scale_x = frame_w as f32 / w as f32;
+            let scale_y = frame_h as f32 / h as f32;
+            // tiny-skia's draw_pixmap transform applies to the source pixmap
+            // in destination space. Pass x=0/y=0 and encode the full
+            // translate+scale in the transform so they don't double-apply.
+            target.draw_pixmap(
+                0,
+                0,
+                art_pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::from_scale(scale_x, scale_y).post_translate(art_x as f32, art_y as f32),
+                None,
+            );
         }
     }
     Ok(())
@@ -343,7 +337,17 @@ fn draw_mask(
 }
 
 fn draw_foreground_image(target: &mut Pixmap, request: &RenderRequest) -> Result<(), RenderError> {
-    let Some(foreground) = request.options.foreground_image.as_ref() else {
+    let foreground = if request.card.out_frame {
+        request
+            .card
+            .out_frame_image
+            .as_ref()
+            .or(request.options.foreground_image.as_ref())
+    } else {
+        request.options.foreground_image.as_ref()
+    };
+
+    let Some(foreground) = foreground else {
         return Ok(());
     };
 
@@ -352,15 +356,7 @@ fn draw_foreground_image(target: &mut Pixmap, request: &RenderRequest) -> Result
 }
 
 fn draw_positioned_render_image(target: &mut Pixmap, image: &PositionedRenderImage) {
-    let Ok(img) = image::open(&image.path) else {
-        return;
-    };
-
-    let rgba = img.into_rgba8();
-    let w = rgba.width();
-    let h = rgba.height();
-    let Some(pixmap) = Pixmap::from_vec(rgba.into_raw(), tiny_skia::IntSize::from_wh(w, h).unwrap())
-    else {
+    let Some(pixmap) = load_external_pixmap(&image.path) else {
         return;
     };
 
@@ -374,6 +370,38 @@ fn draw_positioned_render_image(target: &mut Pixmap, image: &PositionedRenderIma
     );
 }
 
+fn load_external_pixmap(path: &std::path::Path) -> Option<Pixmap> {
+    let img = image::open(path).ok()?;
+    let rgba = img.into_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    let mut pixmap = Pixmap::from_vec(
+        rgba.into_raw(),
+        tiny_skia::IntSize::from_wh(width, height).unwrap(),
+    )?;
+    premultiply_pixmap_alpha(&mut pixmap);
+    Some(pixmap)
+}
+
+fn premultiply_pixmap_alpha(pixmap: &mut Pixmap) {
+    for pixel in pixmap.pixels_mut() {
+        let a = pixel.alpha();
+        if a == 255 {
+            continue;
+        }
+        if a == 0 {
+            *pixel = tiny_skia::PremultipliedColorU8::TRANSPARENT;
+            continue;
+        }
+
+        let r = (pixel.red() as u16 * a as u16 / 255) as u8;
+        let g = (pixel.green() as u16 * a as u16 / 255) as u8;
+        let b = (pixel.blue() as u16 * a as u16 / 255) as u8;
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
+            .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
 fn draw_out_frame_blocks(
     bundle: &AssetBundle,
     target: &mut Pixmap,
@@ -384,30 +412,95 @@ fn draw_out_frame_blocks(
         return Ok(());
     }
 
-    let name_block = &base.out_frame.name_block;
-    bundle
-        .draw_image_at(
-            target,
-            &name_block.asset,
-            name_block.x as f32,
-            name_block.y as f32,
-        )
-        .map_err(RenderError::Backend)?;
+    if request.card.out_frame_name_block_enabled {
+        let name_block = &base.out_frame.name_block;
+        bundle
+            .draw_image_at(
+                target,
+                &name_block.asset,
+                name_block.x as f32,
+                name_block.y as f32,
+            )
+            .map_err(RenderError::Backend)?;
+    }
 
     let effect_box = match request.card.out_frame_effect_box {
-        OutFrameEffectBox::Original => &base.out_frame.effect_box,
-        OutFrameEffectBox::Colored => &base.out_frame.effect_box_colored,
+        OutFrameEffectBox::EblockBorder => &base.out_frame.effect_box,
+        OutFrameEffectBox::EblockBorderO => &base.out_frame.effect_box_colored,
     };
-    bundle
-        .draw_image_at(
-            target,
-            &effect_box.asset,
-            effect_box.x as f32,
-            effect_box.y as f32,
-        )
-        .map_err(RenderError::Backend)?;
+
+    if request.card.out_frame_effect_enabled {
+        draw_out_frame_effect_background(bundle, target, request, effect_box);
+        bundle
+            .draw_image_at(
+                target,
+                &effect_box.asset,
+                effect_box.x as f32,
+                effect_box.y as f32,
+            )
+            .map_err(RenderError::Backend)?;
+    }
 
     Ok(())
+}
+
+fn draw_out_frame_effect_background(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    effect_box: &crate::asset_bundle::PositionedAsset,
+) {
+    let Some(color) = request
+        .card
+        .out_frame_effect_background_color
+        .as_deref()
+        .and_then(parse_hex_color)
+    else {
+        return;
+    };
+
+    let opacity = request
+        .card
+        .out_frame_effect_opacity
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return;
+    }
+
+    let Some((width, height)) = image_dimensions(bundle, &effect_box.asset) else {
+        return;
+    };
+
+    let Some(color) = Color::from_rgba(
+        color.red(),
+        color.green(),
+        color.blue(),
+        color.alpha() * opacity,
+    ) else {
+        return;
+    };
+    let Some(rect) = Rect::from_xywh(
+        effect_box.x as f32,
+        effect_box.y as f32,
+        width as f32,
+        height as f32,
+    ) else {
+        return;
+    };
+
+    let mut paint = Paint::default();
+    paint.set_color(color);
+    target.fill_rect(rect, &paint, Transform::identity(), None);
+}
+
+fn image_dimensions(bundle: &AssetBundle, asset: &str) -> Option<(u32, u32)> {
+    let image = bundle.image(asset).ok()?;
+    if let Some(size) = &image.size {
+        Some((size.w, size.h))
+    } else {
+        image.atlas.as_ref().map(|sprite| (sprite.w, sprite.h))
+    }
 }
 
 fn draw_anniversary_mark(
@@ -1564,7 +1657,7 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 
 #[cfg(test)]
 mod tests {
-    use super::{laser_asset_name, scale_pixmap};
+    use super::{laser_asset_name, premultiply_pixmap_alpha, scale_pixmap};
 
     #[test]
     fn builds_laser_asset_names() {
@@ -1583,5 +1676,28 @@ mod tests {
 
         assert_eq!(scaled.width(), 5);
         assert_eq!(scaled.height(), 10);
+    }
+
+    #[test]
+    fn premultiplies_external_image_alpha() {
+        let mut pixmap = tiny_skia::Pixmap::from_vec(
+            vec![255, 255, 255, 0, 200, 100, 50, 128],
+            tiny_skia::IntSize::from_wh(2, 1).unwrap(),
+        )
+        .expect("pixmap");
+
+        premultiply_pixmap_alpha(&mut pixmap);
+
+        let transparent = pixmap.pixel(0, 0).expect("transparent pixel");
+        assert_eq!(transparent.alpha(), 0);
+        assert_eq!(transparent.red(), 0);
+        assert_eq!(transparent.green(), 0);
+        assert_eq!(transparent.blue(), 0);
+
+        let partial = pixmap.pixel(1, 0).expect("partial pixel");
+        assert_eq!(partial.alpha(), 128);
+        assert_eq!(partial.red(), 100);
+        assert_eq!(partial.green(), 50);
+        assert_eq!(partial.blue(), 25);
     }
 }

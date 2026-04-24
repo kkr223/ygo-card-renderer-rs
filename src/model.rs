@@ -40,11 +40,13 @@ pub enum RareType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutFrameEffectBox {
-    /// Original out-frame effect box.
+    /// Original out-frame effect box (`eblock-border.webp`).
     #[default]
-    Original,
+    #[serde(alias = "original")]
+    EblockBorder,
     /// Alternate-color out-frame effect box (`eblock-border-o.webp`).
-    Colored,
+    #[serde(alias = "colored")]
+    EblockBorderO,
 }
 
 impl RareType {
@@ -171,6 +173,10 @@ pub struct PositionedRenderImage {
     pub y: i32,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Extended card data: wraps a [`CardDataEntry`] with display metadata that
 /// is not stored in the CDB format.
 ///
@@ -230,9 +236,29 @@ pub struct YgoCardMeta {
     #[serde(default)]
     pub out_frame: bool,
 
+    /// Out-frame alpha image drawn at its authored size and position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_frame_image: Option<PositionedRenderImage>,
+
+    /// Whether the out-frame effect box area should be drawn.
+    #[serde(default = "default_true")]
+    pub out_frame_effect_enabled: bool,
+
     /// Which out-frame effect box resource to draw.
     #[serde(default)]
     pub out_frame_effect_box: OutFrameEffectBox,
+
+    /// Optional solid color under the out-frame effect box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_frame_effect_background_color: Option<String>,
+
+    /// Opacity multiplier for the out-frame effect background color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_frame_effect_opacity: Option<f32>,
+
+    /// Whether the out-frame card name block should be drawn.
+    #[serde(default = "default_true")]
+    pub out_frame_name_block_enabled: bool,
 
     /// Output image scale. `None` falls back to [`RenderOptions::scale`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,7 +281,12 @@ impl YgoCardMeta {
             twentieth: false,
             twenty_fifth: false,
             out_frame: false,
+            out_frame_image: None,
+            out_frame_effect_enabled: true,
             out_frame_effect_box: OutFrameEffectBox::default(),
+            out_frame_effect_background_color: None,
+            out_frame_effect_opacity: None,
+            out_frame_name_block_enabled: true,
             scale: None,
         }
     }
