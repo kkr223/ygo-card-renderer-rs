@@ -3,6 +3,7 @@ use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout, get_bundle},
+    rare_effect::draw_rare_effect,
     card_logic::{
         attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
         description_height, description_y, display_stat, frame_asset_name, image_frame,
@@ -62,6 +63,9 @@ impl Renderer {
         draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
         draw_art(bundle, &mut target, request, base)?;
         draw_mask(bundle, &mut target, request, base)?;
+        if let Some(rare) = request.card.rare {
+            draw_rare_effect(&mut target, rare, &request.card, base);
+        }
         draw_foreground_image(&mut target, request)?;
         draw_out_frame_blocks(bundle, &mut target, request, base)?;
         draw_anniversary_mark(bundle, &mut target, request, base)?;

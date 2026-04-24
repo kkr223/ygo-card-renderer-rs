@@ -3,6 +3,7 @@ mod card_logic;
 mod constants;
 mod layout;
 pub mod model;
+pub mod rare_effect;
 pub mod renderer;
 pub mod ruby;
 pub mod text;

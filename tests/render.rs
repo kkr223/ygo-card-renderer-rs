@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    model::{LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, YgoCardMeta},
+    model::{LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, YgoCardMeta},
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
@@ -295,6 +295,78 @@ fn render_single_card_from_cdb() {
         !png.is_empty(),
         "single-card render should produce png bytes"
     );
+}
+
+/// 罕贵度特效视觉预览测试。
+///
+/// 对同一张卡片依次应用每种 RareType，各输出一张 PNG 到 `export/rare-<variant>-*.png`。
+/// 不依赖 CDB，直接手写卡片元数据。
+///
+/// 运行方式：
+/// `cargo test render_rare_effects -- --nocapture`
+///
+/// 可配合 `$env:YGO_ART_DIR` 使用中间图；不设置则渲染空白图框。
+#[test]
+fn render_rare_effects() {
+    init_bundle();
+
+    use ygopro_cdb_encode_rs::CardDataEntry;
+
+    // 普通效果怪兽：黑魔术师（code=46986414）作为示例基底
+    let base_entry = CardDataEntry {
+        code: 46986414,
+        name: "ブラック・マジシャン".to_string(),
+        desc: "このカードは決闘者の魂、「ブラック・マジシャン」である。".to_string(),
+        type_: 0x41,
+        attack: 2500,
+        defense: 2100,
+        level: 7,
+        race: 0x1,
+        attribute: 0x10,
+        ..CardDataEntry::default()
+    };
+
+    let rare_variants: &[(&str, RareType)] = &[
+        ("hr",   RareType::Hr),
+        ("ser",  RareType::Ser),
+        ("gser", RareType::Gser),
+        ("pser", RareType::Pser),
+        ("pser-print", RareType::PserPrint),
+    ];
+
+    let renderer = Renderer::new();
+    let out_dir = artifact_dir();
+    let art_image = find_art(base_entry.code);
+
+    for (label, rare) in rare_variants {
+        let mut card_meta: YgoCardMeta = base_entry.clone().into();
+        card_meta.rare = Some(*rare);
+
+        let request = RenderRequest {
+            kind: CardKind::Yugioh,
+            card: card_meta,
+            options: RenderOptions {
+                language: Some("sc".to_string()),
+                scale: 1.0,
+                art_image: art_image.clone(),
+                ..RenderOptions::default()
+            },
+        };
+
+        let png = renderer.render_png(&request)
+            .unwrap_or_else(|e| panic!("render failed for {label}: {e:?}"));
+
+        let png_path = out_dir.join(format!(
+            "rare-{label}-{}.png",
+            base_entry.code
+        ));
+        fs::write(&png_path, &png).expect("write png");
+        println!("[{label}] → {:?} ({} bytes)", png_path, png.len());
+
+        assert!(!png.is_empty(), "render_rare_effects: {label} produced empty output");
+    }
+
+    println!("All rare effect renders written to {:?}", out_dir);
 }
 
 /// 从 CDB 中读取几张经典卡，覆盖各种类型。
