@@ -5,7 +5,11 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderDocument, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    model::{LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, YgoCardMeta},
+    document::{ImageFit, RenderOp},
+    model::{
+        LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, TextAlignChoice,
+        YgoCardMeta,
+    },
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
@@ -191,6 +195,123 @@ fn render_document_roundtrips_and_renders() {
         .render_document(&document)
         .expect("render document after external-style edit");
     assert!(!png.is_empty());
+}
+
+#[test]
+fn render_document_allows_external_display_edits() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 46986414,
+        name: "Dark Magician".to_string(),
+        desc: "The ultimate wizard in terms of attack and defense.".to_string(),
+        type_: 0x4000021,
+        attack: 2500,
+        defense: 2100,
+        level: 3,
+        race: 0x2,
+        attribute: 0x20,
+        link_marker: 0x80 | 0x20,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+    let mut card: YgoCardMeta = entry.into();
+    card.copyright = Some("en".to_string());
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions {
+            language: Some("en".to_string()),
+            ..RenderOptions::default()
+        },
+    };
+
+    let mut document = Renderer::new().build_document(&request);
+
+    let art = document.nodes.iter().find(|node| node.id == "art").unwrap();
+    assert!(matches!(
+        art.op,
+        RenderOp::ExternalImage {
+            fit: ImageFit::Cover,
+            ..
+        }
+    ));
+
+    let title = document
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "title")
+        .unwrap();
+    if let RenderOp::Title {
+        font_family, align, ..
+    } = &mut title.op
+    {
+        *font_family = "'custom1'".to_string();
+        *align = TextAlignChoice::Center;
+    } else {
+        panic!("expected title node");
+    }
+    assert!(matches!(
+        &title.op,
+        RenderOp::Title { font_family, align, .. }
+            if font_family.contains("custom1")
+                && *align == TextAlignChoice::Center
+    ));
+
+    let type_line = document
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "monster-type-line")
+        .unwrap();
+    if let RenderOp::MonsterTypeLine { text, .. } = &mut type_line.op {
+        *text = "[Wizard/Custom]".to_string();
+    } else {
+        panic!("expected monster type node");
+    }
+    assert!(matches!(
+        &type_line.op,
+        RenderOp::MonsterTypeLine { text, .. } if text == "[Wizard/Custom]"
+    ));
+
+    let password = document
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "password")
+        .unwrap();
+    if let RenderOp::Password { text, .. } = &mut password.op {
+        *text = "CUSTOM-ID".to_string();
+    } else {
+        panic!("expected password node");
+    }
+    assert!(matches!(
+        &password.op,
+        RenderOp::Password { text, .. } if text == "CUSTOM-ID"
+    ));
+
+    let arrows = document
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "link-arrows")
+        .unwrap();
+    if let RenderOp::LinkArrows { arrows } = &mut arrows.op {
+        *arrows = vec![1, 3, 5];
+    } else {
+        panic!("expected link arrows node");
+    }
+    assert!(matches!(
+        &arrows.op,
+        RenderOp::LinkArrows { arrows } if arrows == &vec![1, 3, 5]
+    ));
+
+    let copyright = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "copyright")
+        .unwrap();
+    assert!(matches!(
+        &copyright.op,
+        RenderOp::Copyright { asset: Some(asset), .. } if asset == "copyright-en-black.svg"
+    ));
 }
 
 fn layout_overrides_from_env() -> LayoutOverrides {

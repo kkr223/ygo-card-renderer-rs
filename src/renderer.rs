@@ -17,7 +17,7 @@ use crate::{
     layout::{LayoutStyle, layout_style},
     model::{
         NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest,
-        TextGradient, TextPaint,
+        TextAlignChoice, TextGradient, TextPaint,
     },
     rare_effect::draw_rare_effect,
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
@@ -66,6 +66,15 @@ impl Renderer {
             &bundle.layout,
             &request.options.layout_overrides,
         );
+        let document_link_arrow_count = document.nodes.iter().find_map(|node| {
+            if !node.visible {
+                return None;
+            }
+            match &node.op {
+                RenderOp::LinkArrows { arrows } => Some(arrows.len().max(1) as u32),
+                _ => None,
+            }
+        });
 
         let mut target = Pixmap::new(document.canvas.width, document.canvas.height)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
@@ -125,11 +134,32 @@ impl Renderer {
                 RenderOp::LevelOrRank => {
                     draw_level_or_rank(bundle, &mut target, &request, base)?;
                 }
-                RenderOp::LinkArrows => {
-                    draw_link_arrows(bundle, &mut target, &request, base)?;
+                RenderOp::LinkArrows { arrows } => {
+                    draw_document_link_arrows(bundle, &mut target, arrows, base)?;
                 }
-                RenderOp::Title { .. } => {
-                    draw_title(&mut target, &request, &style, base, language);
+                RenderOp::Title {
+                    text,
+                    rect,
+                    font_family,
+                    font_size,
+                    letter_spacing,
+                    color,
+                    width_compress,
+                    align,
+                } => {
+                    draw_document_title(
+                        &mut target,
+                        &request,
+                        language,
+                        text,
+                        rect,
+                        font_family,
+                        *font_size,
+                        *letter_spacing,
+                        color,
+                        *width_compress,
+                        *align,
+                    );
                 }
                 RenderOp::SpellTrapLine { .. } => {
                     draw_spell_trap_line(bundle, &mut target, &request, &style, base, language)?;
@@ -161,20 +191,30 @@ impl Renderer {
                     );
                 }
                 RenderOp::Stats => {
+                    let mut request = request.clone();
+                    if request.card.is_link() {
+                        if let Some(count) = document_link_arrow_count {
+                            request.card.level = count;
+                        }
+                    }
                     draw_stats(bundle, &mut target, &request, &style, base, language);
                 }
-                RenderOp::Password { .. } => {
-                    draw_password(&mut target, &request, &style, base, language);
+                RenderOp::Password { text, x, y } => {
+                    draw_document_password(&mut target, &request, &style, language, text, *x, *y);
                 }
                 RenderOp::Package { text } => {
                     let mut request = request.clone();
                     request.card.package = Some(text.clone());
                     draw_package(&mut target, &request, &style, base, language);
                 }
-                RenderOp::Copyright { text } => {
-                    let mut request = request.clone();
-                    request.card.copyright = Some(text.clone());
-                    draw_copyright_text(&mut target, &request, &style, base, language);
+                RenderOp::Copyright { value, asset } => {
+                    if let Some(asset) = asset {
+                        draw_copyright_asset(bundle, &mut target, asset, base)?;
+                    } else {
+                        let mut request = request.clone();
+                        request.card.copyright = Some(value.clone());
+                        draw_copyright_text(&mut target, &request, &style, base, language);
+                    }
                 }
             }
         }
@@ -282,7 +322,7 @@ impl Renderer {
 
         let description_text;
         if request.card.is_pendulum() {
-            let sections = split_pendulum_description(&request.card.desc);
+            let sections = split_pendulum_description(&request.card.desc, language);
             if let Some(pendulum_effect) = sections.pendulum_effect.as_deref() {
                 draw_pendulum_description(
                     &mut target,
@@ -392,6 +432,12 @@ fn draw_external_image(
         return;
     }
 
+    let target_w = rect.width.round().max(1.0) as u32;
+    let target_h = rect.height.round().max(1.0) as u32;
+    let Some(mut clipped) = Pixmap::new(target_w, target_h) else {
+        return;
+    };
+
     let (scale_x, scale_y) = match fit {
         ImageFit::Stretch => (rect.width / source_w, rect.height / source_h),
         ImageFit::Cover => {
@@ -406,19 +452,150 @@ fn draw_external_image(
 
     let drawn_w = source_w * scale_x;
     let drawn_h = source_h * scale_y;
-    let dx = rect.x + (rect.width - drawn_w) / 2.0;
+    let dx = (rect.width - drawn_w) / 2.0;
     let dy = match align {
-        ImageAlign::Top => rect.y,
-        ImageAlign::Center => rect.y + (rect.height - drawn_h) / 2.0,
+        ImageAlign::Top => 0.0,
+        ImageAlign::Center => (rect.height - drawn_h) / 2.0,
     };
 
-    target.draw_pixmap(
+    clipped.draw_pixmap(
         0,
         0,
         pixmap.as_ref(),
         &PixmapPaint::default(),
         Transform::from_scale(scale_x, scale_y).post_translate(dx, dy),
         None,
+    );
+
+    target.draw_pixmap(
+        rect.x.round() as i32,
+        rect.y.round() as i32,
+        clipped.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_document_title(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    language: Option<&str>,
+    text: &str,
+    rect: &RenderRect,
+    font_family: &str,
+    font_size: u32,
+    letter_spacing: f32,
+    color: &NameColor,
+    width_compress: bool,
+    align: TextAlignChoice,
+) {
+    let name_color = resolve_name_color(color, &request.card);
+    let name_brush = resolve_name_brush(request, name_color, rect.x, rect.width);
+    let name_shadow = resolve_name_shadow_brush(request, rect.x, rect.width);
+
+    if contains_ruby_markup(text) {
+        let tokens = parse_ruby_text(text);
+        let rt_font_size = if language == Some("jp") { 30.0 } else { 0.0 };
+        if rt_font_size > 0.0 {
+            let scale_x = fit_ruby_text_scale(
+                &tokens,
+                font_family,
+                font_size as f32,
+                rt_font_size,
+                letter_spacing,
+                1.0,
+                rect.width,
+            )
+            .max(0.3);
+            draw_ruby_text_line(
+                target,
+                RubyLineParams {
+                    tokens: &tokens,
+                    x: rect.x,
+                    y: rect.y,
+                    font_size: font_size as f32,
+                    rt_font_size,
+                    rt_top: -18.0,
+                    rt_font_scale_x_override: 1.0,
+                    color: name_brush.color,
+                    shadow_color: Color::TRANSPARENT,
+                    brush: name_brush.brush,
+                    shadow_brush: None,
+                    family: font_family,
+                    language,
+                    letter_spacing,
+                    scale_x,
+                },
+            );
+            return;
+        }
+    }
+
+    let title_layout = if width_compress {
+        fit_single_line_compressed(
+            text,
+            language,
+            font_size,
+            font_family,
+            rect.width.round() as u32,
+            letter_spacing,
+            0.3,
+        )
+    } else {
+        fit_single_line(
+            text,
+            language,
+            font_size,
+            font_family,
+            rect.width.round() as u32,
+            letter_spacing,
+            font_size.saturating_sub(26),
+        )
+    };
+
+    let align = text_align_choice(align);
+    if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
+        draw_text_line_scaled(
+            target,
+            DrawTextLine {
+                text: &title_layout.text,
+                x: rect.x + 7.0,
+                y: rect.y + 7.0,
+                font_size: title_layout.font_size as f32,
+                max_width: title_layout.max_width as f32,
+                color: name_shadow.color,
+                shadow_color: Color::TRANSPARENT,
+                brush: name_shadow.brush,
+                shadow_brush: None,
+                family_name: font_family,
+                align,
+                language,
+                letter_spacing: title_layout.letter_spacing,
+                scale_x: title_layout.scale_x,
+            },
+        );
+    }
+
+    draw_text_line_scaled(
+        target,
+        DrawTextLine {
+            text: &title_layout.text,
+            x: rect.x,
+            y: rect.y,
+            font_size: title_layout.font_size as f32,
+            max_width: title_layout.max_width as f32,
+            color: name_brush.color,
+            shadow_color: Color::TRANSPARENT,
+            brush: name_brush.brush,
+            shadow_brush: None,
+            family_name: font_family,
+            align,
+            language,
+            letter_spacing: title_layout.letter_spacing,
+            scale_x: title_layout.scale_x,
+        },
     );
 }
 
@@ -471,6 +648,108 @@ fn draw_monster_type_line(
             ),
         ),
     );
+}
+
+fn draw_document_link_arrows(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    arrows: &[u8],
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    const ARROW_KEYS: &[&str] = &[
+        "up",
+        "right_up",
+        "right",
+        "right_down",
+        "down",
+        "left_down",
+        "left",
+        "left_up",
+    ];
+
+    for (index, key) in ARROW_KEYS.iter().enumerate() {
+        let pair = match base.link_arrows.get(*key) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let show = arrows.contains(&((index + 1) as u8));
+        let state = if show { &pair.on } else { &pair.off };
+        bundle
+            .draw_image_at(target, &state.asset, state.x as f32, state.y as f32)
+            .map_err(RenderError::Backend)?;
+    }
+
+    Ok(())
+}
+
+fn draw_document_password(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    language: Option<&str>,
+    text: &str,
+    x: f32,
+    y: f32,
+) {
+    draw_text_line(
+        target,
+        DrawTextLine::unscaled(
+            text,
+            x,
+            y,
+            40.0,
+            260.0,
+            Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+            Color::TRANSPARENT,
+            &style.password_font_family,
+            TextAlign::Left,
+            language,
+            0.0,
+        )
+        .with_brushes(
+            text_brush(
+                request.options.text_colors.password.as_ref(),
+                None,
+                Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
+                x,
+                260.0,
+            ),
+            text_brush(
+                request.options.text_colors.password_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                x,
+                260.0,
+            ),
+        ),
+    );
+}
+
+fn draw_copyright_asset(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    asset: &str,
+    base: &BaseLayout,
+) -> Result<(), RenderError> {
+    if !bundle.has_image(asset) {
+        return Ok(());
+    }
+
+    let Some((width, _)) = image_dimensions(bundle, asset) else {
+        return Ok(());
+    };
+    let x = CARD_WIDTH.saturating_sub(base.copyright.right + width) as f32;
+    bundle
+        .draw_image_at(target, asset, x, base.copyright.y as f32)
+        .map_err(RenderError::Backend)
+}
+
+fn text_align_choice(align: TextAlignChoice) -> TextAlign {
+    match align {
+        TextAlignChoice::Left => TextAlign::Left,
+        TextAlignChoice::Center => TextAlign::Center,
+        TextAlignChoice::Right => TextAlign::Right,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

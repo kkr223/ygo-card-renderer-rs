@@ -13,7 +13,7 @@ use crate::{
     layout::layout_style,
     model::{
         CardKind, NameColor, PositionedRenderImage, RareType, RenderOptions, RenderRequest,
-        YgoCardMeta,
+        TextAlignChoice, YgoCardMeta,
     },
 };
 
@@ -63,7 +63,7 @@ impl RenderDocument {
             RenderOp::ExternalImage {
                 path: request.options.art_image.clone(),
                 rect: RenderRect::new(art_x, art_y, art_w, art_h),
-                fit: ImageFit::Stretch,
+                fit: ImageFit::Cover,
                 align: ImageAlign::Top,
             },
         ));
@@ -137,7 +137,13 @@ impl RenderDocument {
         }
 
         if request.card.is_link() {
-            nodes.push(RenderNode::new("link-arrows", 90, RenderOp::LinkArrows));
+            nodes.push(RenderNode::new(
+                "link-arrows",
+                90,
+                RenderOp::LinkArrows {
+                    arrows: link_arrows_for_request(request),
+                },
+            ));
         }
 
         let title_width =
@@ -157,6 +163,7 @@ impl RenderDocument {
                 letter_spacing: style.title_letter_spacing,
                 color: request.card.name_color.clone(),
                 width_compress: request.options.title_width_compress,
+                align: TextAlignChoice::Left,
             },
         ));
 
@@ -189,7 +196,7 @@ impl RenderDocument {
         }
 
         let description_text = if request.card.is_pendulum() {
-            let sections = split_pendulum_description(&request.card.desc);
+            let sections = split_pendulum_description(&request.card.desc, language);
             if let Some(text) = sections.pendulum_effect {
                 nodes.push(RenderNode::new(
                     "pendulum-description",
@@ -271,7 +278,8 @@ impl RenderDocument {
                 "copyright",
                 170,
                 RenderOp::Copyright {
-                    text: copyright.clone(),
+                    value: copyright.clone(),
+                    asset: copyright_asset_name(&request.card, copyright),
                 },
             ));
         }
@@ -379,7 +387,9 @@ pub enum RenderOp {
         y: f32,
     },
     LevelOrRank,
-    LinkArrows,
+    LinkArrows {
+        arrows: Vec<u8>,
+    },
     Title {
         text: String,
         rect: RenderRect,
@@ -388,6 +398,7 @@ pub enum RenderOp {
         letter_spacing: f32,
         color: NameColor,
         width_compress: bool,
+        align: TextAlignChoice,
     },
     SpellTrapLine {
         label: String,
@@ -420,7 +431,9 @@ pub enum RenderOp {
         text: String,
     },
     Copyright {
-        text: String,
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset: Option<String>,
     },
 }
 
@@ -499,6 +512,44 @@ fn laser_asset_name(laser: &str) -> Option<String> {
     } else {
         Some(format!("{laser}.webp"))
     }
+}
+
+fn copyright_asset_name(card: &YgoCardMeta, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let value = value.strip_suffix(".svg").unwrap_or(value);
+    let color = if card.is_monster() && (card.type_ & ygopro_cdb_encode_rs::TYPE_XYZ) != 0 {
+        "white"
+    } else {
+        "black"
+    };
+    Some(format!("copyright-{value}-{color}.svg"))
+}
+
+fn link_arrows_for_request(request: &RenderRequest) -> Vec<u8> {
+    const LINK_MARKER_TO_ARROW: &[(u32, u8)] = &[
+        (0x80, 1),
+        (0x100, 2),
+        (0x20, 3),
+        (0x04, 4),
+        (0x02, 5),
+        (0x01, 6),
+        (0x08, 7),
+        (0x40, 8),
+    ];
+
+    LINK_MARKER_TO_ARROW
+        .iter()
+        .filter_map(|(bit, arrow)| {
+            if (request.card.link_marker & bit) != 0 {
+                Some(*arrow)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn default_visible() -> bool {

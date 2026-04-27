@@ -626,15 +626,20 @@ pub(crate) struct PendulumTextSections {
     pub(crate) monster_effect: String,
 }
 
-pub(crate) fn split_pendulum_description(desc: &str) -> PendulumTextSections {
+pub(crate) fn split_pendulum_description(
+    desc: &str,
+    language: Option<&str>,
+) -> PendulumTextSections {
     let normalized = desc.replace("\r\n", "\n").replace('\r', "\n");
     let mut lines: Vec<&str> = normalized.lines().collect();
 
-    if is_pendulum_header(lines.first().copied().unwrap_or_default()) {
+    if is_pendulum_header(lines.first().copied().unwrap_or_default(), language) {
         lines.remove(0);
     }
 
-    let marker_index = lines.iter().position(|line| is_monster_effect_marker(line));
+    let marker_index = lines
+        .iter()
+        .position(|line| is_monster_effect_marker(line, language));
     let Some(marker_index) = marker_index else {
         return PendulumTextSections {
             pendulum_effect: None,
@@ -655,25 +660,52 @@ pub(crate) fn split_pendulum_description(desc: &str) -> PendulumTextSections {
     }
 }
 
-fn is_pendulum_header(line: &str) -> bool {
+fn is_pendulum_header(line: &str, language: Option<&str>) -> bool {
     let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if is_monster_effect_marker(trimmed, language) {
+        return false;
+    }
+
+    if trimmed.contains("【灵摆效果】")
+        || trimmed.contains("【靈擺效果】")
+        || trimmed.contains("【펜듈럼 효과】")
+        || trimmed == "[Pendulum Effect]"
+    {
+        return true;
+    }
+
     (trimmed.contains("【灵摆】")
+        || trimmed.contains("【靈擺】")
         || trimmed.contains("[Pendulum")
-        || trimmed.contains("ペンデュラム"))
+        || trimmed.contains("Pendulum Scale")
+        || trimmed.contains("Ｐスケール")
+        || trimmed.contains("ペンデュラム")
+        || trimmed.contains("펜듈럼"))
         && (trimmed.contains('←')
             || trimmed.contains('→')
             || trimmed.contains('<')
-            || trimmed.contains('>'))
+            || trimmed.contains('>')
+            || trimmed.contains("Pendulum")
+            || trimmed.contains("Ｐスケール")
+            || trimmed.contains("펜듈럼"))
 }
 
-fn is_monster_effect_marker(line: &str) -> bool {
+fn is_monster_effect_marker(line: &str, _language: Option<&str>) -> bool {
+    let normalized = line.trim().replace(' ', "");
     matches!(
-        line.trim(),
+        normalized.as_str(),
         "【怪兽效果】"
-            | "[Monster Effect]"
-            | "【Monster Effect】"
+            | "【怪兽描述】"
+            | "【怪獸效果】"
+            | "【怪獸描述】"
+            | "[MonsterEffect]"
+            | "【MonsterEffect】"
             | "【モンスター効果】"
-            | "【몬스터 효과】"
+            | "【몬스터효과】"
     )
 }
 
@@ -748,6 +780,7 @@ mod tests {
     fn splits_sc_pendulum_description() {
         let sections = split_pendulum_description(
             "←6 【灵摆】 6→\r\n灵摆效果。\r\n【怪兽效果】\r\n怪兽效果。",
+            Some("sc"),
         );
 
         assert_eq!(sections.pendulum_effect.as_deref(), Some("灵摆效果。"));
@@ -755,8 +788,39 @@ mod tests {
     }
 
     #[test]
+    fn splits_english_pendulum_description() {
+        let sections = split_pendulum_description(
+            "[Pendulum Effect]\nPendulum effect.\n[Monster Effect]\nMonster effect.",
+            Some("en"),
+        );
+
+        assert_eq!(
+            sections.pendulum_effect.as_deref(),
+            Some("Pendulum effect.")
+        );
+        assert_eq!(sections.monster_effect, "Monster effect.");
+    }
+
+    #[test]
+    fn splits_tc_and_kr_pendulum_description() {
+        let tc = split_pendulum_description(
+            "【靈擺效果】\n靈擺效果。\n【怪獸效果】\n怪獸效果。",
+            Some("tc"),
+        );
+        let kr = split_pendulum_description(
+            "【펜듈럼 효과】\n펜듈럼 효과.\n【몬스터 효과】\n몬스터 효과.",
+            Some("kr"),
+        );
+
+        assert_eq!(tc.pendulum_effect.as_deref(), Some("靈擺效果。"));
+        assert_eq!(tc.monster_effect, "怪獸效果。");
+        assert_eq!(kr.pendulum_effect.as_deref(), Some("펜듈럼 효과."));
+        assert_eq!(kr.monster_effect, "몬스터 효과.");
+    }
+
+    #[test]
     fn leaves_unmarked_text_unchanged() {
-        let sections = split_pendulum_description("没有分隔标记。");
+        let sections = split_pendulum_description("没有分隔标记。", Some("sc"));
 
         assert_eq!(sections.pendulum_effect, None);
         assert_eq!(sections.monster_effect, "没有分隔标记。");

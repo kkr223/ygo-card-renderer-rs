@@ -88,6 +88,15 @@ pub enum NameColor {
     Custom(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignChoice {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
 /// CSS-style two-stop horizontal gradient for text rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
