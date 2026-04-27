@@ -62,6 +62,9 @@ pub fn draw_rare_effect(
             LayerKind::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
             LayerKind::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
             LayerKind::Holographic { opacity } => draw_holographic(target, rect, opacity),
+            LayerKind::BrightBorder { opacity } => {
+                draw_bright_border(target, full_rect, art_rect, opacity)
+            }
         }
     }
 }
@@ -71,11 +74,11 @@ pub fn draw_rare_effect(
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
-struct CoverageRect {
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
+pub(crate) struct CoverageRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +91,8 @@ enum LayerKind {
     SecretWeave { opacity: f32 },
     /// Full-spectrum horizontal gradient + noise tile.
     Holographic { opacity: f32 },
+    /// Silver-blue bright border used by pser-print.
+    BrightBorder { opacity: f32 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +119,8 @@ impl EffectLayer {
 /// Map each [`RareType`] to its effect layers (ordered, front-to-back).
 fn layers_for(rare: RareType) -> Vec<EffectLayer> {
     match rare {
+        RareType::Sr => vec![EffectLayer::art(LayerKind::RainbowFoil { opacity: 0.46 })],
+
         RareType::Hr => vec![EffectLayer::full(LayerKind::Holographic { opacity: 0.45 })],
 
         RareType::Ser => vec![EffectLayer::full(LayerKind::SecretWeave { opacity: 0.66 })],
@@ -123,10 +130,12 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
             EffectLayer::art(LayerKind::RainbowFoil { opacity: 0.18 }),
         ],
 
-        RareType::Pser | RareType::PserPrint => vec![
+        RareType::Pser => vec![
             EffectLayer::art(LayerKind::RainbowFoil { opacity: 0.50 }),
             EffectLayer::art(LayerKind::DotGrid { opacity: 0.60 }),
         ],
+
+        RareType::PserPrint => vec![EffectLayer::full(LayerKind::BrightBorder { opacity: 0.72 })],
 
         // Gr / Ur / Dt: image-asset path handled elsewhere; no algorithmic layers.
         RareType::Gr | RareType::Ur | RareType::Dt => vec![],
@@ -142,7 +151,7 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 /// Real SER foil reads less like round dots and more like an embossed
 /// lenticular mesh. This direct pixel pass keeps the card art visible while
 /// adding the small square/short-line highlights seen across the full card.
-fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     let width = target.width();
     let height = target.height();
     let x_end = rect.x.saturating_add(rect.w).min(width);
@@ -229,7 +238,7 @@ fn screen_over(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Diagonal (top-left → bottom-right) 7-stop rainbow gradient, Screen blend.
-fn draw_rainbow_foil(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+pub(crate) fn draw_rainbow_foil(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     let alpha = (opacity * 255.0).round() as u8;
 
     let stops: Vec<GradientStop> = [
@@ -292,7 +301,7 @@ const DOT_RADIUS: f32 = 3.5;
 const TILE_SIZE: u32 = DOT_SPACING;
 
 /// Horizontal/vertical grid of rainbow circles, tiled via `Pattern::new`.
-fn draw_dot_grid(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+pub(crate) fn draw_dot_grid(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     // Build a TILE_SIZE×TILE_SIZE transparent tile with one circle centred in it.
     // The hue cycles once across the full tile width in the horizontal direction.
     let ts = TILE_SIZE;
@@ -372,7 +381,7 @@ fn draw_dot_grid(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
 const NOISE_TILE: u32 = 64;
 
 /// Full-spectrum horizontal rainbow gradient + procedural shimmer tile.
-fn draw_holographic(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+pub(crate) fn draw_holographic(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     // ── Layer A: horizontal full-spectrum gradient ────────────────────────────
     draw_rainbow_foil(target, rect, opacity);
 
@@ -433,6 +442,81 @@ fn draw_holographic(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
             Transform::identity(),
             None,
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Primitive: Bright Border
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pser-print is a printed bright frame: keep the card surface mostly clean and
+/// concentrate the shimmer on the outer card edge and illustration bevel.
+pub(crate) fn draw_bright_border(
+    target: &mut Pixmap,
+    full_rect: CoverageRect,
+    art_rect: CoverageRect,
+    opacity: f32,
+) {
+    let width = target.width();
+    let height = target.height();
+    let x_end = full_rect.x.saturating_add(full_rect.w).min(width);
+    let y_end = full_rect.y.saturating_add(full_rect.h).min(height);
+    let pixels = target.pixels_mut();
+
+    let outer_band = 56.0_f32;
+    let art_band = 34.0_f32;
+    let art_left = art_rect.x as f32;
+    let art_top = art_rect.y as f32;
+    let art_right = art_rect.x.saturating_add(art_rect.w) as f32;
+    let art_bottom = art_rect.y.saturating_add(art_rect.h) as f32;
+
+    for y in full_rect.y.min(height)..y_end {
+        for x in full_rect.x.min(width)..x_end {
+            let xf = x as f32;
+            let yf = y as f32;
+            let outer_d = xf
+                .min(yf)
+                .min((CARD_WIDTH - 1) as f32 - xf)
+                .min((CARD_HEIGHT - 1) as f32 - yf);
+            let mut strength = if outer_d < outer_band {
+                let t = 1.0 - outer_d / outer_band;
+                t.powf(1.55) * 0.72
+            } else {
+                0.0
+            };
+
+            let near_art_vertical = yf >= art_top - art_band
+                && yf <= art_bottom + art_band
+                && ((xf - art_left).abs() < art_band || (xf - art_right).abs() < art_band);
+            let near_art_horizontal = xf >= art_left - art_band
+                && xf <= art_right + art_band
+                && ((yf - art_top).abs() < art_band || (yf - art_bottom).abs() < art_band);
+            if near_art_vertical || near_art_horizontal {
+                let d = (xf - art_left)
+                    .abs()
+                    .min((xf - art_right).abs())
+                    .min((yf - art_top).abs())
+                    .min((yf - art_bottom).abs());
+                let t = 1.0 - (d / art_band).clamp(0.0, 1.0);
+                strength = strength.max(t.powf(1.25) * 0.78);
+            }
+
+            if strength <= 0.0 {
+                continue;
+            }
+
+            let shimmer = ((xf * 0.028 + yf * 0.007).sin() * 0.5 + 0.5).powf(2.0);
+            let noise = (hash2(x, y) & 0xff) as f32 / 255.0;
+            let strength = (strength * (0.70 + shimmer * 0.24 + noise * 0.08)).min(1.0);
+            let blue = (0.72 + shimmer * 0.22).min(1.0);
+            let src_r = (205.0 + shimmer * 35.0) as u8;
+            let src_g = (218.0 + shimmer * 30.0) as u8;
+            let src_b = (235.0 + blue * 20.0) as u8;
+            let alpha = (strength * opacity * 255.0).round() as u8;
+
+            let idx = (y * width + x) as usize;
+            pixels[idx] = screen_over(pixels[idx], src_r, src_g, src_b, alpha);
+        }
     }
 }
 
@@ -542,6 +626,14 @@ mod tests {
     }
 
     #[test]
+    fn sr_maps_to_art_rainbow_only() {
+        let layers = layers_for(RareType::Sr);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].coverage, RareCoverage::Art);
+        assert!(matches!(layers[0].kind, LayerKind::RainbowFoil { .. }));
+    }
+
+    #[test]
     fn gser_adds_art_rainbow_to_secret_weave() {
         let layers = layers_for(RareType::Gser);
         assert_eq!(layers.len(), 2);
@@ -577,6 +669,17 @@ mod tests {
             pser_foil > gser_foil,
             "Pser should be brighter than Gser art rainbow"
         );
+    }
+
+    #[test]
+    fn pser_print_maps_to_bright_border_only() {
+        let layers = layers_for(RareType::PserPrint);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].coverage, RareCoverage::FullCard);
+        assert!(matches!(
+            layers[0].kind,
+            LayerKind::BrightBorder { .. }
+        ));
     }
 
     #[test]
@@ -649,6 +752,32 @@ mod tests {
                 .any(|(a, b)| a.red() != b.red()),
             "holographic should change pixels"
         );
+    }
+
+    #[test]
+    fn bright_border_prefers_edges_over_center() {
+        let mut px = make_card_pixmap();
+        let full = CoverageRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        let art = CoverageRect {
+            x: 28,
+            y: 28,
+            w: 44,
+            h: 44,
+        };
+        let before = px.pixels().to_vec();
+        draw_bright_border(&mut px, full, art, 0.8);
+
+        let edge_idx = 5;
+        let center_idx = 50 * 100 + 50;
+        let edge_delta = px.pixels()[edge_idx].blue() as i16 - before[edge_idx].blue() as i16;
+        let center_delta =
+            px.pixels()[center_idx].blue() as i16 - before[center_idx].blue() as i16;
+        assert!(edge_delta > center_delta);
     }
 
     #[test]

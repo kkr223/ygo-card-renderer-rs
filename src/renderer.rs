@@ -13,13 +13,19 @@ use crate::{
         BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
-    document::{ImageAlign, ImageFit, RenderDocument, RenderOp, RenderRect, TextChannel},
+    document::{
+        EffectStyle, EffectTarget, ImageAlign, ImageFit, RenderDocument, RenderOp, RenderRect,
+        TextChannel,
+    },
     layout::{LayoutStyle, layout_style},
     model::{
         NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest,
         TextAlignChoice, TextGradient, TextPaint,
     },
-    rare_effect::draw_rare_effect,
+    rare_effect::{
+        CoverageRect, draw_bright_border, draw_dot_grid, draw_holographic, draw_rainbow_foil,
+        draw_rare_effect, draw_secret_weave,
+    },
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
@@ -113,8 +119,16 @@ impl Renderer {
                 RenderOp::PositionedImage { image } => {
                     draw_positioned_render_image(&mut target, image);
                 }
-                RenderOp::RareEffect { rare } => {
-                    draw_rare_effect(&mut target, *rare, &request.card, base);
+                RenderOp::VisualEffect { target: effect_target, effect } => {
+                    draw_document_visual_effect(
+                        bundle,
+                        &mut target,
+                        &request,
+                        base,
+                        language,
+                        *effect_target,
+                        *effect,
+                    );
                 }
                 RenderOp::OutFrameBlocks => {
                     draw_out_frame_blocks(bundle, &mut target, &request, base)?;
@@ -146,6 +160,8 @@ impl Renderer {
                     color,
                     width_compress,
                     align,
+                    fill,
+                    shadow,
                 } => {
                     draw_document_title(
                         &mut target,
@@ -159,6 +175,8 @@ impl Renderer {
                         color,
                         *width_compress,
                         *align,
+                        fill.as_ref(),
+                        shadow.as_ref(),
                     );
                 }
                 RenderOp::SpellTrapLine { .. } => {
@@ -490,10 +508,12 @@ fn draw_document_title(
     color: &NameColor,
     width_compress: bool,
     align: TextAlignChoice,
+    fill: Option<&TextPaint>,
+    shadow: Option<&TextPaint>,
 ) {
     let name_color = resolve_name_color(color, &request.card);
-    let name_brush = resolve_name_brush(request, name_color, rect.x, rect.width);
-    let name_shadow = resolve_name_shadow_brush(request, rect.x, rect.width);
+    let name_brush = resolve_title_brush(request, fill, name_color, rect.x, rect.width);
+    let name_shadow = resolve_title_shadow_brush(request, shadow, rect.x, rect.width);
 
     if contains_ruby_markup(text) {
         let tokens = parse_ruby_text(text);
@@ -742,6 +762,306 @@ fn draw_copyright_asset(
     bundle
         .draw_image_at(target, asset, x, base.copyright.y as f32)
         .map_err(RenderError::Backend)
+}
+
+fn draw_document_visual_effect(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    language: Option<&str>,
+    effect_target: EffectTarget,
+    effect: EffectStyle,
+) {
+    let full_rect = CoverageRect {
+        x: 0,
+        y: 0,
+        w: CARD_WIDTH,
+        h: CARD_HEIGHT,
+    };
+    let art_rect = art_coverage_rect(request, base);
+
+    if let EffectStyle::BrightBorder { opacity } = effect {
+        draw_bright_border(target, full_rect, art_rect, opacity);
+        return;
+    }
+
+    for area in effect_target_areas(bundle, request, base, language, effect_target, full_rect, art_rect) {
+        draw_visual_effect_area(target, area, effect);
+    }
+}
+
+#[derive(Debug, Clone)]
+enum EffectArea {
+    Rect(CoverageRect),
+    MaskedRect { rect: CoverageRect, mask: Pixmap },
+}
+
+fn draw_visual_effect_area(target: &mut Pixmap, area: EffectArea, effect: EffectStyle) {
+    match area {
+        EffectArea::Rect(rect) => draw_visual_effect_rect(target, rect, effect),
+        EffectArea::MaskedRect { rect, mask } => draw_masked_visual_effect(target, rect, &mask, effect),
+    }
+}
+
+fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
+    match effect {
+        EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
+        EffectStyle::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
+        EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
+        EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),
+        EffectStyle::GoldWash { opacity } => draw_gold_wash(target, rect, opacity),
+        EffectStyle::BrightBorder { .. } => {}
+    }
+}
+
+fn draw_masked_visual_effect(
+    target: &mut Pixmap,
+    rect: CoverageRect,
+    mask: &Pixmap,
+    effect: EffectStyle,
+) {
+    let before = target.pixels().to_vec();
+    draw_visual_effect_rect(target, rect, effect);
+
+    let width = target.width();
+    let height = target.height();
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    let mask_w = mask.width();
+    let mask_h = mask.height();
+    let pixels = target.pixels_mut();
+    let mask_pixels = mask.pixels();
+
+    for y in rect.y.min(height)..y_end {
+        let local_y = y.saturating_sub(rect.y);
+        for x in rect.x.min(width)..x_end {
+            let local_x = x.saturating_sub(rect.x);
+            let target_idx = (y * width + x) as usize;
+            if local_x >= mask_w || local_y >= mask_h {
+                pixels[target_idx] = before[target_idx];
+                continue;
+            }
+
+            let mask_idx = (local_y * mask_w + local_x) as usize;
+            let alpha = mask_pixels[mask_idx].alpha() as u16;
+            if alpha == 0 {
+                pixels[target_idx] = before[target_idx];
+            } else if alpha < 255 {
+                pixels[target_idx] = lerp_premul(before[target_idx], pixels[target_idx], alpha);
+            }
+        }
+    }
+}
+
+fn lerp_premul(
+    from: tiny_skia::PremultipliedColorU8,
+    to: tiny_skia::PremultipliedColorU8,
+    alpha: u16,
+) -> tiny_skia::PremultipliedColorU8 {
+    let inv = 255_u16.saturating_sub(alpha);
+    let channel = |a: u8, b: u8| -> u8 { ((a as u16 * inv + b as u16 * alpha) / 255) as u8 };
+    tiny_skia::PremultipliedColorU8::from_rgba(
+        channel(from.red(), to.red()),
+        channel(from.green(), to.green()),
+        channel(from.blue(), to.blue()),
+        channel(from.alpha(), to.alpha()),
+    )
+    .unwrap_or(from)
+}
+
+fn draw_gold_wash(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let width = target.width();
+    let height = target.height();
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    let pixels = target.pixels_mut();
+
+    for y in rect.y.min(height)..y_end {
+        for x in rect.x.min(width)..x_end {
+            let local_x = x.saturating_sub(rect.x) as f32;
+            let local_y = y.saturating_sub(rect.y) as f32;
+            let shimmer = ((local_x * 0.035 - local_y * 0.018).sin() * 0.5 + 0.5).powf(1.6);
+            let noise = (hash_for_effect(x, y) & 0xff) as f32 / 255.0;
+            let alpha = (opacity * (0.72 + shimmer * 0.20 + noise * 0.08)).clamp(0.0, 1.0);
+            let gold_r = (206.0 + shimmer * 38.0) as u8;
+            let gold_g = (146.0 + shimmer * 70.0) as u8;
+            let gold_b = (30.0 + shimmer * 28.0) as u8;
+
+            let idx = (y * width + x) as usize;
+            let dst = pixels[idx];
+            let mix = |d: u8, s: u8| -> u8 {
+                (d as f32 * (1.0 - alpha) + s as f32 * alpha).round() as u8
+            };
+            pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
+                mix(dst.red(), gold_r),
+                mix(dst.green(), gold_g),
+                mix(dst.blue(), gold_b),
+                dst.alpha(),
+            )
+            .unwrap_or(dst);
+        }
+    }
+}
+
+#[inline]
+fn hash_for_effect(x: u32, y: u32) -> u32 {
+    let mut h = x
+        .wrapping_mul(374761393)
+        .wrapping_add(y.wrapping_mul(668265263));
+    h ^= h >> 13;
+    h = h.wrapping_mul(1274126177);
+    h ^ (h >> 16)
+}
+
+fn effect_target_areas(
+    bundle: &AssetBundle,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    language: Option<&str>,
+    target: EffectTarget,
+    full_rect: CoverageRect,
+    art_rect: CoverageRect,
+) -> Vec<EffectArea> {
+    match target {
+        EffectTarget::FullCard => vec![EffectArea::Rect(full_rect)],
+        EffectTarget::Art => vec![EffectArea::Rect(art_rect)],
+        EffectTarget::ArtFrame => frame_ring_areas(art_rect, 28, 0, 0)
+            .into_iter()
+            .map(EffectArea::Rect)
+            .collect(),
+        EffectTarget::CardBorder => card_border_areas()
+            .into_iter()
+            .map(EffectArea::Rect)
+            .collect(),
+        EffectTarget::Attribute => attribute_effect_area(bundle, request, base, language)
+            .into_iter()
+            .collect(),
+        EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, request, base),
+    }
+}
+
+fn card_border_areas() -> Vec<CoverageRect> {
+    let outer = CoverageRect {
+        x: 0,
+        y: 0,
+        w: CARD_WIDTH,
+        h: CARD_HEIGHT,
+    };
+    frame_ring_areas(outer, 54, 0, 0)
+}
+
+fn frame_ring_areas(rect: CoverageRect, thickness: u32, inset_x: u32, inset_y: u32) -> Vec<CoverageRect> {
+    let x = rect.x.saturating_sub(inset_x);
+    let y = rect.y.saturating_sub(inset_y);
+    let w = rect.w.saturating_add(inset_x.saturating_mul(2));
+    let h = rect.h.saturating_add(inset_y.saturating_mul(2));
+    let t = thickness.min(w / 2).min(h / 2).max(1);
+    vec![
+        CoverageRect { x, y, w, h: t },
+        CoverageRect {
+            x,
+            y: y + h.saturating_sub(t),
+            w,
+            h: t,
+        },
+        CoverageRect {
+            x,
+            y: y + t,
+            w: t,
+            h: h.saturating_sub(t.saturating_mul(2)),
+        },
+        CoverageRect {
+            x: x + w.saturating_sub(t),
+            y: y + t,
+            w: t,
+            h: h.saturating_sub(t.saturating_mul(2)),
+        },
+    ]
+}
+
+fn art_coverage_rect(request: &RenderRequest, base: &BaseLayout) -> CoverageRect {
+    let (x, y, w, h) = image_frame(&request.card, base);
+    CoverageRect { x, y, w, h }
+}
+
+fn attribute_effect_area(
+    bundle: &AssetBundle,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    language: Option<&str>,
+) -> Option<EffectArea> {
+    let asset = attribute_asset_name(&request.card, language)?;
+    let mask = decode_bundle_image(bundle, &asset)?;
+    let rect = CoverageRect {
+        x: base.attribute.x,
+        y: base.attribute.y,
+        w: mask.width(),
+        h: mask.height(),
+    };
+    Some(EffectArea::MaskedRect { rect, mask })
+}
+
+fn level_or_rank_effect_areas(
+    bundle: &AssetBundle,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Vec<EffectArea> {
+    let count = request.card.level.min(13);
+    if count == 0 || request.card.is_link() {
+        return Vec::new();
+    }
+
+    let (layout, left_to_right) = if uses_rank(&request.card) {
+        (&base.rank, true)
+    } else {
+        (&base.level, false)
+    };
+    let Some(mask) = decode_bundle_image(bundle, &layout.asset) else {
+        return Vec::new();
+    };
+    let h = mask.height();
+
+    let start = if left_to_right {
+        if count < 13 {
+            layout.left_lt_13.unwrap_or(147)
+        } else {
+            layout.left_ge_13.unwrap_or(101)
+        }
+    } else if count < 13 {
+        layout.right_lt_13.unwrap_or(147)
+    } else {
+        layout.right_ge_13.unwrap_or(101)
+    };
+
+    (0..count)
+        .map(|index| {
+            let x = if left_to_right {
+                start + index * (layout.star_width + layout.gap)
+            } else {
+                CARD_WIDTH - start - index * (layout.star_width + layout.gap) - layout.star_width
+            };
+            let rect = CoverageRect {
+                x,
+                y: layout.y,
+                w: layout.star_width,
+                h,
+            };
+            EffectArea::MaskedRect {
+                rect,
+                mask: mask.clone(),
+            }
+        })
+        .collect()
+}
+
+fn decode_bundle_image(bundle: &AssetBundle, asset: &str) -> Option<Pixmap> {
+    let entry = bundle.image(asset).ok()?;
+    match entry.kind.as_str() {
+        "raster" => bundle.decode_raster(asset).ok(),
+        "svg" => bundle.decode_svg(asset).ok(),
+        _ => None,
+    }
 }
 
 fn text_align_choice(align: TextAlignChoice) -> TextAlign {
@@ -1846,6 +2166,22 @@ fn resolve_name_brush(
     }
 }
 
+fn resolve_title_brush(
+    request: &RenderRequest,
+    document_paint: Option<&TextPaint>,
+    fallback: Color,
+    x: f32,
+    width: f32,
+) -> ResolvedPaint {
+    if let Some(paint) = document_paint {
+        return ResolvedPaint {
+            color: paint_color(Some(paint), None, fallback),
+            brush: text_brush(Some(paint), None, fallback, x, width),
+        };
+    }
+    resolve_name_brush(request, fallback, x, width)
+}
+
 fn resolve_name_shadow_brush(request: &RenderRequest, x: f32, width: f32) -> ResolvedPaint {
     let paint = request
         .options
@@ -1875,6 +2211,21 @@ fn resolve_name_shadow_brush(request: &RenderRequest, x: f32, width: f32) -> Res
         color: paint_color(paint.as_ref(), None, Color::TRANSPARENT),
         brush: text_brush(paint.as_ref(), None, Color::TRANSPARENT, x, width),
     }
+}
+
+fn resolve_title_shadow_brush(
+    request: &RenderRequest,
+    document_paint: Option<&TextPaint>,
+    x: f32,
+    width: f32,
+) -> ResolvedPaint {
+    if let Some(paint) = document_paint {
+        return ResolvedPaint {
+            color: paint_color(Some(paint), None, Color::TRANSPARENT),
+            brush: text_brush(Some(paint), None, Color::TRANSPARENT, x, width),
+        };
+    }
+    resolve_name_shadow_brush(request, x, width)
 }
 
 fn text_brush(

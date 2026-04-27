@@ -18,6 +18,8 @@ pub enum CardKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RareType {
+    /// Super Rare
+    Sr,
     /// Holographic Rare
     Hr,
     /// Gold Rare
@@ -53,6 +55,7 @@ impl RareType {
     /// Asset filename stem, e.g. `"hr"` or `"pser-print"`.
     pub fn asset_stem(self) -> &'static str {
         match self {
+            Self::Sr => "sr",
             Self::Hr => "hr",
             Self::Gr => "gr",
             Self::Ur => "ur",
@@ -103,6 +106,10 @@ pub enum TextAlignChoice {
 pub struct TextGradient {
     pub start: String,
     pub end: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middle: Option<String>,
+    #[serde(default, skip_serializing_if = "GradientDirection::is_default")]
+    pub direction: GradientDirection,
 }
 
 impl TextGradient {
@@ -110,7 +117,36 @@ impl TextGradient {
         Self {
             start: start.into(),
             end: end.into(),
+            middle: None,
+            direction: GradientDirection::Horizontal,
         }
+    }
+
+    pub fn vertical_middle(
+        start: impl Into<String>,
+        middle: impl Into<String>,
+        end: impl Into<String>,
+    ) -> Self {
+        Self {
+            start: start.into(),
+            end: end.into(),
+            middle: Some(middle.into()),
+            direction: GradientDirection::Vertical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum GradientDirection {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl GradientDirection {
+    fn is_default(&self) -> bool {
+        *self == Self::Horizontal
     }
 }
 

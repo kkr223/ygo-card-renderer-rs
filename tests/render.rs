@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderDocument, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    document::{ImageFit, RenderOp},
+    document::{EffectStyle, EffectTarget, ImageFit, RenderOp},
     model::{
         LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, TextAlignChoice,
         YgoCardMeta,
@@ -314,6 +314,154 @@ fn render_document_allows_external_display_edits() {
     ));
 }
 
+#[test]
+fn render_document_expands_ur_rare_preset() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 46986414,
+        name: "Red-Eyes Dark Dragoon".to_string(),
+        desc: "A fusion monster.".to_string(),
+        type_: 0x4000041,
+        attack: 3000,
+        defense: 2500,
+        level: 8,
+        race: 0x2000,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+    let mut card: YgoCardMeta = entry.into();
+    card.rare = Some(RareType::Ur);
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions {
+            language: Some("en".to_string()),
+            ..RenderOptions::default()
+        },
+    };
+
+    let document = Renderer::new().build_document(&request);
+    let title = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "title")
+        .unwrap();
+    assert!(matches!(
+        &title.op,
+        RenderOp::Title {
+            fill: Some(fill),
+            shadow: Some(_),
+            ..
+        } if fill.gradient.as_ref().is_some_and(|gradient| {
+            gradient.middle.as_deref() == Some("#fff0a8")
+                && gradient.direction
+                    == ygo_card_renderer_rs::model::GradientDirection::Vertical
+        })
+    ));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::Art,
+            effect: EffectStyle::RainbowFoil { .. },
+        }
+    )));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::Attribute,
+            effect: EffectStyle::Holographic { .. },
+        }
+    )));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::LevelOrRank,
+            effect: EffectStyle::Holographic { .. },
+        }
+    )));
+}
+
+#[test]
+fn render_document_expands_sr_and_gr_rare_presets() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 46986414,
+        name: "Red-Eyes Dark Dragoon".to_string(),
+        desc: "A fusion monster.".to_string(),
+        type_: 0x4000041,
+        attack: 3000,
+        defense: 2500,
+        level: 8,
+        race: 0x2000,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+
+    let mut sr_card: YgoCardMeta = entry.clone().into();
+    sr_card.rare = Some(RareType::Sr);
+    let sr_document = Renderer::new().build_document(&RenderRequest {
+        kind: CardKind::Yugioh,
+        card: sr_card,
+        options: RenderOptions {
+            language: Some("en".to_string()),
+            ..RenderOptions::default()
+        },
+    });
+    let sr_effects: Vec<_> = sr_document
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.op, RenderOp::VisualEffect { .. }))
+        .collect();
+    assert_eq!(sr_effects.len(), 1);
+    assert!(matches!(
+        &sr_effects[0].op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::Art,
+            effect: EffectStyle::RainbowFoil { .. },
+        }
+    ));
+
+    let mut gr_card: YgoCardMeta = entry.into();
+    gr_card.rare = Some(RareType::Gr);
+    let gr_document = Renderer::new().build_document(&RenderRequest {
+        kind: CardKind::Yugioh,
+        card: gr_card,
+        options: RenderOptions {
+            language: Some("en".to_string()),
+            ..RenderOptions::default()
+        },
+    });
+    assert!(gr_document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::CardBorder,
+            effect: EffectStyle::GoldWash { .. },
+        }
+    )));
+    assert!(gr_document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::ArtFrame,
+            effect: EffectStyle::GoldWash { .. },
+        }
+    )));
+    let title = gr_document
+        .nodes
+        .iter()
+        .find(|node| node.id == "title")
+        .unwrap();
+    assert!(matches!(
+        &title.op,
+        RenderOp::Title {
+            fill: Some(fill),
+            ..
+        } if fill.gradient.is_some()
+    ));
+}
+
 fn layout_overrides_from_env() -> LayoutOverrides {
     LayoutOverrides {
         name_top: env_opt_u32("YGO_NAME_TOP"),
@@ -495,6 +643,9 @@ fn render_rare_effects() {
     };
 
     let rare_variants: &[(&str, RareType)] = &[
+        ("sr", RareType::Sr),
+        ("ur", RareType::Ur),
+        ("gr", RareType::Gr),
         ("hr", RareType::Hr),
         ("ser", RareType::Ser),
         ("gser", RareType::Gser),

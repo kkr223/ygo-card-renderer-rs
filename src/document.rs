@@ -13,7 +13,7 @@ use crate::{
     layout::layout_style,
     model::{
         CardKind, NameColor, PositionedRenderImage, RareType, RenderOptions, RenderRequest,
-        TextAlignChoice, YgoCardMeta,
+        TextAlignChoice, TextGradient, TextPaint, YgoCardMeta,
     },
 };
 
@@ -83,13 +83,7 @@ impl RenderDocument {
             },
         ));
 
-        if let Some(rare) = request.card.rare {
-            nodes.push(RenderNode::new(
-                "rare-effect",
-                30,
-                RenderOp::RareEffect { rare },
-            ));
-        }
+        add_rare_effect_nodes(&mut nodes, request.card.rare);
 
         if let Some(image) = foreground_image_for_request(request) {
             nodes.push(RenderNode::new(
@@ -152,6 +146,7 @@ impl RenderDocument {
             } else {
                 base.name.width_without_attribute
             };
+        let (title_fill, title_shadow) = rare_title_paints(request.card.rare);
         nodes.push(RenderNode::new(
             "title",
             100,
@@ -164,6 +159,8 @@ impl RenderDocument {
                 color: request.card.name_color.clone(),
                 width_compress: request.options.title_width_compress,
                 align: TextAlignChoice::Left,
+                fill: title_fill,
+                shadow: title_shadow,
             },
         ));
 
@@ -375,8 +372,9 @@ pub enum RenderOp {
     PositionedImage {
         image: PositionedRenderImage,
     },
-    RareEffect {
-        rare: RareType,
+    VisualEffect {
+        target: EffectTarget,
+        effect: EffectStyle,
     },
     OutFrameBlocks,
     AnniversaryMark,
@@ -399,6 +397,10 @@ pub enum RenderOp {
         color: NameColor,
         width_compress: bool,
         align: TextAlignChoice,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<TextPaint>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow: Option<TextPaint>,
     },
     SpellTrapLine {
         label: String,
@@ -480,6 +482,172 @@ pub enum TextChannel {
     Description,
     Stats,
     Footer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EffectTarget {
+    Art,
+    ArtFrame,
+    CardBorder,
+    FullCard,
+    Attribute,
+    LevelOrRank,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum EffectStyle {
+    RainbowFoil { opacity: f32 },
+    DotGrid { opacity: f32 },
+    SecretWeave { opacity: f32 },
+    Holographic { opacity: f32 },
+    BrightBorder { opacity: f32 },
+    GoldWash { opacity: f32 },
+}
+
+fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
+    let Some(rare) = rare else {
+        return;
+    };
+
+    let mut push_effect = |id: &str, z: i32, target: EffectTarget, effect: EffectStyle| {
+        nodes.push(RenderNode::new(
+            id,
+            z,
+            RenderOp::VisualEffect { target, effect },
+        ));
+    };
+
+    match rare {
+        RareType::Sr => {
+            push_effect(
+                "rare-sr-art-foil",
+                30,
+                EffectTarget::Art,
+                EffectStyle::RainbowFoil { opacity: 0.46 },
+            );
+        }
+        RareType::Ur => {
+            push_effect(
+                "rare-ur-art-foil",
+                30,
+                EffectTarget::Art,
+                EffectStyle::RainbowFoil { opacity: 0.46 },
+            );
+            push_effect(
+                "rare-ur-attribute-foil",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::Holographic { opacity: 0.62 },
+            );
+            push_effect(
+                "rare-ur-level-rank-foil",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::Holographic { opacity: 0.58 },
+            );
+        }
+        RareType::Gr => {
+            push_effect(
+                "rare-gr-art-foil",
+                30,
+                EffectTarget::Art,
+                EffectStyle::RainbowFoil { opacity: 0.46 },
+            );
+            push_effect(
+                "rare-gr-card-border-gold",
+                32,
+                EffectTarget::CardBorder,
+                EffectStyle::GoldWash { opacity: 0.42 },
+            );
+            push_effect(
+                "rare-gr-art-frame-gold",
+                33,
+                EffectTarget::ArtFrame,
+                EffectStyle::GoldWash { opacity: 0.56 },
+            );
+            push_effect(
+                "rare-gr-attribute-foil",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::Holographic { opacity: 0.62 },
+            );
+            push_effect(
+                "rare-gr-level-rank-foil",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::Holographic { opacity: 0.58 },
+            );
+        }
+        RareType::Hr => push_effect(
+            "rare-hr-full-foil",
+            30,
+            EffectTarget::FullCard,
+            EffectStyle::Holographic { opacity: 0.45 },
+        ),
+        RareType::Ser => push_effect(
+            "rare-ser-full-weave",
+            30,
+            EffectTarget::FullCard,
+            EffectStyle::SecretWeave { opacity: 0.66 },
+        ),
+        RareType::Gser => {
+            push_effect(
+                "rare-gser-full-weave",
+                30,
+                EffectTarget::FullCard,
+                EffectStyle::SecretWeave { opacity: 0.58 },
+            );
+            push_effect(
+                "rare-gser-art-foil",
+                31,
+                EffectTarget::Art,
+                EffectStyle::RainbowFoil { opacity: 0.18 },
+            );
+        }
+        RareType::Pser => {
+            push_effect(
+                "rare-pser-art-foil",
+                30,
+                EffectTarget::Art,
+                EffectStyle::RainbowFoil { opacity: 0.50 },
+            );
+            push_effect(
+                "rare-pser-art-dot-grid",
+                31,
+                EffectTarget::Art,
+                EffectStyle::DotGrid { opacity: 0.60 },
+            );
+        }
+        RareType::PserPrint => push_effect(
+            "rare-pser-print-border",
+            30,
+            EffectTarget::FullCard,
+            EffectStyle::BrightBorder { opacity: 0.72 },
+        ),
+        RareType::Dt => {}
+    }
+}
+
+fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextPaint>) {
+    match rare {
+        Some(RareType::Ur | RareType::Gr) => (
+            Some(TextPaint {
+                color: None,
+                gradient: Some(TextGradient::vertical_middle(
+                    "#9a6718", "#fff0a8", "#6f4208",
+                )),
+            }),
+            Some(TextPaint {
+                color: Some("#5a3708".to_string()),
+                gradient: Some(TextGradient::vertical_middle(
+                    "#2d1903", "#a46a16", "#221103",
+                )),
+            }),
+        ),
+        _ => (None, None),
+    }
 }
 
 fn foreground_image_for_request(request: &RenderRequest) -> Option<&PositionedRenderImage> {

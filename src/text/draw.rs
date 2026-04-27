@@ -140,6 +140,13 @@ pub enum TextBrush {
         x0: f32,
         x1: f32,
     },
+    VerticalMiddleGradient {
+        top: Color,
+        middle: Color,
+        bottom: Color,
+        y0: f32,
+        y1: f32,
+    },
 }
 
 impl TextBrush {
@@ -156,20 +163,57 @@ impl TextBrush {
         }
     }
 
+    pub fn vertical_middle_gradient(
+        top: Color,
+        middle: Color,
+        bottom: Color,
+        y: f32,
+        height: f32,
+    ) -> Self {
+        Self::VerticalMiddleGradient {
+            top,
+            middle,
+            bottom,
+            y0: y,
+            y1: y + height.max(1.0),
+        }
+    }
+
     fn alpha(&self) -> f32 {
         match self {
             Self::Solid(color) => color.alpha(),
             Self::LinearGradient { start, end, .. } => start.alpha().max(end.alpha()),
+            Self::VerticalMiddleGradient {
+                top,
+                middle,
+                bottom,
+                ..
+            } => top.alpha().max(middle.alpha()).max(bottom.alpha()),
         }
     }
 
-    fn sample(&self, x: f32) -> Color {
+    fn sample(&self, x: f32, y: f32) -> Color {
         match self {
             Self::Solid(color) => *color,
             Self::LinearGradient { start, end, x0, x1 } => {
                 let span = (*x1 - *x0).abs().max(1.0);
                 let t = ((x - *x0) / span).clamp(0.0, 1.0);
                 lerp_color(*start, *end, t)
+            }
+            Self::VerticalMiddleGradient {
+                top,
+                middle,
+                bottom,
+                y0,
+                y1,
+            } => {
+                let span = (*y1 - *y0).abs().max(1.0);
+                let t = ((y - *y0) / span).clamp(0.0, 1.0);
+                if t <= 0.5 {
+                    lerp_color(*top, *middle, t * 2.0)
+                } else {
+                    lerp_color(*middle, *bottom, (t - 0.5) * 2.0)
+                }
             }
         }
     }
@@ -540,7 +584,7 @@ pub(super) fn draw_buffer_to_pixmap(
                     let px = clip_x0 + dest_cx - local_x_start as usize;
                     let idx = row_base + px;
 
-                    let color = brush.sample(px as f32);
+                    let color = brush.sample(px as f32, py as f32);
                     let src_r = (color.red() * 255.0) as u32;
                     let src_g = (color.green() * 255.0) as u32;
                     let src_b = (color.blue() * 255.0) as u32;
