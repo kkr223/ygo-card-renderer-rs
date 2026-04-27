@@ -169,7 +169,7 @@ impl RenderDocument {
                     icon_asset: spell_trap_subtype_icon_asset(&request.card).map(str::to_string),
                 },
             ));
-        } else if let Some(text) = build_effect_line(&request.card, request.kind) {
+        } else if let Some(text) = build_effect_line(&request.card, request.kind, language) {
             nodes.push(RenderNode::new(
                 "monster-type-line",
                 110,

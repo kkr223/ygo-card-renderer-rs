@@ -231,7 +231,7 @@ impl Renderer {
 
         if request.card.is_spell() || request.card.is_trap() {
             draw_spell_trap_line(bundle, &mut target, request, &style, base, language)?;
-        } else if let Some(line) = build_effect_line(&request.card, request.kind) {
+        } else if let Some(line) = build_effect_line(&request.card, request.kind, language) {
             let line_layout = fit_single_line(
                 &line,
                 language,
