@@ -3,7 +3,6 @@ use ygopro_cdb_encode_rs::CardDataEntry;
 
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout, get_bundle},
-    rare_effect::draw_rare_effect,
     card_logic::{
         attribute_asset_name, auto_name_light, build_effect_line, build_scale_line,
         description_height, description_y, display_stat, frame_asset_name, image_frame,
@@ -14,11 +13,13 @@ use crate::{
         BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, NAME_COLOR_DARK, NAME_COLOR_LIGHT,
         PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR,
     },
+    document::{ImageAlign, ImageFit, RenderDocument, RenderOp, RenderRect, TextChannel},
     layout::{LayoutStyle, layout_style},
     model::{
         NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest,
         TextGradient, TextPaint,
     },
+    rare_effect::draw_rare_effect,
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
@@ -41,6 +42,159 @@ impl Renderer {
     }
 
     pub fn render_png(&self, request: &RenderRequest) -> Result<Vec<u8>, RenderError> {
+        let document = self.build_document(request);
+        self.render_document(&document)
+    }
+
+    pub fn build_document(&self, request: &RenderRequest) -> RenderDocument {
+        let bundle = get_bundle();
+        RenderDocument::from_request(request, bundle)
+    }
+
+    pub fn render_document(&self, document: &RenderDocument) -> Result<Vec<u8>, RenderError> {
+        let request = document.to_request();
+        if document.nodes.is_empty() {
+            return self.render_request_png(&request, document.output_scale);
+        }
+
+        let bundle = get_bundle();
+        let base = &bundle.layout.base;
+        let language = document.language.as_deref();
+        let style = layout_style(
+            document.kind,
+            language,
+            &bundle.layout,
+            &request.options.layout_overrides,
+        );
+
+        let mut target = Pixmap::new(document.canvas.width, document.canvas.height)
+            .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
+        target.fill(Color::from_rgba8(
+            BACKGROUND_CREAM.0,
+            BACKGROUND_CREAM.1,
+            BACKGROUND_CREAM.2,
+            255,
+        ));
+
+        let mut nodes: Vec<_> = document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.visible)
+            .collect();
+        nodes.sort_by_key(|(index, node)| (node.z, *index));
+
+        for (_, node) in nodes {
+            match &node.op {
+                RenderOp::BundleImage { asset, x, y } => {
+                    if bundle.has_image(asset) {
+                        bundle
+                            .draw_image_at(&mut target, asset, *x, *y)
+                            .map_err(RenderError::Backend)?;
+                    }
+                }
+                RenderOp::ExternalImage {
+                    path,
+                    rect,
+                    fit,
+                    align,
+                } => {
+                    draw_external_image(&mut target, path.as_deref(), rect, *fit, *align);
+                }
+                RenderOp::PositionedImage { image } => {
+                    draw_positioned_render_image(&mut target, image);
+                }
+                RenderOp::RareEffect { rare } => {
+                    draw_rare_effect(&mut target, *rare, &request.card, base);
+                }
+                RenderOp::OutFrameBlocks => {
+                    draw_out_frame_blocks(bundle, &mut target, &request, base)?;
+                }
+                RenderOp::AnniversaryMark => {
+                    draw_anniversary_mark(bundle, &mut target, &request, base)?;
+                }
+                RenderOp::Attribute { asset, x, y } => {
+                    if let Some(asset) = asset {
+                        if bundle.has_image(asset) {
+                            bundle
+                                .draw_image_at(&mut target, asset, *x, *y)
+                                .map_err(RenderError::Backend)?;
+                        }
+                    }
+                }
+                RenderOp::LevelOrRank => {
+                    draw_level_or_rank(bundle, &mut target, &request, base)?;
+                }
+                RenderOp::LinkArrows => {
+                    draw_link_arrows(bundle, &mut target, &request, base)?;
+                }
+                RenderOp::Title { .. } => {
+                    draw_title(&mut target, &request, &style, base, language);
+                }
+                RenderOp::SpellTrapLine { .. } => {
+                    draw_spell_trap_line(bundle, &mut target, &request, &style, base, language)?;
+                }
+                RenderOp::MonsterTypeLine { text, .. } => {
+                    draw_monster_type_line(&mut target, &request, &style, base, language, text);
+                }
+                RenderOp::TextBlock {
+                    text,
+                    rect,
+                    font_family,
+                    font_size,
+                    line_height,
+                    letter_spacing,
+                    channel,
+                } => {
+                    draw_document_text_block(
+                        &mut target,
+                        &request,
+                        &style,
+                        language,
+                        text,
+                        rect,
+                        font_family,
+                        *font_size,
+                        *line_height,
+                        *letter_spacing,
+                        *channel,
+                    );
+                }
+                RenderOp::Stats => {
+                    draw_stats(bundle, &mut target, &request, &style, base, language);
+                }
+                RenderOp::Password { .. } => {
+                    draw_password(&mut target, &request, &style, base, language);
+                }
+                RenderOp::Package { text } => {
+                    let mut request = request.clone();
+                    request.card.package = Some(text.clone());
+                    draw_package(&mut target, &request, &style, base, language);
+                }
+                RenderOp::Copyright { text } => {
+                    let mut request = request.clone();
+                    request.card.copyright = Some(text.clone());
+                    draw_copyright_text(&mut target, &request, &style, base, language);
+                }
+            }
+        }
+
+        let output = if (document.output_scale - 1.0).abs() > f32::EPSILON {
+            scale_pixmap(&target, document.output_scale)?
+        } else {
+            target
+        };
+
+        output
+            .encode_png()
+            .map_err(|e| RenderError::PngEncode(e.to_string()))
+    }
+
+    fn render_request_png(
+        &self,
+        request: &RenderRequest,
+        output_scale: f32,
+    ) -> Result<Vec<u8>, RenderError> {
         let bundle = get_bundle();
         let base = &bundle.layout.base;
         let language = request.options.language.as_deref();
@@ -187,7 +341,6 @@ impl Renderer {
         draw_copyright_text(&mut target, request, &style, base, language);
         draw_laser(bundle, &mut target, request, base)?;
 
-        let output_scale = effective_output_scale(request);
         let output = if (output_scale - 1.0).abs() > f32::EPSILON {
             scale_pixmap(&target, output_scale)?
         } else {
@@ -197,15 +350,6 @@ impl Renderer {
         output
             .encode_png()
             .map_err(|e| RenderError::PngEncode(e.to_string()))
-    }
-}
-
-fn effective_output_scale(request: &RenderRequest) -> f32 {
-    let scale = request.card.scale.unwrap_or(request.options.scale);
-    if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
     }
 }
 
@@ -226,6 +370,167 @@ fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
     );
 
     Ok(target)
+}
+
+fn draw_external_image(
+    target: &mut Pixmap,
+    path: Option<&std::path::Path>,
+    rect: &RenderRect,
+    fit: ImageFit,
+    align: ImageAlign,
+) {
+    let Some(path) = path else {
+        return;
+    };
+    let Some(pixmap) = load_external_pixmap(path) else {
+        return;
+    };
+
+    let source_w = pixmap.width() as f32;
+    let source_h = pixmap.height() as f32;
+    if source_w <= 0.0 || source_h <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
+    }
+
+    let (scale_x, scale_y) = match fit {
+        ImageFit::Stretch => (rect.width / source_w, rect.height / source_h),
+        ImageFit::Cover => {
+            let scale = (rect.width / source_w).max(rect.height / source_h);
+            (scale, scale)
+        }
+        ImageFit::Contain => {
+            let scale = (rect.width / source_w).min(rect.height / source_h);
+            (scale, scale)
+        }
+    };
+
+    let drawn_w = source_w * scale_x;
+    let drawn_h = source_h * scale_y;
+    let dx = rect.x + (rect.width - drawn_w) / 2.0;
+    let dy = match align {
+        ImageAlign::Top => rect.y,
+        ImageAlign::Center => rect.y + (rect.height - drawn_h) / 2.0,
+    };
+
+    target.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &PixmapPaint::default(),
+        Transform::from_scale(scale_x, scale_y).post_translate(dx, dy),
+        None,
+    );
+}
+
+fn draw_monster_type_line(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    base: &BaseLayout,
+    language: Option<&str>,
+    line: &str,
+) {
+    let line_layout = fit_single_line(
+        line,
+        language,
+        style.effect_size,
+        &style.effect_font_family,
+        base.effect.width,
+        style.effect_letter_spacing,
+        style.effect_size.saturating_sub(10),
+    );
+    draw_text_line(
+        target,
+        DrawTextLine::unscaled(
+            &line_layout.text,
+            style.effect_x as f32,
+            style.effect_top as f32,
+            line_layout.font_size as f32,
+            line_layout.max_width as f32,
+            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+            Color::TRANSPARENT,
+            &style.effect_font_family,
+            TextAlign::Left,
+            language,
+            line_layout.letter_spacing,
+        )
+        .with_brushes(
+            text_brush(
+                request.options.text_colors.effect.as_ref(),
+                None,
+                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                style.effect_x as f32,
+                line_layout.max_width as f32,
+            ),
+            text_brush(
+                request.options.text_colors.effect_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                style.effect_x as f32,
+                line_layout.max_width as f32,
+            ),
+        ),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_document_text_block(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    language: Option<&str>,
+    text: &str,
+    rect: &RenderRect,
+    font_family: &str,
+    font_size: u32,
+    line_height: f32,
+    letter_spacing: f32,
+    channel: TextChannel,
+) {
+    let (brush, shadow_brush) = match channel {
+        TextChannel::Description => (
+            text_brush(
+                request.options.text_colors.description.as_ref(),
+                request.options.description_color_override.as_deref(),
+                Color::BLACK,
+                rect.x,
+                rect.width,
+            ),
+            text_brush(
+                request.options.text_colors.description_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                rect.x,
+                rect.width,
+            ),
+        ),
+        _ => (None, None),
+    };
+
+    draw_multiline_ruby_text(
+        target,
+        RubyMultilineParams {
+            text,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            family: font_family,
+            color: Color::BLACK,
+            shadow_color: Color::TRANSPARENT,
+            brush,
+            shadow_brush,
+            language,
+            base_font_size: font_size,
+            rt_font_size: style.description_rt_font_size,
+            rt_top: style.description_rt_top,
+            rt_font_scale_x: style.description_rt_font_scale_x,
+            line_height,
+            letter_spacing,
+            min_font_size: font_size.saturating_sub(8),
+            first_line_compress: request.options.description_first_line_compress,
+        },
+    );
 }
 
 fn laser_asset_name(laser: &str) -> Option<String> {

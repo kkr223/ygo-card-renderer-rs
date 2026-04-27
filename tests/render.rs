@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use std::{fs, path::PathBuf};
 
 use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer,
+    CardKind, RenderDocument, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
     model::{LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, YgoCardMeta},
 };
@@ -144,6 +144,53 @@ fn apply_out_frame_env(card_meta: &mut YgoCardMeta) {
     if let Some(enabled) = env_opt_bool("YGO_OUT_FRAME_NAME_BLOCK_ENABLED") {
         card_meta.out_frame_name_block_enabled = enabled;
     }
+}
+
+#[test]
+fn render_document_roundtrips_and_renders() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 46986414,
+        name: "ブラック・マジシャン".to_string(),
+        desc: "魔法使いとしては、攻撃力・守備力ともに最高クラス。".to_string(),
+        type_: 0x41,
+        attack: 2500,
+        defense: 2100,
+        level: 7,
+        race: 0x1,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card: entry.into(),
+        options: RenderOptions {
+            language: Some("jp".to_string()),
+            ..RenderOptions::default()
+        },
+    };
+
+    let renderer = Renderer::new();
+    let mut document = renderer.build_document(&request);
+
+    assert_eq!(document.schema_version, RenderDocument::SCHEMA_VERSION);
+    assert!(document.nodes.iter().any(|node| node.id == "frame"));
+    assert!(document.nodes.iter().any(|node| node.id == "title"));
+
+    let json = serde_json::to_string_pretty(&document).expect("serialize render document");
+    let decoded: RenderDocument = serde_json::from_str(&json).expect("deserialize render document");
+    assert_eq!(decoded.kind, CardKind::Yugioh);
+
+    if let Some(title) = document.nodes.iter_mut().find(|node| node.id == "title") {
+        title.visible = false;
+    }
+
+    let png = renderer
+        .render_document(&document)
+        .expect("render document after external-style edit");
+    assert!(!png.is_empty());
 }
 
 fn layout_overrides_from_env() -> LayoutOverrides {
@@ -327,8 +374,8 @@ fn render_rare_effects() {
     };
 
     let rare_variants: &[(&str, RareType)] = &[
-        ("hr",   RareType::Hr),
-        ("ser",  RareType::Ser),
+        ("hr", RareType::Hr),
+        ("ser", RareType::Ser),
         ("gser", RareType::Gser),
         ("pser", RareType::Pser),
         ("pser-print", RareType::PserPrint),
@@ -353,17 +400,18 @@ fn render_rare_effects() {
             },
         };
 
-        let png = renderer.render_png(&request)
+        let png = renderer
+            .render_png(&request)
             .unwrap_or_else(|e| panic!("render failed for {label}: {e:?}"));
 
-        let png_path = out_dir.join(format!(
-            "rare-{label}-{}.png",
-            base_entry.code
-        ));
+        let png_path = out_dir.join(format!("rare-{label}-{}.png", base_entry.code));
         fs::write(&png_path, &png).expect("write png");
         println!("[{label}] → {:?} ({} bytes)", png_path, png.len());
 
-        assert!(!png.is_empty(), "render_rare_effects: {label} produced empty output");
+        assert!(
+            !png.is_empty(),
+            "render_rare_effects: {label} produced empty output"
+        );
     }
 
     println!("All rare effect renders written to {:?}", out_dir);
