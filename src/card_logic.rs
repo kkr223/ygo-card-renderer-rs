@@ -19,6 +19,8 @@ const TYPE_SPS_SUMMON: u32 = 0x200_0000;
 
 use crate::{asset_bundle::BaseLayout, layout::LayoutStyle, model::CardKind};
 
+/// Resolve the frame asset by priority: spell/trap → token → pendulum variants
+/// → link/xyz/synchro/fusion/ritual → effect/normal.
 pub(crate) fn frame_asset_name(card: &CardDataEntry) -> &'static str {
     if card.is_spell() {
         "card-spell.webp"
@@ -626,6 +628,8 @@ pub(crate) struct PendulumTextSections {
     pub(crate) monster_effect: String,
 }
 
+/// Split pendulum text by normalizing line endings, stripping an optional
+/// header, finding the monster-effect marker, then splitting around it.
 pub(crate) fn split_pendulum_description(
     desc: &str,
     language: Option<&str>,
@@ -660,6 +664,10 @@ pub(crate) fn split_pendulum_description(
     }
 }
 
+/// Detect pendulum headers by first rejecting monster-effect markers, then
+/// matching either explicit localized headers or the broader scale-style forms.
+/// The two checks stay separate because some strings identify headers directly,
+/// while others need a secondary “Pendulum/scale + arrows/symbols” pattern.
 fn is_pendulum_header(line: &str, language: Option<&str>) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {

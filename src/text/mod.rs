@@ -24,7 +24,7 @@ pub use measure::{estimate_text_width, fit_single_line, fit_single_line_compress
 
 // ── draw ─────────────────────────────────────────────────────────────────────
 pub use draw::{
-    DrawTextLine, TextAlign, TextBrush, draw_multiline_text, draw_text_line, draw_text_line_scaled,
+    DrawTextLine, TextAlign, TextBrush, draw_multiline_text, draw_text_line,
 };
 
 // ── ruby ─────────────────────────────────────────────────────────────────────

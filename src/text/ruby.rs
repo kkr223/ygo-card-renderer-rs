@@ -96,6 +96,7 @@ impl RubySlot {
     }
 }
 
+/// Overall ruby-fit strategy: override → stretch → compress → fit.
 /// Decide how to fit the rt text over its base text.
 ///
 /// Returns `(padding_left, padding_right, rt_scale_x, rt_letter_spacing)`.

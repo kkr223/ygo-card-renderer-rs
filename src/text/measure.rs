@@ -31,7 +31,7 @@ pub struct SingleLineLayout {
 /// (scale_x = 1.0).
 pub fn estimate_text_width(
     text: &str,
-    _language: Option<&str>,
+    _language: Option<&str>, // TODO: reserved for future per-language shaping
     family_name: &str,
     font_size: f32,
     letter_spacing: f32,
@@ -42,7 +42,7 @@ pub fn estimate_text_width(
 /// Estimate the rendered width of `text` with a horizontal scale factor applied.
 pub fn estimate_text_width_scaled(
     text: &str,
-    _language: Option<&str>,
+    _language: Option<&str>, // TODO: reserved for future per-language shaping
     family_name: &str,
     font_size: f32,
     letter_spacing: f32,
@@ -178,7 +178,7 @@ pub fn fit_single_line_compressed(
 /// together; CJK characters each form their own token and wrap freely.
 pub fn wrap_text(
     text: &str,
-    _language: Option<&str>,
+    _language: Option<&str>, // TODO: reserved for future per-language shaping
     family_name: &str,
     max_width: f32,
     font_size: f32,

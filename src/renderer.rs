@@ -30,7 +30,7 @@ use crate::{
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
-        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line, draw_text_line_scaled,
+        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line,
         estimate_text_width, fit_ruby_text_scale, fit_single_line, fit_single_line_compressed,
     },
 };
@@ -581,7 +581,7 @@ fn draw_document_title(
 
     let align = text_align_choice(align);
     if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
-        draw_text_line_scaled(
+        draw_text_line(
             target,
             DrawTextLine {
                 text: &title_layout.text,
@@ -602,7 +602,7 @@ fn draw_document_title(
         );
     }
 
-    draw_text_line_scaled(
+    draw_text_line(
         target,
         DrawTextLine {
             text: &title_layout.text,
@@ -2097,7 +2097,7 @@ fn draw_title(
     };
 
     if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
-        draw_text_line_scaled(
+        draw_text_line(
             target,
             DrawTextLine {
                 text: &title_layout.text,
@@ -2118,7 +2118,7 @@ fn draw_title(
         );
     }
 
-    draw_text_line_scaled(
+    draw_text_line(
         target,
         DrawTextLine {
             text: &title_layout.text,
@@ -2346,7 +2346,7 @@ fn draw_stats(
                 &base.atk_def_link.link.default
             };
 
-            draw_text_line_scaled(
+            draw_text_line(
                 target,
                 DrawTextLine {
                     text: &request.card.level.max(1).to_string(),

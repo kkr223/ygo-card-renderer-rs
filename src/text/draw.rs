@@ -1,8 +1,7 @@
 //! Text rasterisation: shadow + base text painting onto a [`Pixmap`].
 //!
-//! Public entry points are [`draw_text_line`], [`draw_text_line_scaled`],
-//! [`draw_multiline_text`], and the lower-level [`draw_text_shadowed`] /
-//! [`draw_text_shadowed_scaled`].
+//! Public entry points are [`draw_text_line`], [`draw_multiline_text`], and
+//! the lower-level [`draw_text_shadowed_scaled`].
 //!
 //! # Parameter structs
 //!
@@ -29,7 +28,7 @@ use super::{
 
 /// Parameters for drawing a single styled line of text.
 ///
-/// Used by [`draw_text_line`] and [`draw_text_line_scaled`].
+/// Used by [`draw_text_line`].
 pub struct DrawTextLine<'a> {
     /// Text to render.
     pub text: &'a str,
@@ -239,11 +238,6 @@ pub fn draw_text_line(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
     draw_text_line_inner(pixmap, p);
 }
 
-/// Draw a single line of text with optional horizontal compression.
-pub fn draw_text_line_scaled(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
-    draw_text_line_inner(pixmap, p);
-}
-
 fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
     if p.text.trim().is_empty() {
         return;
@@ -364,7 +358,7 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
         } else {
             p.y + index as f32 * font_size as f32 * p.line_height
         };
-        draw_text_shadowed(
+        draw_text_shadowed_scaled(
             pixmap,
             ShadowedText {
                 text: line,
@@ -404,11 +398,6 @@ pub struct ShadowedText<'a> {
     pub family_name: &'a str,
     pub letter_spacing: f32,
     pub scale_x: f32,
-}
-
-/// Draw text with a 1px shadow offset (scale_x = 1.0).
-pub fn draw_text_shadowed(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
-    draw_text_shadowed_scaled(pixmap, p);
 }
 
 /// Draw text with a 1px shadow offset and optional horizontal scale.
@@ -564,6 +553,8 @@ pub(super) fn draw_buffer_to_pixmap(
             let inv_scale_x = if scale_x > 0.0 { 1.0 / scale_x } else { 1.0 };
             let max_src_cx = (glyph_width - 1) as f32;
 
+            // Nearest-neighbor horizontal scaling: map each destination x back
+            // to a source column and reuse the original glyph alpha row.
             for cy in local_y_start as usize..(clip_y1 - clip_y0 as usize + local_y_start as usize)
             {
                 if cy >= glyph_height {
@@ -674,11 +665,11 @@ fn draw_multiline_with_first_line_compress(
 /// Uses binary search — O(log range) wraps instead of O(range).
 #[allow(clippy::too_many_arguments)]
 fn binary_search_font_size(
-    text: &str,
-    language: Option<&str>,
-    family_name: &str,
-    width: f32,
-    letter_spacing: f32,
+    _text: &str,
+    _language: Option<&str>,
+    _family_name: &str,
+    _width: f32,
+    _letter_spacing: f32,
     line_height: f32,
     height: f32,
     base_font_size: u32,
@@ -703,8 +694,5 @@ fn binary_search_font_size(
             hi = mid;
         }
     }
-    // Suppress unused-variable warnings from the parameters not used in the
-    // closure-less search path.
-    let _ = (text, language, family_name, width, letter_spacing);
     lo
 }
