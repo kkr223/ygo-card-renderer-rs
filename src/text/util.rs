@@ -15,9 +15,7 @@ pub(super) fn primary_family_name(stack: &str) -> String {
     let family = stack
         .split(',')
         .map(|part| part.trim().trim_matches('\'').trim_matches('"'))
-        .find(|name| {
-            !name.is_empty() && !matches!(*name, "sans-serif" | "serif" | "monospace")
-        })
+        .find(|name| !name.is_empty() && !matches!(*name, "sans-serif" | "serif" | "monospace"))
         .unwrap_or("ygo-sc")
         .to_string();
 

@@ -31,8 +31,7 @@ use std::{
 };
 
 use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer,
-    asset_bundle::init_global_bundle,
+    CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle,
     model::YgoCardMeta,
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
@@ -256,8 +255,15 @@ fn main() {
             .unwrap_or_else(|| PathBuf::from(format!("{code}.png")));
 
         let card: YgoCardMeta = entry.into();
-        render_one(&renderer, &card, &args.lang, args.scale, &args.art_dir, &out_path)
-            .unwrap_or_else(|e| fatal(&e));
+        render_one(
+            &renderer,
+            &card,
+            &args.lang,
+            args.scale,
+            &args.art_dir,
+            &out_path,
+        )
+        .unwrap_or_else(|e| fatal(&e));
 
         println!("→ {:?}", out_path);
     } else {
@@ -277,7 +283,12 @@ fn main() {
 
         // Split cards into chunks for parallel rendering.
         // We use simple scoped threads (stable, no rayon needed).
-        let cards: Arc<Vec<_>> = Arc::new(cards.into_iter().map(|e| -> YgoCardMeta { e.into() }).collect());
+        let cards: Arc<Vec<_>> = Arc::new(
+            cards
+                .into_iter()
+                .map(|e| -> YgoCardMeta { e.into() })
+                .collect(),
+        );
         let lang = Arc::new(args.lang.clone());
         let art_dir = Arc::new(args.art_dir.clone());
         let out_dir = Arc::new(out_dir.clone());

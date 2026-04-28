@@ -14,7 +14,7 @@ use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping};
 use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 
 use super::{
-    engine::{with_text_engine, TextEngine},
+    engine::{TextEngine, with_text_engine},
     measure::{
         estimate_text_width, estimate_text_width_scaled, first_line_scale, max_lines_for_height,
         split_first_explicit_line, total_text_height, wrap_text,

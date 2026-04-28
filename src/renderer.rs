@@ -22,11 +22,11 @@ use crate::{
         NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest,
         TextAlignChoice, TextGradient, TextPaint,
     },
+    pixel_ops::{hsv_to_rgb, pixel_hash, screen_pixel},
     rare_effect::{
         CoverageRect, draw_bright_border, draw_dot_grid, draw_holographic, draw_rainbow_foil,
         draw_rare_effect, draw_secret_weave,
     },
-    pixel_ops::{hsv_to_rgb, pixel_hash, screen_pixel},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
@@ -120,7 +120,10 @@ impl Renderer {
                 RenderOp::PositionedImage { image } => {
                     draw_positioned_render_image(&mut target, image);
                 }
-                RenderOp::VisualEffect { target: effect_target, effect } => {
+                RenderOp::VisualEffect {
+                    target: effect_target,
+                    effect,
+                } => {
                     draw_document_visual_effect(
                         bundle,
                         &mut target,
@@ -790,7 +793,15 @@ fn draw_document_visual_effect(
         return;
     }
 
-    for area in effect_target_areas(bundle, request, base, language, effect_target, full_rect, art_rect) {
+    for area in effect_target_areas(
+        bundle,
+        request,
+        base,
+        language,
+        effect_target,
+        full_rect,
+        art_rect,
+    ) {
         draw_visual_effect_area(target, area, effect);
     }
 }
@@ -804,7 +815,9 @@ enum EffectArea {
 fn draw_visual_effect_area(target: &mut Pixmap, area: EffectArea, effect: EffectStyle) {
     match area {
         EffectArea::Rect(rect) => draw_visual_effect_rect(target, rect, effect),
-        EffectArea::MaskedRect { rect, mask } => draw_masked_visual_effect(target, rect, &mask, effect),
+        EffectArea::MaskedRect { rect, mask } => {
+            draw_masked_visual_effect(target, rect, &mask, effect)
+        }
     }
 }
 
@@ -977,15 +990,14 @@ fn draw_frosted_foil(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
                 + cloud * 0.06
                 + grit_edge * 0.08)
                 .clamp(0.0, 1.0);
-            let strength =
-                (matte * 0.58
-                    + diagonal_band * 0.34
-                    + rainbow_sweep * 0.25
-                    + sparkle * 0.30
-                    + scratch * 0.14)
-                    * opacity;
-            let hue = (xf * 0.0011 - yf * 0.0016 + diagonal_band * 0.42 + cloud * 0.08)
-                .rem_euclid(1.0);
+            let strength = (matte * 0.58
+                + diagonal_band * 0.34
+                + rainbow_sweep * 0.25
+                + sparkle * 0.30
+                + scratch * 0.14)
+                * opacity;
+            let hue =
+                (xf * 0.0011 - yf * 0.0016 + diagonal_band * 0.42 + cloud * 0.08).rem_euclid(1.0);
             let (r, g, b) = hsv_to_rgb(hue, 0.94, 1.0);
             let silver = (0.04 + matte * 0.20 + sparkle * 0.14).min(0.42);
             let src_r = ((r * (1.0 - silver) + silver) * 255.0).round() as u8;
@@ -1059,9 +1071,7 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
             for lx in luma_x0..luma_x1 {
                 let p = src[(ly * width + lx) as usize];
                 luma.push(
-                    (p.red() as f32 * 0.299
-                        + p.green() as f32 * 0.587
-                        + p.blue() as f32 * 0.114)
+                    (p.red() as f32 * 0.299 + p.green() as f32 * 0.587 + p.blue() as f32 * 0.114)
                         / 255.0,
                 );
             }
@@ -1145,7 +1155,7 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     // Real UTR uses a dominant ~40-50° angle with slight local wobble.
     // We use two main line families at slightly different angles to create
     // the characteristic brushed-metal / fine-engraving look.
-    const PRIMARY_ANGLE: f32 = 0.74;   // ~42° in radians
+    const PRIMARY_ANGLE: f32 = 0.74; // ~42° in radians
     const SECONDARY_ANGLE: f32 = 0.52; // ~30° — subtle cross-set
     let cos_p = PRIMARY_ANGLE.cos();
     let sin_p = PRIMARY_ANGLE.sin();
@@ -1279,10 +1289,7 @@ fn effect_target_areas(
             .into_iter()
             .map(EffectArea::Rect)
             .collect(),
-        EffectTarget::ArtFrame => frame_ring_areas(art_rect, 28, 0, 0)
-            .into_iter()
-            .map(EffectArea::Rect)
-            .collect(),
+        EffectTarget::ArtFrame => art_frame_effect_areas(bundle, request, base, art_rect),
         EffectTarget::CardBorder => card_border_areas()
             .into_iter()
             .map(EffectArea::Rect)
@@ -1294,7 +1301,10 @@ fn effect_target_areas(
     }
 }
 
-fn card_base_areas_excluding_art(full_rect: CoverageRect, art_rect: CoverageRect) -> Vec<CoverageRect> {
+fn card_base_areas_excluding_art(
+    full_rect: CoverageRect,
+    art_rect: CoverageRect,
+) -> Vec<CoverageRect> {
     let fx = full_rect.x;
     let fy = full_rect.y;
     let fw = full_rect.w;
@@ -1345,7 +1355,50 @@ fn card_border_areas() -> Vec<CoverageRect> {
     frame_ring_areas(outer, 54, 0, 0)
 }
 
-fn frame_ring_areas(rect: CoverageRect, thickness: u32, inset_x: u32, inset_y: u32) -> Vec<CoverageRect> {
+fn art_frame_effect_areas(
+    bundle: &AssetBundle,
+    request: &RenderRequest,
+    base: &BaseLayout,
+    art_rect: CoverageRect,
+) -> Vec<EffectArea> {
+    if let Some(frame_rect) = art_frame_coverage_rect(bundle, request, base) {
+        let areas = ring_between_rects(frame_rect, art_rect);
+        if !areas.is_empty() {
+            return areas.into_iter().map(EffectArea::Rect).collect();
+        }
+    }
+
+    frame_ring_areas(art_rect, 28, 0, 0)
+        .into_iter()
+        .map(EffectArea::Rect)
+        .collect()
+}
+
+fn art_frame_coverage_rect(
+    bundle: &AssetBundle,
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Option<CoverageRect> {
+    let mask = if request.card.is_pendulum() {
+        &base.mask.pendulum
+    } else {
+        &base.mask.normal
+    };
+    let mask_image = decode_bundle_image(bundle, &mask.asset)?;
+    Some(CoverageRect {
+        x: mask.x,
+        y: mask.y,
+        w: mask_image.width(),
+        h: mask_image.height(),
+    })
+}
+
+fn frame_ring_areas(
+    rect: CoverageRect,
+    thickness: u32,
+    inset_x: u32,
+    inset_y: u32,
+) -> Vec<CoverageRect> {
     let x = rect.x.saturating_sub(inset_x);
     let y = rect.y.saturating_sub(inset_y);
     let w = rect.w.saturating_add(inset_x.saturating_mul(2));
@@ -1372,6 +1425,53 @@ fn frame_ring_areas(rect: CoverageRect, thickness: u32, inset_x: u32, inset_y: u
             h: h.saturating_sub(t.saturating_mul(2)),
         },
     ]
+}
+
+fn ring_between_rects(outer: CoverageRect, inner: CoverageRect) -> Vec<CoverageRect> {
+    let outer_right = outer.x.saturating_add(outer.w);
+    let outer_bottom = outer.y.saturating_add(outer.h);
+    let inner_left = inner.x.max(outer.x).min(outer_right);
+    let inner_top = inner.y.max(outer.y).min(outer_bottom);
+    let inner_right = inner
+        .x
+        .saturating_add(inner.w)
+        .max(outer.x)
+        .min(outer_right);
+    let inner_bottom = inner
+        .y
+        .saturating_add(inner.h)
+        .max(outer.y)
+        .min(outer_bottom);
+
+    [
+        CoverageRect {
+            x: outer.x,
+            y: outer.y,
+            w: outer.w,
+            h: inner_top.saturating_sub(outer.y),
+        },
+        CoverageRect {
+            x: outer.x,
+            y: inner_bottom,
+            w: outer.w,
+            h: outer_bottom.saturating_sub(inner_bottom),
+        },
+        CoverageRect {
+            x: outer.x,
+            y: inner_top,
+            w: inner_left.saturating_sub(outer.x),
+            h: inner_bottom.saturating_sub(inner_top),
+        },
+        CoverageRect {
+            x: inner_right,
+            y: inner_top,
+            w: outer_right.saturating_sub(inner_right),
+            h: inner_bottom.saturating_sub(inner_top),
+        },
+    ]
+    .into_iter()
+    .filter(|rect| rect.w > 0 && rect.h > 0)
+    .collect()
 }
 
 fn art_coverage_rect(request: &RenderRequest, base: &BaseLayout) -> CoverageRect {
@@ -2991,10 +3091,29 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 #[cfg(test)]
 mod tests {
     use super::{
-        draw_frosted_foil, draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha,
-        scale_pixmap, CoverageRect,
+        CoverageRect, art_coverage_rect, art_frame_coverage_rect, draw_frosted_foil,
+        draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha, scale_pixmap,
     };
+    use crate::{
+        CardKind, RenderOptions, RenderRequest,
+        asset_bundle::{get_bundle, init_global_bundle},
+        model::YgoCardMeta,
+    };
+    use std::{fs, path::PathBuf, sync::Once};
     use tiny_skia::PremultipliedColorU8;
+    use ygopro_cdb_encode_rs::CardDataEntry;
+
+    fn init_bundle() {
+        static INIT: Once = Once::new();
+        let bin_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("yugioh_bundle.bin");
+
+        INIT.call_once(|| {
+            let bytes = fs::read(&bin_path).expect("read yugioh bundle");
+            init_global_bundle(&bytes).expect("initialize yugioh bundle");
+        });
+    }
 
     #[test]
     fn builds_laser_asset_names() {
@@ -3121,5 +3240,43 @@ mod tests {
         );
 
         assert_eq!(split.pixels(), whole.pixels());
+    }
+
+    #[test]
+    fn art_frame_coverage_rect_expands_beyond_art_rect() {
+        init_bundle();
+
+        let request = RenderRequest {
+            kind: CardKind::Yugioh,
+            card: YgoCardMeta::from(CardDataEntry {
+                code: 46986414,
+                name: "ブラック・マジシャン".to_string(),
+                desc: "test".to_string(),
+                type_: 0x41,
+                attack: 2500,
+                defense: 2100,
+                level: 7,
+                race: 0x1,
+                attribute: 0x10,
+                ..CardDataEntry::default()
+            }),
+            options: RenderOptions::default(),
+        };
+
+        let bundle = get_bundle();
+        let art_rect = art_coverage_rect(&request, &bundle.layout.base);
+        let frame_rect =
+            art_frame_coverage_rect(bundle, &request, &bundle.layout.base).expect("frame rect");
+
+        assert!(frame_rect.x <= art_rect.x);
+        assert!(frame_rect.y <= art_rect.y);
+        assert!(frame_rect.x + frame_rect.w >= art_rect.x + art_rect.w);
+        assert!(frame_rect.y + frame_rect.h >= art_rect.y + art_rect.h);
+        assert!(
+            frame_rect.x < art_rect.x
+                || frame_rect.y < art_rect.y
+                || frame_rect.x + frame_rect.w > art_rect.x + art_rect.w
+                || frame_rect.y + frame_rect.h > art_rect.y + art_rect.h
+        );
     }
 }

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::OnceLock;
 
-use cosmic_text::{FontSystem, Metrics, Buffer, Attrs, Family, Shaping, SwashCache, Weight};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
 
 use crate::asset_bundle::get_bundle;
 

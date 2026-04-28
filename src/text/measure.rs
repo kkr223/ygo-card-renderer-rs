@@ -84,8 +84,13 @@ pub fn fit_single_line(
         };
     }
 
-    let estimated =
-        estimate_text_width(text, language, family_name, base_font_size as f32, letter_spacing);
+    let estimated = estimate_text_width(
+        text,
+        language,
+        family_name,
+        base_font_size as f32,
+        letter_spacing,
+    );
     let ratio = (max_width as f32 / estimated).min(1.0);
     let scaled_font = ((base_font_size as f32) * ratio).floor() as u32;
 
@@ -201,9 +206,8 @@ pub fn wrap_text(
             });
 
             let proposed_chars = current_chars + tok_chars;
-            let proposed_width = current_raw
-                + tok_raw
-                + letter_spacing * proposed_chars.saturating_sub(1) as f32;
+            let proposed_width =
+                current_raw + tok_raw + letter_spacing * proposed_chars.saturating_sub(1) as f32;
 
             if !current.is_empty() && proposed_width > max_width {
                 lines.push(std::mem::take(&mut current));
@@ -252,8 +256,7 @@ pub fn total_text_height(line_count: usize, font_size: u32, line_height: f32) ->
     if line_count == 0 {
         0.0
     } else {
-        font_size as f32
-            + (line_count.saturating_sub(1) as f32 * font_size as f32 * line_height)
+        font_size as f32 + (line_count.saturating_sub(1) as f32 * font_size as f32 * line_height)
     }
 }
 
@@ -296,8 +299,7 @@ pub fn first_line_scale(
     max_width: f32,
     letter_spacing: f32,
 ) -> f32 {
-    let estimated =
-        estimate_text_width(text, language, family_name, font_size, letter_spacing);
+    let estimated = estimate_text_width(text, language, family_name, font_size, letter_spacing);
     if estimated <= 0.0 {
         1.0
     } else {
@@ -328,8 +330,7 @@ fn truncate_text_to_width(
         let mut char_count = 0usize;
 
         for ch in text.chars() {
-            let (ch_raw, _) =
-                engine.measure_raw_advances(&ch.to_string(), family_name, font_size);
+            let (ch_raw, _) = engine.measure_raw_advances(&ch.to_string(), family_name, font_size);
             let new_width = raw_acc + ch_raw + letter_spacing * char_count as f32;
             if new_width > max_width {
                 break;
@@ -358,9 +359,7 @@ fn tokenize_line(text: &str) -> Vec<String> {
                 tokens.push(std::mem::take(&mut word));
             }
             tokens.push(" ".to_string());
-        } else if ch.is_ascii_alphanumeric()
-            || matches!(ch, '-' | '\'' | '/' | ':' | ',' | '.')
-        {
+        } else if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '\'' | '/' | ':' | ',' | '.') {
             word.push(ch);
         } else {
             if !word.is_empty() {

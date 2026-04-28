@@ -11,13 +11,13 @@
 use tiny_skia::{Color, Pixmap};
 
 use crate::ruby::{
-    contains_ruby_markup, parse_ruby_text, RubyToken, RT_COMPRESS_RATE, RT_STRETCH_RATE,
-    RUBY_PADDING_MAX,
+    RT_COMPRESS_RATE, RT_STRETCH_RATE, RUBY_PADDING_MAX, RubyToken, contains_ruby_markup,
+    parse_ruby_text,
 };
 
 use super::{
     draw::{
-        draw_multiline_text, draw_text_shadowed_scaled, DrawMultiline, ShadowedText, TextBrush,
+        DrawMultiline, ShadowedText, TextBrush, draw_multiline_text, draw_text_shadowed_scaled,
     },
     measure::{estimate_text_width, max_lines_for_height, total_text_height},
 };

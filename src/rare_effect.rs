@@ -294,8 +294,8 @@ pub(crate) fn draw_dot_grid(target: &mut Pixmap, rect: CoverageRect, opacity: f3
     static DOT_TILE: OnceLock<Pixmap> = OnceLock::new();
     let tile = DOT_TILE.get_or_init(|| {
         let ts = TILE_SIZE;
-        let mut tile = Pixmap::new(ts, ts)
-            .expect("dot tile allocation must succeed for reasonable TILE_SIZE");
+        let mut tile =
+            Pixmap::new(ts, ts).expect("dot tile allocation must succeed for reasonable TILE_SIZE");
         let cx = ts as f32 / 2.0;
         let cy = ts as f32 / 2.0;
         let mut pb = PathBuilder::new();
@@ -368,8 +368,7 @@ pub(crate) fn draw_holographic(target: &mut Pixmap, rect: CoverageRect, opacity:
     static SHIMMER_TILE: OnceLock<Pixmap> = OnceLock::new();
     let noise_tile = SHIMMER_TILE.get_or_init(|| {
         let nt = NOISE_TILE;
-        let mut tile =
-            Pixmap::new(nt, nt).expect("shimmer tile allocation must succeed");
+        let mut tile = Pixmap::new(nt, nt).expect("shimmer tile allocation must succeed");
         let pixels = tile.pixels_mut();
         for py in 0..nt {
             for px in 0..nt {
@@ -621,10 +620,7 @@ mod tests {
         let layers = layers_for(RareType::PserPrint);
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].coverage, RareCoverage::FullCard);
-        assert!(matches!(
-            layers[0].kind,
-            LayerKind::BrightBorder { .. }
-        ));
+        assert!(matches!(layers[0].kind, LayerKind::BrightBorder { .. }));
     }
 
     #[test]
@@ -721,8 +717,7 @@ mod tests {
         let edge_idx = 5;
         let center_idx = 50 * 100 + 50;
         let edge_delta = px.pixels()[edge_idx].blue() as i16 - before[edge_idx].blue() as i16;
-        let center_delta =
-            px.pixels()[center_idx].blue() as i16 - before[center_idx].blue() as i16;
+        let center_delta = px.pixels()[center_idx].blue() as i16 - before[center_idx].blue() as i16;
         assert!(edge_delta > center_delta);
     }
 
