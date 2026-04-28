@@ -1361,19 +1361,31 @@ fn art_frame_effect_areas(
     base: &BaseLayout,
     art_rect: CoverageRect,
 ) -> Vec<EffectArea> {
-    if let Some(frame_rect) = art_frame_coverage_rect(bundle, request, base) {
-        let areas = ring_between_rects(frame_rect, art_rect);
-        if !areas.is_empty() {
-            return areas.into_iter().map(EffectArea::Rect).collect();
-        }
+    let frame_mask = if request.card.is_pendulum() {
+        &base.mask.pendulum
+    } else {
+        &base.mask.normal
+    };
+
+    if let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) {
+        return vec![EffectArea::MaskedRect {
+            rect: CoverageRect {
+                x: frame_mask.x,
+                y: frame_mask.y,
+                w: mask.width(),
+                h: mask.height(),
+            },
+            mask,
+        }];
     }
 
-    frame_ring_areas(art_rect, 28, 0, 0)
+    frame_ring_areas(art_rect, 28, 28, 28)
         .into_iter()
         .map(EffectArea::Rect)
         .collect()
 }
 
+#[cfg(test)]
 fn art_frame_coverage_rect(
     bundle: &AssetBundle,
     request: &RenderRequest,
@@ -1425,53 +1437,6 @@ fn frame_ring_areas(
             h: h.saturating_sub(t.saturating_mul(2)),
         },
     ]
-}
-
-fn ring_between_rects(outer: CoverageRect, inner: CoverageRect) -> Vec<CoverageRect> {
-    let outer_right = outer.x.saturating_add(outer.w);
-    let outer_bottom = outer.y.saturating_add(outer.h);
-    let inner_left = inner.x.max(outer.x).min(outer_right);
-    let inner_top = inner.y.max(outer.y).min(outer_bottom);
-    let inner_right = inner
-        .x
-        .saturating_add(inner.w)
-        .max(outer.x)
-        .min(outer_right);
-    let inner_bottom = inner
-        .y
-        .saturating_add(inner.h)
-        .max(outer.y)
-        .min(outer_bottom);
-
-    [
-        CoverageRect {
-            x: outer.x,
-            y: outer.y,
-            w: outer.w,
-            h: inner_top.saturating_sub(outer.y),
-        },
-        CoverageRect {
-            x: outer.x,
-            y: inner_bottom,
-            w: outer.w,
-            h: outer_bottom.saturating_sub(inner_bottom),
-        },
-        CoverageRect {
-            x: outer.x,
-            y: inner_top,
-            w: inner_left.saturating_sub(outer.x),
-            h: inner_bottom.saturating_sub(inner_top),
-        },
-        CoverageRect {
-            x: inner_right,
-            y: inner_top,
-            w: outer_right.saturating_sub(inner_right),
-            h: inner_bottom.saturating_sub(inner_top),
-        },
-    ]
-    .into_iter()
-    .filter(|rect| rect.w > 0 && rect.h > 0)
-    .collect()
 }
 
 fn art_coverage_rect(request: &RenderRequest, base: &BaseLayout) -> CoverageRect {
@@ -3091,8 +3056,9 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageRect, art_coverage_rect, art_frame_coverage_rect, draw_frosted_foil,
-        draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha, scale_pixmap,
+        CoverageRect, EffectArea, art_coverage_rect, art_frame_coverage_rect,
+        art_frame_effect_areas, draw_frosted_foil, draw_relief_engrave, laser_asset_name,
+        premultiply_pixmap_alpha, scale_pixmap,
     };
     use crate::{
         CardKind, RenderOptions, RenderRequest,
@@ -3278,5 +3244,51 @@ mod tests {
                 || frame_rect.x + frame_rect.w > art_rect.x + art_rect.w
                 || frame_rect.y + frame_rect.h > art_rect.y + art_rect.h
         );
+    }
+
+    #[test]
+    fn art_frame_effect_uses_mask_alpha() {
+        init_bundle();
+
+        let request = RenderRequest {
+            kind: CardKind::Yugioh,
+            card: YgoCardMeta::from(CardDataEntry {
+                code: 46986414,
+                name: "ブラック・マジシャン".to_string(),
+                desc: "test".to_string(),
+                type_: 0x41,
+                attack: 2500,
+                defense: 2100,
+                level: 7,
+                race: 0x1,
+                attribute: 0x10,
+                ..CardDataEntry::default()
+            }),
+            options: RenderOptions::default(),
+        };
+
+        let bundle = get_bundle();
+        let art_rect = art_coverage_rect(&request, &bundle.layout.base);
+        let areas = art_frame_effect_areas(bundle, &request, &bundle.layout.base, art_rect);
+
+        assert_eq!(areas.len(), 1);
+        let EffectArea::MaskedRect { rect, mask } = &areas[0] else {
+            panic!("art frame effect should follow the frame mask alpha");
+        };
+
+        assert!(rect.x < art_rect.x);
+        assert!(rect.y < art_rect.y);
+
+        let art_center_x = art_rect.x + art_rect.w / 2 - rect.x;
+        let art_center_y = art_rect.y + art_rect.h / 2 - rect.y;
+        let frame_edge_x = art_rect.x - rect.x - 1;
+        let frame_edge_y = art_rect.y + art_rect.h / 2 - rect.y;
+        let center_alpha =
+            mask.pixels()[(art_center_y * mask.width() + art_center_x) as usize].alpha();
+        let edge_alpha =
+            mask.pixels()[(frame_edge_y * mask.width() + frame_edge_x) as usize].alpha();
+
+        assert_eq!(center_alpha, 0);
+        assert!(edge_alpha > 0);
     }
 }
