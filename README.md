@@ -36,11 +36,16 @@ ygo-card-renderer-rs/
 │   └── ...
 ├── tests/render.rs         # 集成测试
 ├── benches/render.rs       # Criterion 性能基准
+├── assets/
+│   └── yugioh/
+│       ├── image/          # 源图资源（WebP/SVG，124 个文件）
+│       └── font/           # 源字体资源（woff2，18 个文件）
 ├── scripts/
+│   ├── build_bundle.py          # 从源资源重新打包 yugioh_bundle.bin
 │   ├── render_single_card.ps1   # 单张卡片渲染脚本
 │   └── render_tuning.ps1        # 排版参数微调脚本
 └── resources/
-    └── yugioh_bundle.bin   # 预编译资源包（图集、字体、布局配置）
+    └── yugioh_bundle.bin   # 预编译资源包（图集、字体、布局配置，gitignored）
 ```
 
 ---
@@ -66,6 +71,23 @@ ygo-card-renderer-rs/
 1. 工作区目录中存在 `ygopro-cdb-encode-rs` 和 `ygo-woff2` 两个本地 crate。
 2. 准备好 `resources/yugioh_bundle.bin` 资源包。
 3. 准备好一个 YGOPro 格式的 `.cdb` 数据库文件。
+
+### 重新打包资源包
+
+`resources/yugioh_bundle.bin` 由 `scripts/build_bundle.py` 从 `assets/yugioh/` 中的源资源生成，已在 `.gitignore` 中排除。首次使用或源资源更新后需重新生成：
+
+```bash
+# 安装依赖（需要 Python 3.10+ 和 Pillow）
+pip install pillow
+
+# 从仓库内源资源打包（自动写入 resources/yugioh_bundle.bin）
+python scripts/build_bundle.py
+
+# 可选参数：自定义源目录或输出路径
+python scripts/build_bundle.py --root assets/yugioh --out resources/yugioh_bundle.bin
+```
+
+> **推荐**：使用 `uv` 或 `venv` 隔离 Python 环境，避免污染全局包。
 
 ### 编译
 
