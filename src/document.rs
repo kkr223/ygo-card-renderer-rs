@@ -489,6 +489,7 @@ pub enum TextChannel {
 pub enum EffectTarget {
     Art,
     ArtFrame,
+    CardBase,
     CardBorder,
     FullCard,
     Attribute,
@@ -504,6 +505,9 @@ pub enum EffectStyle {
     Holographic { opacity: f32 },
     BrightBorder { opacity: f32 },
     GoldWash { opacity: f32 },
+    FrostedFoil { opacity: f32 },
+    ConcentricEngrave { opacity: f32 },
+    ReliefEngrave { opacity: f32 },
 }
 
 fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
@@ -578,6 +582,32 @@ fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 85,
                 EffectTarget::LevelOrRank,
                 EffectStyle::Holographic { opacity: 0.58 },
+            );
+        }
+        RareType::Utr => {
+            push_effect(
+                "rare-utr-frosted-card-base",
+                30,
+                EffectTarget::CardBase,
+                EffectStyle::FrostedFoil { opacity: 0.50 },
+            );
+            push_effect(
+                "rare-utr-art-relief",
+                31,
+                EffectTarget::Art,
+                EffectStyle::ReliefEngrave { opacity: 0.82 },
+            );
+            push_effect(
+                "rare-utr-attribute-concentric-engrave",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::ConcentricEngrave { opacity: 0.72 },
+            );
+            push_effect(
+                "rare-utr-level-rank-concentric-engrave",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::ConcentricEngrave { opacity: 0.68 },
             );
         }
         RareType::Hr => push_effect(

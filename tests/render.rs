@@ -462,6 +462,64 @@ fn render_document_expands_sr_and_gr_rare_presets() {
     ));
 }
 
+#[test]
+fn render_document_expands_utr_rare_preset() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 15989522,
+        name: "暗黒騎士ガイア".to_string(),
+        desc: "A relief monster.".to_string(),
+        type_: 0x41,
+        attack: 2600,
+        defense: 2100,
+        level: 7,
+        race: 0x2000,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+    let mut card: YgoCardMeta = entry.into();
+    card.rare = Some(RareType::Utr);
+
+    let document = Renderer::new().build_document(&RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions {
+            language: Some("jp".to_string()),
+            ..RenderOptions::default()
+        },
+    });
+
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::CardBase,
+            effect: EffectStyle::FrostedFoil { .. },
+        }
+    )));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::Art,
+            effect: EffectStyle::ReliefEngrave { .. },
+        }
+    )));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::Attribute,
+            effect: EffectStyle::ConcentricEngrave { .. },
+        }
+    )));
+    assert!(document.nodes.iter().any(|node| matches!(
+        &node.op,
+        RenderOp::VisualEffect {
+            target: EffectTarget::LevelOrRank,
+            effect: EffectStyle::ConcentricEngrave { .. },
+        }
+    )));
+}
+
 fn layout_overrides_from_env() -> LayoutOverrides {
     LayoutOverrides {
         name_top: env_opt_u32("YGO_NAME_TOP"),
@@ -645,6 +703,7 @@ fn render_rare_effects() {
     let rare_variants: &[(&str, RareType)] = &[
         ("sr", RareType::Sr),
         ("ur", RareType::Ur),
+        ("utr", RareType::Utr),
         ("gr", RareType::Gr),
         ("hr", RareType::Hr),
         ("ser", RareType::Ser),

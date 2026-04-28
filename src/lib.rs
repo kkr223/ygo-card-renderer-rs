@@ -1,6 +1,7 @@
 pub mod asset_bundle;
 mod card_logic;
 mod constants;
+pub(crate) mod pixel_ops;
 pub mod document;
 mod layout;
 pub mod model;

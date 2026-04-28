@@ -6,9 +6,11 @@
 //!
 //! No external noise crates are used; all procedural math is inline.
 
+use std::sync::OnceLock;
+
 use tiny_skia::{
     BlendMode, Color, FillRule, FilterQuality, GradientStop, LinearGradient, Paint, PathBuilder,
-    Pattern, Pixmap, Point, PremultipliedColorU8, SpreadMode, Transform,
+    Pattern, Pixmap, Point, SpreadMode, Transform,
 };
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     card_logic::image_frame,
     constants::{CARD_HEIGHT, CARD_WIDTH},
     model::{RareType, YgoCardMeta},
+    pixel_ops::{hsv_to_rgb, pixel_hash, screen_pixel},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +38,14 @@ pub enum RareCoverage {
 ///
 /// Drawing happens in-place; the effect is composited on top of whatever has
 /// already been rendered (frame, art, mask).
+///
+/// # Coverage note
+///
+/// The variants [`RareType::Gr`], [`RareType::Ur`], [`RareType::Utr`], and
+/// [`RareType::Dt`] rely on image assets and per-region masking that are only
+/// available through the full document render pipeline
+/// (`RenderDocument` → `Renderer`).  Calling this function directly for those
+/// variants is a no-op — use `Renderer::render_request_png` instead.
 pub fn draw_rare_effect(
     target: &mut Pixmap,
     rare: RareType,
@@ -137,8 +148,10 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 
         RareType::PserPrint => vec![EffectLayer::full(LayerKind::BrightBorder { opacity: 0.72 })],
 
-        // Gr / Ur / Dt: image-asset path handled elsewhere; no algorithmic layers.
-        RareType::Gr | RareType::Ur | RareType::Dt => vec![],
+        // Gr / Ur / Utr / Dt: effects depend on image assets and masked per-region
+        // compositing that require the full document render pipeline.
+        // See [`draw_rare_effect`] doc comment for details.
+        RareType::Gr | RareType::Ur | RareType::Utr | RareType::Dt => vec![],
     }
 }
 
@@ -187,7 +200,7 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 strength += 0.08;
             }
 
-            let h = hash2(x, y);
+            let h = pixel_hash(x, y);
             if h & 0x3ff < 18 {
                 strength += 0.70;
             } else if h & 0xff < 10 {
@@ -203,34 +216,9 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let alpha = (strength.min(1.0) * opacity * 255.0).round() as u8;
 
             let idx = (y * width + x) as usize;
-            pixels[idx] = screen_over(pixels[idx], src_r, src_g, src_b, alpha);
+            pixels[idx] = screen_pixel(pixels[idx], src_r, src_g, src_b, alpha);
         }
     }
-}
-
-fn screen_over(
-    dst: PremultipliedColorU8,
-    src_r: u8,
-    src_g: u8,
-    src_b: u8,
-    alpha: u8,
-) -> PremultipliedColorU8 {
-    if alpha == 0 {
-        return dst;
-    }
-
-    let blend = |d: u8, s: u8| -> u8 {
-        let effective_src = s as u16 * alpha as u16 / 255;
-        (255 - ((255 - d as u16) * (255 - effective_src) / 255)) as u8
-    };
-
-    PremultipliedColorU8::from_rgba(
-        blend(dst.red(), src_r),
-        blend(dst.green(), src_g),
-        blend(dst.blue(), src_b),
-        dst.alpha(),
-    )
-    .unwrap_or(dst)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,43 +290,32 @@ const TILE_SIZE: u32 = DOT_SPACING;
 
 /// Horizontal/vertical grid of rainbow circles, tiled via `Pattern::new`.
 pub(crate) fn draw_dot_grid(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
-    // Build a TILE_SIZE×TILE_SIZE transparent tile with one circle centred in it.
-    // The hue cycles once across the full tile width in the horizontal direction.
-    let ts = TILE_SIZE;
-    let Some(mut tile) = Pixmap::new(ts, ts) else {
-        return;
-    };
-
-    let cx = ts as f32 / 2.0;
-    let cy = ts as f32 / 2.0;
-
-    // We'll draw many tiles – hue changes per column of the coverage rect.
-    // Since Pattern::new tiles the same pixmap, we bake a neutral white dot
-    // and rely on the gradient overlay that sits next to it (RainbowFoil)
-    // for colour. But we want the dots themselves to carry rainbow colour.
-    //
-    // Strategy: build the tile with a bright white dot (the Screen blend
-    // against the dark card will give a "sparkle" effect), then the
-    // RainbowFoil layer underneath provides the hue tint.
-    // For SER/GSER the RainbowFoil runs first so the order is correct.
-
-    // Draw circle onto tile using PathBuilder.
-    let mut pb = PathBuilder::new();
-    pb.push_circle(cx, cy, DOT_RADIUS);
-    if let Some(circle_path) = pb.finish() {
-        // White dot with full alpha – Screen blend will lighten the card.
-        let mut paint = Paint::default();
-        paint.set_color_rgba8(255, 255, 255, 220);
-        paint.anti_alias = true;
-        paint.blend_mode = BlendMode::Source;
-        tile.fill_path(
-            &circle_path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
+    // The tile is constant — build it once, cache it for all subsequent calls.
+    static DOT_TILE: OnceLock<Pixmap> = OnceLock::new();
+    let tile = DOT_TILE.get_or_init(|| {
+        let ts = TILE_SIZE;
+        let mut tile = Pixmap::new(ts, ts)
+            .expect("dot tile allocation must succeed for reasonable TILE_SIZE");
+        let cx = ts as f32 / 2.0;
+        let cy = ts as f32 / 2.0;
+        let mut pb = PathBuilder::new();
+        pb.push_circle(cx, cy, DOT_RADIUS);
+        if let Some(circle_path) = pb.finish() {
+            let mut paint = Paint::default();
+            // White dot with full alpha – Screen blend will lighten the card.
+            paint.set_color_rgba8(255, 255, 255, 220);
+            paint.anti_alias = true;
+            paint.blend_mode = BlendMode::Source;
+            tile.fill_path(
+                &circle_path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+        tile
+    });
 
     // Tile the dot pattern across the coverage rect using Pattern.
     let tile_ref = tile.as_ref();
@@ -386,40 +363,41 @@ pub(crate) fn draw_holographic(target: &mut Pixmap, rect: CoverageRect, opacity:
     draw_rainbow_foil(target, rect, opacity);
 
     // ── Layer B: procedural shimmer tile ────────────────────────────────────
-    let nt = NOISE_TILE;
-    let Some(mut noise_tile) = Pixmap::new(nt, nt) else {
-        return;
-    };
-
-    // Generate a shimmer pattern: bright pixels scattered using a cheap
-    // deterministic hash — no external noise crate required.
-    let pixels = noise_tile.pixels_mut();
-    for py in 0..nt {
-        for px in 0..nt {
-            // Cheap spatial hash (integer arithmetic only).
-            let h = hash2(px, py);
-            // Only ~15% of pixels become bright sparkle dots.
-            let brightness = if h & 0xFF < 38 {
-                // Intensity varies smoothly within that 15%.
-                ((h >> 8) & 0xFF) as u8
-            } else {
-                0
-            };
-            let a = ((brightness as f32 / 255.0) * opacity * 255.0).round() as u8;
-            // Premultiply: for Screen blend a white sparkle is sufficient.
-            let pm_val = (brightness as u16 * a as u16 / 255) as u8;
-            pixels[(py * nt + px) as usize] =
-                PremultipliedColorU8::from_rgba(pm_val, pm_val, pm_val, a)
-                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    // The shimmer pattern is content-independent (hash of tile coordinates only).
+    // Build the tile once and reuse it across all calls.
+    static SHIMMER_TILE: OnceLock<Pixmap> = OnceLock::new();
+    let noise_tile = SHIMMER_TILE.get_or_init(|| {
+        let nt = NOISE_TILE;
+        let mut tile =
+            Pixmap::new(nt, nt).expect("shimmer tile allocation must succeed");
+        let pixels = tile.pixels_mut();
+        for py in 0..nt {
+            for px in 0..nt {
+                let h = pixel_hash(px, py);
+                // Only ~15 % of pixels become bright sparkle dots.
+                let brightness = if h & 0xFF < 38 {
+                    // Intensity varies smoothly within that 15 %.
+                    ((h >> 8) & 0xFF) as u8
+                } else {
+                    0
+                };
+                // Premultiply: for Screen blend a white sparkle is sufficient.
+                // Bake full opacity into the tile; the Pattern opacity handles
+                // per-call scaling.
+                let pm_val = brightness;
+                pixels[(py * nt + px) as usize] =
+                    tiny_skia::PremultipliedColorU8::from_rgba(pm_val, pm_val, pm_val, brightness)
+                        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+            }
         }
-    }
-
+        tile
+    });
     let tile_ref = noise_tile.as_ref();
     let pattern_shader = Pattern::new(
         tile_ref,
         SpreadMode::Repeat,
         FilterQuality::Nearest,
-        1.0, // opacity already baked into the pixel alphas above
+        opacity, // scale shimmer brightness by the per-call opacity
         Transform::identity(),
     );
 
@@ -506,7 +484,7 @@ pub(crate) fn draw_bright_border(
             }
 
             let shimmer = ((xf * 0.028 + yf * 0.007).sin() * 0.5 + 0.5).powf(2.0);
-            let noise = (hash2(x, y) & 0xff) as f32 / 255.0;
+            let noise = (pixel_hash(x, y) & 0xff) as f32 / 255.0;
             let strength = (strength * (0.70 + shimmer * 0.24 + noise * 0.08)).min(1.0);
             let blue = (0.72 + shimmer * 0.22).min(1.0);
             let src_r = (205.0 + shimmer * 35.0) as u8;
@@ -515,7 +493,7 @@ pub(crate) fn draw_bright_border(
             let alpha = (strength * opacity * 255.0).round() as u8;
 
             let idx = (y * width + x) as usize;
-            pixels[idx] = screen_over(pixels[idx], src_r, src_g, src_b, alpha);
+            pixels[idx] = screen_pixel(pixels[idx], src_r, src_g, src_b, alpha);
         }
     }
 }
@@ -529,39 +507,6 @@ pub(crate) fn draw_bright_border(
 pub(crate) fn hsv_to_color(h: f32, s: f32, v: f32, alpha: f32) -> Color {
     let (r, g, b) = hsv_to_rgb(h, s, v);
     Color::from_rgba(r * alpha, g * alpha, b * alpha, alpha).unwrap_or(Color::TRANSPARENT)
-}
-
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
-    if s == 0.0 {
-        return (v, v, v);
-    }
-    let h6 = (h * 6.0).rem_euclid(6.0);
-    let i = h6 as u32;
-    let f = h6 - i as f32;
-    let p = v * (1.0 - s);
-    let q = v * (1.0 - s * f);
-    let t = v * (1.0 - s * (1.0 - f));
-    match i {
-        0 => (v, t, p),
-        1 => (q, v, p),
-        2 => (p, v, t),
-        3 => (p, q, v),
-        4 => (t, p, v),
-        _ => (v, p, q),
-    }
-}
-
-/// Deterministic 2D integer hash — no external deps.
-/// Returns a u32 whose bits are pseudo-random given (x, y).
-#[inline]
-fn hash2(x: u32, y: u32) -> u32 {
-    let mut h = x
-        .wrapping_mul(2246822519)
-        .wrapping_add(y.wrapping_mul(3266489917));
-    h ^= h >> 13;
-    h = h.wrapping_mul(1274126177);
-    h ^= h >> 16;
-    h
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -686,6 +631,7 @@ mod tests {
     fn gr_ur_dt_no_layers() {
         assert!(layers_for(RareType::Gr).is_empty());
         assert!(layers_for(RareType::Ur).is_empty());
+        assert!(layers_for(RareType::Utr).is_empty());
         assert!(layers_for(RareType::Dt).is_empty());
     }
 

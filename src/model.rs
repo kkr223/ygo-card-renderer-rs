@@ -24,8 +24,10 @@ pub enum RareType {
     Hr,
     /// Gold Rare
     Gr,
-    /// Ultimate Rare
+    /// Ultra Rare
     Ur,
+    /// Ultimate Rare / UTR
+    Utr,
     /// Secret Rare
     Ser,
     /// Gold Secret Rare
@@ -59,6 +61,7 @@ impl RareType {
             Self::Hr => "hr",
             Self::Gr => "gr",
             Self::Ur => "ur",
+            Self::Utr => "utr",
             Self::Ser => "ser",
             Self::Gser => "gser",
             Self::Pser => "pser",

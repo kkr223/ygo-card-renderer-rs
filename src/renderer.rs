@@ -26,6 +26,7 @@ use crate::{
         CoverageRect, draw_bright_border, draw_dot_grid, draw_holographic, draw_rainbow_foil,
         draw_rare_effect, draw_secret_weave,
     },
+    pixel_ops::{hsv_to_rgb, pixel_hash, screen_pixel},
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, TextBrush,
@@ -782,6 +783,9 @@ fn draw_document_visual_effect(
     let art_rect = art_coverage_rect(request, base);
 
     if let EffectStyle::BrightBorder { opacity } = effect {
+        // BrightBorder operates on both the outer card edge and the art frame
+        // bevel simultaneously, so it needs both rects and cannot be expressed
+        // as a single EffectArea.  Dispatch it here before the area loop.
         draw_bright_border(target, full_rect, art_rect, opacity);
         return;
     }
@@ -811,6 +815,11 @@ fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: Effe
         EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
         EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),
         EffectStyle::GoldWash { opacity } => draw_gold_wash(target, rect, opacity),
+        EffectStyle::FrostedFoil { opacity } => draw_frosted_foil(target, rect, opacity),
+        EffectStyle::ConcentricEngrave { opacity } => {
+            draw_concentric_engrave(target, rect, opacity)
+        }
+        EffectStyle::ReliefEngrave { opacity } => draw_relief_engrave(target, rect, opacity),
         EffectStyle::BrightBorder { .. } => {}
     }
 }
@@ -821,34 +830,50 @@ fn draw_masked_visual_effect(
     mask: &Pixmap,
     effect: EffectStyle,
 ) {
-    let before = target.pixels().to_vec();
-    draw_visual_effect_rect(target, rect, effect);
-
     let width = target.width();
     let height = target.height();
+    let x_start = rect.x.min(width);
+    let y_start = rect.y.min(height);
     let x_end = rect.x.saturating_add(rect.w).min(width);
     let y_end = rect.y.saturating_add(rect.h).min(height);
+    let sub_w = (x_end - x_start) as usize;
+
+    // Snapshot only the rect sub-region instead of the full pixmap (~4 MB → KB).
+    let mut before_sub: Vec<tiny_skia::PremultipliedColorU8> =
+        Vec::with_capacity(sub_w * (y_end - y_start) as usize);
+    {
+        let src = target.pixels();
+        for y in y_start..y_end {
+            let row_start = (y * width + x_start) as usize;
+            before_sub.extend_from_slice(&src[row_start..row_start + sub_w]);
+        }
+    }
+
+    draw_visual_effect_rect(target, rect, effect);
+
     let mask_w = mask.width();
     let mask_h = mask.height();
-    let pixels = target.pixels_mut();
     let mask_pixels = mask.pixels();
+    let pixels = target.pixels_mut();
 
-    for y in rect.y.min(height)..y_end {
-        let local_y = y.saturating_sub(rect.y);
-        for x in rect.x.min(width)..x_end {
-            let local_x = x.saturating_sub(rect.x);
+    for (iy, y) in (y_start..y_end).enumerate() {
+        let local_y = y - y_start;
+        for (ix, x) in (x_start..x_end).enumerate() {
+            let local_x = x - x_start;
             let target_idx = (y * width + x) as usize;
+            let before_idx = iy * sub_w + ix;
+
             if local_x >= mask_w || local_y >= mask_h {
-                pixels[target_idx] = before[target_idx];
+                pixels[target_idx] = before_sub[before_idx];
                 continue;
             }
 
             let mask_idx = (local_y * mask_w + local_x) as usize;
             let alpha = mask_pixels[mask_idx].alpha() as u16;
             if alpha == 0 {
-                pixels[target_idx] = before[target_idx];
+                pixels[target_idx] = before_sub[before_idx];
             } else if alpha < 255 {
-                pixels[target_idx] = lerp_premul(before[target_idx], pixels[target_idx], alpha);
+                pixels[target_idx] = lerp_premul(before_sub[before_idx], pixels[target_idx], alpha);
             }
         }
     }
@@ -882,7 +907,7 @@ fn draw_gold_wash(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
             let local_x = x.saturating_sub(rect.x) as f32;
             let local_y = y.saturating_sub(rect.y) as f32;
             let shimmer = ((local_x * 0.035 - local_y * 0.018).sin() * 0.5 + 0.5).powf(1.6);
-            let noise = (hash_for_effect(x, y) & 0xff) as f32 / 255.0;
+            let noise = (pixel_hash(x, y) & 0xff) as f32 / 255.0;
             let alpha = (opacity * (0.72 + shimmer * 0.20 + noise * 0.08)).clamp(0.0, 1.0);
             let gold_r = (206.0 + shimmer * 38.0) as u8;
             let gold_g = (146.0 + shimmer * 70.0) as u8;
@@ -904,14 +929,232 @@ fn draw_gold_wash(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     }
 }
 
-#[inline]
-fn hash_for_effect(x: u32, y: u32) -> u32 {
-    let mut h = x
-        .wrapping_mul(374761393)
-        .wrapping_add(y.wrapping_mul(668265263));
-    h ^= h >> 13;
-    h = h.wrapping_mul(1274126177);
-    h ^ (h >> 16)
+fn draw_frosted_foil(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let width = target.width();
+    let height = target.height();
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    let pixels = target.pixels_mut();
+
+    for y in rect.y.min(height)..y_end {
+        for x in rect.x.min(width)..x_end {
+            let xf = x.saturating_sub(rect.x) as f32;
+            let yf = y.saturating_sub(rect.y) as f32;
+            let h0 = pixel_hash(x, y);
+            let h1 = pixel_hash(x / 7, y / 7);
+            let h2 = pixel_hash(x / 15, y / 15);
+            let h3 = pixel_hash(x / 31, y / 31);
+            let pin = (h0 & 0xff) as f32 / 255.0;
+            let coarse = (h1 & 0xff) as f32 / 255.0;
+            let pebble = (h2 & 0xff) as f32 / 255.0;
+            let cloud = (h3 & 0xff) as f32 / 255.0;
+            let sparkle = if h0 & 0x7ff < 18 || h1 & 0x1ff < 10 {
+                1.0
+            } else {
+                0.0
+            };
+            let scratch = if ((x + y * 3) % 53 < 3) && (h1 & 0x3f < 8) {
+                1.0
+            } else {
+                0.0
+            };
+            let diagonal_band = ((xf * 0.0038 - yf * 0.0025).sin() * 0.5 + 0.5).powf(0.70);
+            let rainbow_sweep = ((xf * 0.0017 + yf * 0.0007).sin() * 0.5 + 0.5).powf(0.82);
+            let grit_edge = ((xf * 0.22 - yf * 0.14).sin() * 0.5 + 0.5).powf(2.4);
+            let cluster = if coarse > 0.68 {
+                ((coarse - 0.68) / 0.32).powf(0.62)
+            } else {
+                0.0
+            };
+            let pebble_high = if pebble > 0.60 {
+                ((pebble - 0.60) / 0.40).powf(0.82)
+            } else {
+                0.0
+            };
+            let matte = (cluster * 0.38
+                + pebble_high * 0.20
+                + pin * 0.06
+                + cloud * 0.06
+                + grit_edge * 0.08)
+                .clamp(0.0, 1.0);
+            let strength =
+                (matte * 0.58
+                    + diagonal_band * 0.34
+                    + rainbow_sweep * 0.25
+                    + sparkle * 0.30
+                    + scratch * 0.14)
+                    * opacity;
+            let hue = (xf * 0.0011 - yf * 0.0016 + diagonal_band * 0.42 + cloud * 0.08)
+                .rem_euclid(1.0);
+            let (r, g, b) = hsv_to_rgb(hue, 0.94, 1.0);
+            let silver = (0.04 + matte * 0.20 + sparkle * 0.14).min(0.42);
+            let src_r = ((r * (1.0 - silver) + silver) * 255.0).round() as u8;
+            let src_g = ((g * (1.0 - silver) + silver) * 255.0).round() as u8;
+            let src_b = ((b * (1.0 - silver) + silver) * 255.0).round() as u8;
+            let alpha = (strength.clamp(0.0, 1.0) * 224.0).round() as u8;
+
+            let idx = (y * width + x) as usize;
+            pixels[idx] = screen_pixel(pixels[idx], src_r, src_g, src_b, alpha);
+        }
+    }
+}
+
+fn draw_concentric_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let width = target.width();
+    let height = target.height();
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    let cx = rect.x as f32 + rect.w as f32 * 0.5;
+    let cy = rect.y as f32 + rect.h as f32 * 0.5;
+    let pixels = target.pixels_mut();
+
+    for y in rect.y.min(height)..y_end {
+        for x in rect.x.min(width)..x_end {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let angle = dy.atan2(dx);
+            let rings = ((dist * 0.36).sin().abs()).powf(9.0);
+            let radial = ((angle * 18.0 + dist * 0.04).sin().abs()).powf(8.0);
+            let strength = (rings * 0.78 + radial * 0.22) * opacity;
+            if strength < 0.015 {
+                continue;
+            }
+            let hue = (0.11 + dist * 0.006 + angle * 0.04).rem_euclid(1.0);
+            let (r, g, b) = hsv_to_rgb(hue, 0.9, 1.0);
+            let alpha = (strength.clamp(0.0, 1.0) * 220.0).round() as u8;
+            let idx = (y * width + x) as usize;
+            pixels[idx] = screen_pixel(
+                pixels[idx],
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+                alpha,
+            );
+        }
+    }
+}
+
+fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let width = target.width();
+    let height = target.height();
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+
+    // Pre-compute luma for the rect (+ SAMPLE_RADIUS border) so we never
+    // need to clone the full-card pixel buffer (~4 MB → a few KB for small
+    // rects like Attribute / LevelOrRank targets).
+    const SAMPLE_RADIUS: u32 = 4;
+    let luma_x0 = rect.x.saturating_sub(SAMPLE_RADIUS);
+    let luma_y0 = rect.y.saturating_sub(SAMPLE_RADIUS);
+    let luma_x1 = x_end.saturating_add(SAMPLE_RADIUS).min(width);
+    let luma_y1 = y_end.saturating_add(SAMPLE_RADIUS).min(height);
+    let luma_w = luma_x1 - luma_x0;
+
+    let mut luma: Vec<f32> = Vec::with_capacity(((luma_x1 - luma_x0) * (luma_y1 - luma_y0)) as usize);
+    {
+        let src = target.pixels();
+        for ly in luma_y0..luma_y1 {
+            for lx in luma_x0..luma_x1 {
+                let p = src[(ly * width + lx) as usize];
+                luma.push(
+                    (p.red() as f32 * 0.299
+                        + p.green() as f32 * 0.587
+                        + p.blue() as f32 * 0.114)
+                        / 255.0,
+                );
+            }
+        }
+    }
+
+    // Sample luma at absolute card coordinates (clamped to the luma buffer).
+    let sample = |ax: i32, ay: i32| -> f32 {
+        let cx = ax.clamp(luma_x0 as i32, luma_x1 as i32 - 1) as u32;
+        let cy = ay.clamp(luma_y0 as i32, luma_y1 as i32 - 1) as u32;
+        luma[((cy - luma_y0) * luma_w + (cx - luma_x0)) as usize]
+    };
+
+    let pixels = target.pixels_mut();
+
+    for y in rect.y.min(height)..y_end {
+        for x in rect.x.min(width)..x_end {
+            if x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
+                continue;
+            }
+
+            let xf = x.saturating_sub(rect.x) as f32;
+            let yf = y.saturating_sub(rect.y) as f32;
+            let h_l = sample(x as i32 - 3, y as i32 - 2);
+            let h_r = sample(x as i32 + 3, y as i32 + 2);
+            let tl = sample(x as i32 - 1, y as i32 - 1);
+            let tc = sample(x as i32, y as i32 - 1);
+            let tr = sample(x as i32 + 1, y as i32 - 1);
+            let ml = sample(x as i32 - 1, y as i32);
+            let mc = sample(x as i32, y as i32);
+            let mr = sample(x as i32 + 1, y as i32);
+            let bl = sample(x as i32 - 1, y as i32 + 1);
+            let bc = sample(x as i32, y as i32 + 1);
+            let br = sample(x as i32 + 1, y as i32 + 1);
+            let sobel_x = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+            let sobel_y = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+            let edge = (sobel_x * sobel_x + sobel_y * sobel_y).sqrt().min(1.0);
+            let avg = (tl + tc + tr + ml + mr + bl + bc + br) / 8.0;
+            let detail = (mc - avg).abs().min(1.0);
+            let slope = (h_l - h_r).clamp(-1.0, 1.0);
+            let light = (slope * 1.35 - sobel_x * 0.32 - sobel_y * 0.44).clamp(-1.0, 1.0);
+            let contour = ((mc * 52.0 + xf * 0.012 - yf * 0.018).sin().abs()).powf(18.0);
+            let diagonal = ((xf * 0.06 + yf * 0.10 + mc * 3.2).sin().abs()).powf(15.0);
+            let sweep = (((xf - yf) * 0.020 + mc * 5.8 + (xf * 0.004).sin() * 1.8)
+                .sin()
+                .abs())
+            .powf(13.0);
+            let fan_center_x = rect.w as f32 * 0.72;
+            let fan_center_y = rect.h as f32 * 0.58;
+            let dist = ((xf - fan_center_x).powi(2) + (yf - fan_center_y).powi(2)).sqrt();
+            let radial = ((dist * 0.095 + mc * 3.5).sin().abs()).powf(13.0);
+            let groove = (contour * 0.34 + diagonal * 0.20 + sweep * 0.30 + radial * 0.16)
+                * (0.42 + edge * 0.58);
+            let strength = (edge * 0.95 + detail * 0.36 + groove * 0.72 + slope.abs() * 0.36)
+                * opacity;
+            if strength < 0.012 {
+                continue;
+            }
+            let hue = (0.08 + xf * 0.001 + yf * 0.002 + sweep * 0.12 + mc * 0.12)
+                .rem_euclid(1.0);
+            let (r, g, b) = hsv_to_rgb(hue, 0.84, 1.0);
+            let highlight = (strength * (0.28 + light.max(0.0) * 0.72 + groove * 0.32))
+                .clamp(0.0, 1.0);
+            let idx = (y * width + x) as usize;
+            if light < -0.03 && (edge > 0.025 || groove > 0.10) {
+                pixels[idx] =
+                    darken_pixel(pixels[idx], (-light * strength * 0.62).clamp(0.0, 0.46));
+            }
+            if highlight > 0.0 {
+                let alpha = (highlight * 245.0).round() as u8;
+                pixels[idx] = screen_pixel(
+                    pixels[idx],
+                    (r * 255.0).round() as u8,
+                    (g * 255.0).round() as u8,
+                    (b * 255.0).round() as u8,
+                    alpha,
+                );
+            }
+        }
+    }
+}
+
+fn darken_pixel(
+    dst: tiny_skia::PremultipliedColorU8,
+    amount: f32,
+) -> tiny_skia::PremultipliedColorU8 {
+    let keep = (1.0 - amount.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    tiny_skia::PremultipliedColorU8::from_rgba(
+        (dst.red() as f32 * keep).round() as u8,
+        (dst.green() as f32 * keep).round() as u8,
+        (dst.blue() as f32 * keep).round() as u8,
+        dst.alpha(),
+    )
+    .unwrap_or(dst)
 }
 
 fn effect_target_areas(
@@ -926,6 +1169,10 @@ fn effect_target_areas(
     match target {
         EffectTarget::FullCard => vec![EffectArea::Rect(full_rect)],
         EffectTarget::Art => vec![EffectArea::Rect(art_rect)],
+        EffectTarget::CardBase => card_base_areas_excluding_art(full_rect, art_rect)
+            .into_iter()
+            .map(EffectArea::Rect)
+            .collect(),
         EffectTarget::ArtFrame => frame_ring_areas(art_rect, 28, 0, 0)
             .into_iter()
             .map(EffectArea::Rect)
@@ -939,6 +1186,47 @@ fn effect_target_areas(
             .collect(),
         EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, request, base),
     }
+}
+
+fn card_base_areas_excluding_art(full_rect: CoverageRect, art_rect: CoverageRect) -> Vec<CoverageRect> {
+    let fx = full_rect.x;
+    let fy = full_rect.y;
+    let fw = full_rect.w;
+    let fh = full_rect.h;
+    let ax = art_rect.x.min(fx + fw);
+    let ay = art_rect.y.min(fy + fh);
+    let ar = art_rect.x.saturating_add(art_rect.w).min(fx + fw);
+    let ab = art_rect.y.saturating_add(art_rect.h).min(fy + fh);
+
+    [
+        CoverageRect {
+            x: fx,
+            y: fy,
+            w: fw,
+            h: ay.saturating_sub(fy),
+        },
+        CoverageRect {
+            x: fx,
+            y: ab,
+            w: fw,
+            h: fy.saturating_add(fh).saturating_sub(ab),
+        },
+        CoverageRect {
+            x: fx,
+            y: ay,
+            w: ax.saturating_sub(fx),
+            h: ab.saturating_sub(ay),
+        },
+        CoverageRect {
+            x: ar,
+            y: ay,
+            w: fx.saturating_add(fw).saturating_sub(ar),
+            h: ab.saturating_sub(ay),
+        },
+    ]
+    .into_iter()
+    .filter(|rect| rect.w > 0 && rect.h > 0)
+    .collect()
 }
 
 fn card_border_areas() -> Vec<CoverageRect> {
@@ -2596,7 +2884,11 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 
 #[cfg(test)]
 mod tests {
-    use super::{laser_asset_name, premultiply_pixmap_alpha, scale_pixmap};
+    use super::{
+        draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha, scale_pixmap,
+        CoverageRect,
+    };
+    use tiny_skia::PremultipliedColorU8;
 
     #[test]
     fn builds_laser_asset_names() {
@@ -2638,5 +2930,38 @@ mod tests {
         assert_eq!(partial.red(), 100);
         assert_eq!(partial.green(), 50);
         assert_eq!(partial.blue(), 25);
+    }
+
+    #[test]
+    fn relief_engrave_responds_to_height_map_edges() {
+        let mut pixmap = tiny_skia::Pixmap::new(64, 32).expect("pixmap");
+        {
+            let pixels = pixmap.pixels_mut();
+            for y in 0..32 {
+                for x in 0..64 {
+                    let value = if x < 32 { 45 } else { 180 };
+                    pixels[(y * 64 + x) as usize] =
+                        PremultipliedColorU8::from_rgba(value, value, value, 255).unwrap();
+                }
+            }
+        }
+        let before = pixmap.pixels().to_vec();
+        draw_relief_engrave(
+            &mut pixmap,
+            CoverageRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 32,
+            },
+            0.7,
+        );
+        let edge_idx = (16 * 64 + 32) as usize;
+        let flat_idx = (16 * 64 + 8) as usize;
+        let edge_delta =
+            pixmap.pixels()[edge_idx].red() as i16 - before[edge_idx].red() as i16;
+        let flat_delta =
+            pixmap.pixels()[flat_idx].red() as i16 - before[flat_idx].red() as i16;
+        assert!(edge_delta.abs() > flat_delta.abs());
     }
 }
