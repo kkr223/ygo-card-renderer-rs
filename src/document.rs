@@ -595,7 +595,7 @@ fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 "rare-utr-art-relief",
                 31,
                 EffectTarget::Art,
-                EffectStyle::ReliefEngrave { opacity: 0.82 },
+                EffectStyle::ReliefEngrave { opacity: 1.00 },
             );
             push_effect(
                 "rare-utr-attribute-concentric-engrave",

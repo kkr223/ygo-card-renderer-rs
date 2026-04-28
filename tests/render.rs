@@ -688,7 +688,7 @@ fn render_rare_effects() {
 
     // 普通效果怪兽：黑魔术师（code=46986414）作为示例基底
     let base_entry = CardDataEntry {
-        code: 46986414,
+        code: 2511,
         name: "ブラック・マジシャン".to_string(),
         desc: "このカードは決闘者の魂、「ブラック・マジシャン」である。".to_string(),
         type_: 0x41,

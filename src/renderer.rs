@@ -938,8 +938,8 @@ fn draw_frosted_foil(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
 
     for y in rect.y.min(height)..y_end {
         for x in rect.x.min(width)..x_end {
-            let xf = x.saturating_sub(rect.x) as f32;
-            let yf = y.saturating_sub(rect.y) as f32;
+            let xf = x as f32;
+            let yf = y as f32;
             let h0 = pixel_hash(x, y);
             let h1 = pixel_hash(x / 7, y / 7);
             let h2 = pixel_hash(x / 15, y / 15);
@@ -1041,17 +1041,18 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     let x_end = rect.x.saturating_add(rect.w).min(width);
     let y_end = rect.y.saturating_add(rect.h).min(height);
 
-    // Pre-compute luma for the rect (+ SAMPLE_RADIUS border) so we never
-    // need to clone the full-card pixel buffer (~4 MB → a few KB for small
-    // rects like Attribute / LevelOrRank targets).
-    const SAMPLE_RADIUS: u32 = 4;
+    // Pre-compute luma for the rect (+ SAMPLE_RADIUS border).
+    // A wider radius lets us compute local variance for better flat-area
+    // detection — real UTR engraving only appears in genuinely smooth regions.
+    const SAMPLE_RADIUS: u32 = 6;
     let luma_x0 = rect.x.saturating_sub(SAMPLE_RADIUS);
     let luma_y0 = rect.y.saturating_sub(SAMPLE_RADIUS);
     let luma_x1 = x_end.saturating_add(SAMPLE_RADIUS).min(width);
     let luma_y1 = y_end.saturating_add(SAMPLE_RADIUS).min(height);
     let luma_w = luma_x1 - luma_x0;
 
-    let mut luma: Vec<f32> = Vec::with_capacity(((luma_x1 - luma_x0) * (luma_y1 - luma_y0)) as usize);
+    let mut luma: Vec<f32> =
+        Vec::with_capacity(((luma_x1 - luma_x0) * (luma_y1 - luma_y0)) as usize);
     {
         let src = target.pixels();
         for ly in luma_y0..luma_y1 {
@@ -1074,7 +1075,82 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
         luma[((cy - luma_y0) * luma_w + (cx - luma_x0)) as usize]
     };
 
+    // ── Pre-compute colour-variance map ──────────────────────────────────
+    // Real UTR engraving is absent in areas with rich colour variation.
+    // We compute per-pixel local colour variance (R,G,B channels) over a
+    // 5×5 neighbourhood and use it to suppress the effect in colourful
+    // regions that the luma-only Sobel filter might miss.
+    let var_radius: u32 = 2; // 5×5 window
+    let var_x0 = rect.x.saturating_sub(var_radius);
+    let var_y0 = rect.y.saturating_sub(var_radius);
+    let var_x1 = x_end.saturating_add(var_radius).min(width);
+    let var_y1 = y_end.saturating_add(var_radius).min(height);
+    let var_w = var_x1 - var_x0;
+
+    // Store per-pixel colour variance as a flat Vec aligned to (var_x0, var_y0).
+    let color_var: Vec<f32> = {
+        let src = target.pixels();
+        let mut buf = Vec::with_capacity(((var_x1 - var_x0) * (var_y1 - var_y0)) as usize);
+        for vy in var_y0..var_y1 {
+            for vx in var_x0..var_x1 {
+                let mut sum_r = 0.0_f32;
+                let mut sum_g = 0.0_f32;
+                let mut sum_b = 0.0_f32;
+                let mut sum_r2 = 0.0_f32;
+                let mut sum_g2 = 0.0_f32;
+                let mut sum_b2 = 0.0_f32;
+                let mut count = 0.0_f32;
+                let ky0 = vy.saturating_sub(var_radius).max(var_y0);
+                let ky1 = (vy + var_radius + 1).min(var_y1);
+                let kx0 = vx.saturating_sub(var_radius).max(var_x0);
+                let kx1 = (vx + var_radius + 1).min(var_x1);
+                for ky in ky0..ky1 {
+                    for kx in kx0..kx1 {
+                        let p = src[(ky * width + kx) as usize];
+                        let r = p.red() as f32 / 255.0;
+                        let g = p.green() as f32 / 255.0;
+                        let b = p.blue() as f32 / 255.0;
+                        sum_r += r;
+                        sum_g += g;
+                        sum_b += b;
+                        sum_r2 += r * r;
+                        sum_g2 += g * g;
+                        sum_b2 += b * b;
+                        count += 1.0;
+                    }
+                }
+                let var = if count > 1.0 {
+                    let vr = (sum_r2 / count - (sum_r / count).powi(2)).max(0.0);
+                    let vg = (sum_g2 / count - (sum_g / count).powi(2)).max(0.0);
+                    let vb = (sum_b2 / count - (sum_b / count).powi(2)).max(0.0);
+                    vr + vg + vb
+                } else {
+                    0.0
+                };
+                buf.push(var);
+            }
+        }
+        buf
+    };
+
+    let sample_var = |ax: u32, ay: u32| -> f32 {
+        let cx = ax.clamp(var_x0, var_x1 - 1);
+        let cy = ay.clamp(var_y0, var_y1 - 1);
+        color_var[((cy - var_y0) * var_w + (cx - var_x0)) as usize]
+    };
+
     let pixels = target.pixels_mut();
+
+    // ── Primary diagonal angle for the parallel scratch lines ────────────
+    // Real UTR uses a dominant ~40-50° angle with slight local wobble.
+    // We use two main line families at slightly different angles to create
+    // the characteristic brushed-metal / fine-engraving look.
+    const PRIMARY_ANGLE: f32 = 0.74;   // ~42° in radians
+    const SECONDARY_ANGLE: f32 = 0.52; // ~30° — subtle cross-set
+    let cos_p = PRIMARY_ANGLE.cos();
+    let sin_p = PRIMARY_ANGLE.sin();
+    let cos_s = SECONDARY_ANGLE.cos();
+    let sin_s = SECONDARY_ANGLE.sin();
 
     for y in rect.y.min(height)..y_end {
         for x in rect.x.min(width)..x_end {
@@ -1084,8 +1160,8 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
 
             let xf = x.saturating_sub(rect.x) as f32;
             let yf = y.saturating_sub(rect.y) as f32;
-            let h_l = sample(x as i32 - 3, y as i32 - 2);
-            let h_r = sample(x as i32 + 3, y as i32 + 2);
+
+            // ── Flat-area gating ─────────────────────────────────────────
             let tl = sample(x as i32 - 1, y as i32 - 1);
             let tc = sample(x as i32, y as i32 - 1);
             let tr = sample(x as i32 + 1, y as i32 - 1);
@@ -1095,50 +1171,80 @@ fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
             let bl = sample(x as i32 - 1, y as i32 + 1);
             let bc = sample(x as i32, y as i32 + 1);
             let br = sample(x as i32 + 1, y as i32 + 1);
+
+            // Sobel edge magnitude
             let sobel_x = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
             let sobel_y = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
             let edge = (sobel_x * sobel_x + sobel_y * sobel_y).sqrt().min(1.0);
+
+            // Local luma deviation from neighbourhood mean
             let avg = (tl + tc + tr + ml + mr + bl + bc + br) / 8.0;
             let detail = (mc - avg).abs().min(1.0);
-            let slope = (h_l - h_r).clamp(-1.0, 1.0);
-            let light = (slope * 1.35 - sobel_x * 0.32 - sobel_y * 0.44).clamp(-1.0, 1.0);
-            let contour = ((mc * 52.0 + xf * 0.012 - yf * 0.018).sin().abs()).powf(18.0);
-            let diagonal = ((xf * 0.06 + yf * 0.10 + mc * 3.2).sin().abs()).powf(15.0);
-            let sweep = (((xf - yf) * 0.020 + mc * 5.8 + (xf * 0.004).sin() * 1.8)
-                .sin()
-                .abs())
-            .powf(13.0);
-            let fan_center_x = rect.w as f32 * 0.72;
-            let fan_center_y = rect.h as f32 * 0.58;
-            let dist = ((xf - fan_center_x).powi(2) + (yf - fan_center_y).powi(2)).sqrt();
-            let radial = ((dist * 0.095 + mc * 3.5).sin().abs()).powf(13.0);
-            let groove = (contour * 0.34 + diagonal * 0.20 + sweep * 0.30 + radial * 0.16)
-                * (0.42 + edge * 0.58);
-            let strength = (edge * 0.95 + detail * 0.36 + groove * 0.72 + slope.abs() * 0.36)
-                * opacity;
-            if strength < 0.012 {
+
+            // Colour variance gate — suppress in colourful regions
+            let cvar = sample_var(x, y);
+            let color_gate = (1.0 - (cvar * 28.0).clamp(0.0, 1.0)).powf(1.4);
+
+            // Combined flat-area mask: must pass edge, detail, AND colour gates
+            let edge_gate = (1.0 - (edge * 6.0).clamp(0.0, 1.0)).powf(2.0);
+            let detail_gate = (1.0 - (detail * 14.0).clamp(0.0, 1.0)).powf(1.5);
+            let flat_mask = edge_gate * detail_gate * color_gate;
+            if flat_mask < 0.02 {
                 continue;
             }
-            let hue = (0.08 + xf * 0.001 + yf * 0.002 + sweep * 0.12 + mc * 0.12)
-                .rem_euclid(1.0);
-            let (r, g, b) = hsv_to_rgb(hue, 0.84, 1.0);
-            let highlight = (strength * (0.28 + light.max(0.0) * 0.72 + groove * 0.32))
-                .clamp(0.0, 1.0);
+
+            // ── Parallel diagonal scratch lines ──────────────────────────
+            // Project pixel position onto the line-perpendicular axis to
+            // create evenly-spaced parallel lines.  A small luma-dependent
+            // phase shift makes lines wobble slightly with the artwork's
+            // tonal contours, mimicking how real engraving follows surfaces.
+            let luma_wobble = mc * 1.6;
+
+            // Primary line family — dominant scratches at ~42°
+            let proj_p = xf * cos_p + yf * sin_p;
+            let line_p1 = ((proj_p * 0.38 + luma_wobble).sin().abs()).powf(18.0);
+            let line_p2 = ((proj_p * 0.72 + luma_wobble * 0.7).sin().abs()).powf(22.0);
+            let line_p3 = ((proj_p * 1.45 + luma_wobble * 0.4).sin().abs()).powf(28.0);
+
+            // Secondary line family — finer cross-scratches at ~30°
+            let proj_s = xf * cos_s + yf * sin_s;
+            let line_s1 = ((proj_s * 0.55 + luma_wobble * 0.5).sin().abs()).powf(24.0);
+            let line_s2 = ((proj_s * 1.10 + luma_wobble * 0.3).sin().abs()).powf(30.0);
+
+            // Contour lines that follow luma iso-levels (subtle)
+            let contour = ((mc * 32.0 + xf * 0.004 - yf * 0.006).sin().abs()).powf(26.0);
+
+            // Combine: primary dominates, secondary adds texture, contour adds depth
+            let line = line_p1 * 0.32
+                + line_p2 * 0.22
+                + line_p3 * 0.10
+                + line_s1 * 0.16
+                + line_s2 * 0.08
+                + contour * 0.12;
+
+            let strength = line * flat_mask * opacity;
+            if strength < 0.008 {
+                continue;
+            }
+
+            // ── Colour: silvery metallic with very subtle hue shift ──────
+            // Real UTR engravings are predominantly silver/white with a
+            // faint rainbow sheen, not strongly coloured.
+            let hue = (0.08 + xf * 0.0005 + yf * 0.0007 + mc * 0.03).rem_euclid(1.0);
+            let (r, g, b) = hsv_to_rgb(hue, 0.18, 1.0);
+
             let idx = (y * width + x) as usize;
-            if light < -0.03 && (edge > 0.025 || groove > 0.10) {
-                pixels[idx] =
-                    darken_pixel(pixels[idx], (-light * strength * 0.62).clamp(0.0, 0.46));
-            }
-            if highlight > 0.0 {
-                let alpha = (highlight * 245.0).round() as u8;
-                pixels[idx] = screen_pixel(
-                    pixels[idx],
-                    (r * 255.0).round() as u8,
-                    (g * 255.0).round() as u8,
-                    (b * 255.0).round() as u8,
-                    alpha,
-                );
-            }
+            // Slight darken to simulate the engraved groove shadow
+            pixels[idx] = darken_pixel(pixels[idx], (strength * 0.12).clamp(0.0, 0.14));
+            // Screen-blend the metallic highlight
+            let alpha = (strength.clamp(0.0, 1.0) * 145.0).round() as u8;
+            pixels[idx] = screen_pixel(
+                pixels[idx],
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+                alpha,
+            );
         }
     }
 }
@@ -2885,8 +2991,8 @@ fn bundle_style_icon_margins(language: Option<&str>, bundle: &AssetBundle) -> Ic
 #[cfg(test)]
 mod tests {
     use super::{
-        draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha, scale_pixmap,
-        CoverageRect,
+        draw_frosted_foil, draw_relief_engrave, laser_asset_name, premultiply_pixmap_alpha,
+        scale_pixmap, CoverageRect,
     };
     use tiny_skia::PremultipliedColorU8;
 
@@ -2933,7 +3039,7 @@ mod tests {
     }
 
     #[test]
-    fn relief_engrave_responds_to_height_map_edges() {
+    fn relief_engrave_prefers_flat_height_map_regions() {
         let mut pixmap = tiny_skia::Pixmap::new(64, 32).expect("pixmap");
         {
             let pixels = pixmap.pixels_mut();
@@ -2956,12 +3062,64 @@ mod tests {
             },
             0.7,
         );
-        let edge_idx = (16 * 64 + 32) as usize;
-        let flat_idx = (16 * 64 + 8) as usize;
-        let edge_delta =
-            pixmap.pixels()[edge_idx].red() as i16 - before[edge_idx].red() as i16;
-        let flat_delta =
-            pixmap.pixels()[flat_idx].red() as i16 - before[flat_idx].red() as i16;
-        assert!(edge_delta.abs() > flat_delta.abs());
+
+        let avg_delta = |x0: u32, x1: u32| -> f32 {
+            let mut total = 0.0_f32;
+            let mut count = 0_u32;
+            for y in 4..28 {
+                for x in x0..x1 {
+                    let idx = (y * 64 + x) as usize;
+                    total += (pixmap.pixels()[idx].red() as i16 - before[idx].red() as i16)
+                        .unsigned_abs() as f32;
+                    count += 1;
+                }
+            }
+            total / count as f32
+        };
+
+        let flat_delta = avg_delta(6, 24);
+        let edge_delta = avg_delta(30, 34);
+        assert!(flat_delta > edge_delta);
+    }
+
+    #[test]
+    fn frosted_foil_is_continuous_across_split_rects() {
+        let mut whole = tiny_skia::Pixmap::new(64, 64).expect("whole pixmap");
+        whole.fill(tiny_skia::Color::from_rgba8(40, 55, 70, 255));
+        draw_frosted_foil(
+            &mut whole,
+            CoverageRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64,
+            },
+            0.5,
+        );
+
+        let mut split = tiny_skia::Pixmap::new(64, 64).expect("split pixmap");
+        split.fill(tiny_skia::Color::from_rgba8(40, 55, 70, 255));
+        draw_frosted_foil(
+            &mut split,
+            CoverageRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 21,
+            },
+            0.5,
+        );
+        draw_frosted_foil(
+            &mut split,
+            CoverageRect {
+                x: 0,
+                y: 21,
+                w: 64,
+                h: 43,
+            },
+            0.5,
+        );
+
+        assert_eq!(split.pixels(), whole.pixels());
     }
 }
