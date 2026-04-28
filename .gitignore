@@ -3,5 +3,12 @@
 Cargo.lock.orig
 /resources/
 /export/
+script/
 
 *.cdb
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
