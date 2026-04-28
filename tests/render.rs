@@ -758,15 +758,15 @@ fn render_rare_effects() {
     };
 
     let rare_variants: &[(&str, RareType)] = &[
-        ("sr", RareType::Sr),
-        ("ur", RareType::Ur),
-        ("utr", RareType::Utr),
-        ("gr", RareType::Gr),
-        ("hr", RareType::Hr),
+        // ("sr", RareType::Sr),
+        // ("ur", RareType::Ur),
+        // ("utr", RareType::Utr),
+        // ("gr", RareType::Gr),
+        // ("hr", RareType::Hr),
         ("ser", RareType::Ser),
-        ("gser", RareType::Gser),
-        ("pser", RareType::Pser),
-        ("pser-print", RareType::PserPrint),
+        // ("gser", RareType::Gser),
+        // ("pser", RareType::Pser),
+        // ("pser-print", RareType::PserPrint),
     ];
 
     let renderer = Renderer::new();

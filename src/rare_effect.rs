@@ -134,7 +134,7 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 
         RareType::Hr => vec![EffectLayer::full(LayerKind::Holographic { opacity: 0.45 })],
 
-        RareType::Ser => vec![EffectLayer::full(LayerKind::SecretWeave { opacity: 0.66 })],
+        RareType::Ser => vec![EffectLayer::art(LayerKind::SecretWeave { opacity: 0.66 })],
 
         RareType::Gser => vec![
             EffectLayer::full(LayerKind::SecretWeave { opacity: 0.58 }),
@@ -159,11 +159,11 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 // Primitive: Secret Rare Weave
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dense prismatic foil: micro line weave + broad diagonal colour bands.
+/// Dense prismatic foil: micro square flakes activated by horizontal light bands.
 ///
-/// Real SER foil reads less like round dots and more like an embossed
-/// lenticular mesh. This direct pixel pass keeps the card art visible while
-/// adding the small square/short-line highlights seen across the full card.
+/// Real SER foil is made from tiny reflective units spread over the whole area.
+/// Depending on the viewing light, tight horizontal rows catch as bright silver
+/// flashes; nearby flakes and gaps pick up dimmer rainbow diffraction.
 pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     let width = target.width();
     let height = target.height();
@@ -178,47 +178,165 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
 
             let xf = local_x as f32;
             let yf = local_y as f32;
-            let diagonal = ((xf * 0.018 - yf * 0.026).sin() * 0.5 + 0.5).powf(1.8);
-            let cross = (((xf + yf) * 0.012).sin() * 0.5 + 0.5).powf(2.4);
+            let nx = if rect.w > 1 {
+                xf / (rect.w - 1) as f32
+            } else {
+                0.0
+            };
+            let ny = if rect.h > 1 {
+                yf / (rect.h - 1) as f32
+            } else {
+                0.0
+            };
 
-            let vertical = local_x % 5 <= 1 && local_y % 17 < 13;
-            let horizontal = local_y % 5 <= 1 && local_x % 19 < 14;
-            let stitch = (local_x + local_y * 2) % 11 == 0;
-            let cell = local_x % 5 <= 1 && local_y % 5 <= 1;
+            let row_wave = yf + (xf * 0.018).sin() * 3.4 + (xf * 0.006).cos() * 2.0;
+            let fine_row_dist = wrapped_distance(row_wave, 9.0);
+            let fine_row = smooth_band(fine_row_dist, 1.9, 0.42);
 
-            let mut strength = 0.035 + diagonal * 0.16 + cross * 0.08;
-            if vertical {
-                strength += 0.26;
-            }
-            if horizontal {
-                strength += 0.18;
-            }
-            if cell {
-                strength += 0.16;
-            }
-            if stitch {
-                strength += 0.08;
+            let h_band_a = rect.h as f32 * 0.24 + (rect.h as f32 * 0.014) * (xf * 0.011).sin();
+            let h_band_b = rect.h as f32 * 0.46 + (rect.h as f32 * 0.018) * (xf * 0.008).cos();
+            let h_band_c = rect.h as f32 * 0.69 + (rect.h as f32 * 0.016) * (xf * 0.010).sin();
+            let h_band_d = rect.h as f32 * 0.88 + (rect.h as f32 * 0.012) * (xf * 0.013).cos();
+            let h_dist = (yf - h_band_a)
+                .abs()
+                .min((yf - h_band_b).abs())
+                .min((yf - h_band_c).abs())
+                .min((yf - h_band_d).abs());
+            let broad_row = smooth_band(h_dist, 18.0, 2.8);
+
+            let v_band_a = rect.w as f32 * 0.18 + (rect.w as f32 * 0.010) * (yf * 0.012).cos();
+            let v_band_b = rect.w as f32 * 0.52 + (rect.w as f32 * 0.012) * (yf * 0.009).sin();
+            let v_band_c = rect.w as f32 * 0.82 + (rect.w as f32 * 0.011) * (yf * 0.010).cos();
+            let v_dist = (xf - v_band_a)
+                .abs()
+                .min((xf - v_band_b).abs())
+                .min((xf - v_band_c).abs());
+            let vertical_glint = smooth_band(v_dist, 10.0, 1.5) * 0.34;
+
+            let light = (fine_row * 0.30 + broad_row * 0.56 + vertical_glint).min(1.0);
+            let hot_row = fine_row * broad_row;
+            let crossing = hot_row * vertical_glint;
+
+            let cell_x = local_x / 5;
+            let cell_y = local_y / 5;
+            let in_cell_x = local_x % 5;
+            let in_cell_y = local_y % 5;
+            let cell_hash = pixel_hash(cell_x, cell_y);
+
+            let dot = in_cell_x <= 2 && in_cell_y <= 2;
+            let short_vertical = in_cell_x <= 2
+                && in_cell_y <= 3
+                && ((cell_hash >> 3) & 0x7) < 4
+                && (cell_y + cell_x * 2) % 5 != 0;
+            let short_horizontal = in_cell_y <= 2
+                && in_cell_x <= 3
+                && ((cell_hash >> 8) & 0x7) < 3
+                && (cell_x + cell_y * 3) % 6 == 0;
+            let unit = dot || short_vertical;
+            let hot_unit = unit || short_horizontal;
+            let near_unit = in_cell_x <= 3 && in_cell_y <= 3;
+            let unit_shape = if unit {
+                1.0
+            } else if short_horizontal {
+                0.78
+            } else if near_unit {
+                0.28
+            } else {
+                0.0
+            };
+            let gap_shape = if unit {
+                0.0
+            } else if near_unit {
+                0.22
+            } else {
+                0.08
+            };
+
+            let random_speck = cell_hash & 0xff < 26;
+            let local_speck = pixel_hash(x, y) & 0xfff < 18;
+            let speck_strength = if random_speck && hot_unit {
+                0.20
+            } else if local_speck {
+                0.12
+            } else {
+                0.0
+            };
+
+            let diffraction = (fine_row * 0.18 + broad_row * 0.42 + vertical_glint * 0.22).min(1.0);
+            let base_filter = unit_shape * 0.090 + gap_shape * 0.040;
+            let mut strength = base_filter;
+            strength += unit_shape * diffraction * 0.44;
+            strength += gap_shape * diffraction * 0.16;
+            strength += unit_shape * crossing * 0.38;
+            strength += speck_strength;
+
+            let direct_reflection =
+                hot_unit && (hot_row > 0.34 || crossing > 0.08 || (random_speck && light > 0.40));
+            if direct_reflection {
+                strength += 0.34 + hot_row * 0.28 + crossing * 0.32;
             }
 
-            let h = pixel_hash(x, y);
-            if h & 0x3ff < 18 {
-                strength += 0.70;
-            } else if h & 0xff < 10 {
-                strength += 0.24;
-            }
-
-            let hue = (xf * 0.0022 - yf * 0.0036 + diagonal * 0.16 + cross * 0.10).rem_euclid(1.0);
-            let (r, g, b) = hsv_to_rgb(hue, 0.92, 1.0);
-            let silver = if vertical || horizontal { 0.18 } else { 0.04 };
+            let lower_left = ((1.0 - nx) * 0.58 + ny * 0.42).clamp(0.0, 1.0);
+            let upper_right = (nx * 0.60 + (1.0 - ny) * 0.40).clamp(0.0, 1.0);
+            let hue = (0.095 * lower_left
+                + 0.63 * upper_right
+                + broad_row * 0.10
+                + fine_row * 0.035
+                + cell_hash as f32 * 0.000_011)
+                .rem_euclid(1.0);
+            let value = (0.54 + broad_row * 0.28 + fine_row * 0.12 + vertical_glint * 0.16)
+                .clamp(0.42, 1.0);
+            let reflection_desaturate = if direct_reflection { 0.24_f32 } else { 0.0 };
+            let saturation = (0.92 - reflection_desaturate).clamp(0.58, 0.96);
+            let (r, g, b) = hsv_to_rgb(hue, saturation, value);
+            let silver = if direct_reflection {
+                0.68
+            } else if unit {
+                0.05 + light * 0.17
+            } else {
+                0.01 + diffraction * 0.05
+            };
             let src_r = ((r * (1.0 - silver) + silver) * 255.0).round() as u8;
             let src_g = ((g * (1.0 - silver) + silver) * 255.0).round() as u8;
             let src_b = ((b * (1.0 - silver) + silver) * 255.0).round() as u8;
             let alpha = (strength.min(1.0) * opacity * 255.0).round() as u8;
 
             let idx = (y * width + x) as usize;
+            let darken = ((1.0 - light).powf(1.25) * 0.11 + upper_right * 0.025).clamp(0.0, 0.14);
+            pixels[idx] = darken_pixel(pixels[idx], darken);
             pixels[idx] = screen_pixel(pixels[idx], src_r, src_g, src_b, alpha);
         }
     }
+}
+
+fn wrapped_distance(value: f32, period: f32) -> f32 {
+    let wrapped = value.rem_euclid(period);
+    wrapped.min(period - wrapped)
+}
+
+fn smooth_band(distance: f32, outer: f32, hot_core: f32) -> f32 {
+    if distance <= hot_core {
+        1.0
+    } else if distance >= outer {
+        0.0
+    } else {
+        let t = 1.0 - (distance - hot_core) / (outer - hot_core);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
+fn darken_pixel(
+    dst: tiny_skia::PremultipliedColorU8,
+    amount: f32,
+) -> tiny_skia::PremultipliedColorU8 {
+    let keep = (1.0 - amount.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    tiny_skia::PremultipliedColorU8::from_rgba(
+        (dst.red() as f32 * keep).round() as u8,
+        (dst.green() as f32 * keep).round() as u8,
+        (dst.blue() as f32 * keep).round() as u8,
+        dst.alpha(),
+    )
+    .unwrap_or(dst)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -562,10 +680,10 @@ mod tests {
     }
 
     #[test]
-    fn ser_maps_to_secret_weave_fullcard() {
+    fn ser_maps_to_secret_weave_art_only() {
         let layers = layers_for(RareType::Ser);
         assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0].coverage, RareCoverage::FullCard);
+        assert_eq!(layers[0].coverage, RareCoverage::Art);
         assert!(matches!(layers[0].kind, LayerKind::SecretWeave { .. }));
     }
 
