@@ -60,8 +60,16 @@ pub(super) fn draw_frosted_foil(target: &mut Pixmap, rect: CoverageRect, opacity
             let coarse = (h1 & 0xff) as f32 / 255.0;
             let pebble = (h2 & 0xff) as f32 / 255.0;
             let cloud = (h3 & 0xff) as f32 / 255.0;
-            let sparkle = if h0 & 0x7ff < 18 || h1 & 0x1ff < 10 { 1.0 } else { 0.0 };
-            let scratch = if ((x + y * 3) % 53 < 3) && (h1 & 0x3f < 8) { 1.0 } else { 0.0 };
+            let sparkle = if h0 & 0x7ff < 18 || h1 & 0x1ff < 10 {
+                1.0
+            } else {
+                0.0
+            };
+            let scratch = if ((x + y * 3) % 53 < 3) && (h1 & 0x3f < 8) {
+                1.0
+            } else {
+                0.0
+            };
             let diagonal_band = ((xf * 0.0038 - yf * 0.0025).sin() * 0.5 + 0.5).powf(0.70);
             let rainbow_sweep = ((xf * 0.0017 + yf * 0.0007).sin() * 0.5 + 0.5).powf(0.82);
             let grit_edge = ((xf * 0.22 - yf * 0.14).sin() * 0.5 + 0.5).powf(2.4);
@@ -162,9 +170,7 @@ pub(super) fn draw_relief_engrave(target: &mut Pixmap, rect: CoverageRect, opaci
             for lx in luma_x0..luma_x1 {
                 let p = src[(ly * width + lx) as usize];
                 luma.push(
-                    (p.red() as f32 * 0.299
-                        + p.green() as f32 * 0.587
-                        + p.blue() as f32 * 0.114)
+                    (p.red() as f32 * 0.299 + p.green() as f32 * 0.587 + p.blue() as f32 * 0.114)
                         / 255.0,
                 );
             }

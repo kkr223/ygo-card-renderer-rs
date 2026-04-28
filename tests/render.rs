@@ -384,6 +384,63 @@ fn render_document_expands_ur_rare_preset() {
 }
 
 #[test]
+fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 46986414,
+        name: "Red-Eyes Dark Dragoon".to_string(),
+        desc: "A secret rare monster.".to_string(),
+        type_: 0x4000041,
+        attack: 3000,
+        defense: 2500,
+        level: 8,
+        race: 0x2000,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+    let mut card: YgoCardMeta = entry.into();
+    card.rare = Some(RareType::Ser);
+
+    let document = Renderer::new().build_document(&RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions {
+            language: Some("en".to_string()),
+            ..RenderOptions::default()
+        },
+    });
+
+    let effect_targets: Vec<_> = document
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.op {
+            RenderOp::VisualEffect { target, effect } => Some((*target, *effect)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(effect_targets.len(), 3);
+    assert!(effect_targets.iter().any(|(target, effect)| matches!(
+        (target, effect),
+        (EffectTarget::Art, EffectStyle::SecretWeave { .. })
+    )));
+    assert!(effect_targets.iter().any(|(target, effect)| matches!(
+        (target, effect),
+        (EffectTarget::Attribute, EffectStyle::SecretWeave { .. })
+    )));
+    assert!(effect_targets.iter().any(|(target, effect)| matches!(
+        (target, effect),
+        (EffectTarget::LevelOrRank, EffectStyle::SecretWeave { .. })
+    )));
+    assert!(
+        !effect_targets
+            .iter()
+            .any(|(target, _)| *target == EffectTarget::FullCard)
+    );
+}
+
+#[test]
 fn render_document_expands_sr_and_gr_rare_presets() {
     init_bundle();
 

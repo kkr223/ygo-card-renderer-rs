@@ -20,7 +20,12 @@ pub(super) fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -
     match name_color {
         NameColor::Auto => {
             if auto_name_light(card) {
-                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+                Color::from_rgba8(
+                    NAME_COLOR_LIGHT.0,
+                    NAME_COLOR_LIGHT.1,
+                    NAME_COLOR_LIGHT.2,
+                    255,
+                )
             } else {
                 Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
             }
@@ -28,12 +33,20 @@ pub(super) fn resolve_name_color(name_color: &NameColor, card: &CardDataEntry) -
         NameColor::Dark => {
             Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
         }
-        NameColor::Light => {
-            Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
-        }
+        NameColor::Light => Color::from_rgba8(
+            NAME_COLOR_LIGHT.0,
+            NAME_COLOR_LIGHT.1,
+            NAME_COLOR_LIGHT.2,
+            255,
+        ),
         NameColor::Custom(hex) => parse_hex_color(hex).unwrap_or_else(|| {
             if auto_name_light(card) {
-                Color::from_rgba8(NAME_COLOR_LIGHT.0, NAME_COLOR_LIGHT.1, NAME_COLOR_LIGHT.2, 255)
+                Color::from_rgba8(
+                    NAME_COLOR_LIGHT.0,
+                    NAME_COLOR_LIGHT.1,
+                    NAME_COLOR_LIGHT.2,
+                    255,
+                )
             } else {
                 Color::from_rgba8(NAME_COLOR_DARK.0, NAME_COLOR_DARK.1, NAME_COLOR_DARK.2, 255)
             }

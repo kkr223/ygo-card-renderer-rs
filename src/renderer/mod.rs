@@ -6,8 +6,11 @@ mod visual_effects;
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 
 use crate::{
-    asset_bundle::{get_bundle, BaseLayout},
-    card_logic::{build_effect_line, description_height, description_y, frame_asset_name, split_pendulum_description},
+    asset_bundle::{BaseLayout, get_bundle},
+    card_logic::{
+        build_effect_line, description_height, description_y, frame_asset_name,
+        split_pendulum_description,
+    },
     constants::{BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, TEXT_COLOR_DARK},
     document::{EffectStyle, EffectTarget, RenderDocument, RenderOp},
     layout::layout_style,
@@ -28,9 +31,7 @@ use draw_card::{
     draw_package, draw_password, draw_pendulum_description, draw_positioned_render_image,
     draw_spell_trap_line, draw_stats,
 };
-use effect_areas::{
-    art_coverage_rect, draw_visual_effect_area, effect_target_areas,
-};
+use effect_areas::{art_coverage_rect, draw_visual_effect_area, effect_target_areas};
 
 pub struct Renderer;
 
@@ -479,10 +480,10 @@ struct ResolvedPaint {
 mod tests {
     use super::{
         CoverageRect, art_coverage_rect,
+        draw_card::{laser_asset_name, premultiply_pixmap_alpha},
         effect_areas::{EffectArea, art_frame_coverage_rect, art_frame_effect_areas},
         scale_pixmap,
         visual_effects::{draw_frosted_foil, draw_relief_engrave},
-        draw_card::{laser_asset_name, premultiply_pixmap_alpha},
     };
     use crate::{
         CardKind, RenderOptions, RenderRequest,

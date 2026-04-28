@@ -3,13 +3,15 @@ use tiny_skia::{Color, Paint, Pixmap, PixmapPaint, Rect, Transform};
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout},
     card_logic::{
-        attribute_asset_name, build_scale_line, display_stat, image_frame, localized_brackets, localized_spell_trap_name,
-        spell_trap_subtype_icon_asset, uses_rank,
+        attribute_asset_name, build_scale_line, display_stat, image_frame, localized_brackets,
+        localized_spell_trap_name, spell_trap_subtype_icon_asset, uses_rank,
     },
     constants::{CARD_WIDTH, PASSWORD_COLOR, TEXT_COLOR_DARK, TYPE_COLOR},
     document::{ImageAlign, ImageFit, RenderRect, TextChannel},
     layout::LayoutStyle,
-    model::{NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest, TextPaint},
+    model::{
+        NameColor, OutFrameEffectBox, PositionedRenderImage, RenderError, RenderRequest, TextPaint,
+    },
     ruby::{contains_ruby_markup, parse_ruby_text, strip_ruby_markup},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, TextAlign, draw_multiline_ruby_text,
@@ -19,8 +21,8 @@ use crate::{
 };
 
 use super::color::{
-    parse_hex_color, resolve_name_brush, resolve_name_color,
-    resolve_name_shadow_brush, resolve_title_brush, resolve_title_shadow_brush, text_brush,
+    parse_hex_color, resolve_name_brush, resolve_name_color, resolve_name_shadow_brush,
+    resolve_title_brush, resolve_title_shadow_brush, text_brush,
 };
 
 // ── Image loading ─────────────────────────────────────────────────────────────
@@ -1197,8 +1199,16 @@ pub(super) fn draw_stats(
             &base.pendulum_scale.right.default
         };
 
-        let scale_font_size = if language == Some("astral") { 84.0 } else { 98.0 };
-        let scale_letter_spacing = if language == Some("astral") { 0.0 } else { -10.0 };
+        let scale_font_size = if language == Some("astral") {
+            84.0
+        } else {
+            98.0
+        };
+        let scale_letter_spacing = if language == Some("astral") {
+            0.0
+        } else {
+            -10.0
+        };
         let scale_color =
             Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255);
 
@@ -1254,13 +1264,21 @@ fn draw_stat_separator(
             .layout
             .resource_rules
             .atk_link_asset
-            .get(if language == Some("astral") { "astral" } else { "default" })
+            .get(if language == Some("astral") {
+                "astral"
+            } else {
+                "default"
+            })
     } else {
         bundle
             .layout
             .resource_rules
             .atk_def_asset
-            .get(if language == Some("astral") { "astral" } else { "default" })
+            .get(if language == Some("astral") {
+                "astral"
+            } else {
+                "default"
+            })
     };
 
     if let Some(asset_name) = asset_name {

@@ -23,9 +23,7 @@ mod util;
 pub use measure::{estimate_text_width, fit_single_line, fit_single_line_compressed};
 
 // ── draw ─────────────────────────────────────────────────────────────────────
-pub use draw::{
-    DrawTextLine, TextAlign, TextBrush, draw_multiline_text, draw_text_line,
-};
+pub use draw::{DrawTextLine, TextAlign, TextBrush, draw_multiline_text, draw_text_line};
 
 // ── ruby ─────────────────────────────────────────────────────────────────────
 pub use ruby::{

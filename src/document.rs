@@ -616,12 +616,26 @@ fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
             EffectTarget::FullCard,
             EffectStyle::Holographic { opacity: 0.45 },
         ),
-        RareType::Ser => push_effect(
-            "rare-ser-full-weave",
-            30,
-            EffectTarget::FullCard,
-            EffectStyle::SecretWeave { opacity: 0.66 },
-        ),
+        RareType::Ser => {
+            push_effect(
+                "rare-ser-art-weave",
+                30,
+                EffectTarget::Art,
+                EffectStyle::SecretWeave { opacity: 0.66 },
+            );
+            push_effect(
+                "rare-ser-attribute-weave",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::SecretWeave { opacity: 0.66 },
+            );
+            push_effect(
+                "rare-ser-level-rank-weave",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::SecretWeave { opacity: 0.66 },
+            );
+        }
         RareType::Gser => {
             push_effect(
                 "rare-gser-full-weave",
