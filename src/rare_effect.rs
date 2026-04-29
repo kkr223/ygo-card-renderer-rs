@@ -159,11 +159,14 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 // Primitive: Secret Rare Weave
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dense prismatic foil: micro square flakes activated by horizontal light bands.
+const SECRET_FLAKE_CELL: u32 = 6;
+
+/// Dense prismatic foil: dot/short-dash flakes with directional diffraction.
 ///
-/// Real SER foil is made from tiny reflective units spread over the whole area.
-/// Depending on the viewing light, tight horizontal rows catch as bright silver
-/// flashes; nearby flakes and gaps pick up dimmer rainbow diffraction.
+/// Real SeR foil is a coated micro-grating over the illustration: tiny dots and
+/// short vertical dashes catch light independently, while the ruling direction
+/// throws several horizontal/vertical rainbow streaks across the art. This pass
+/// models both parts with deterministic procedural facets and a virtual light.
 pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
     let width = target.width();
     let height = target.height();
@@ -188,124 +191,208 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             } else {
                 0.0
             };
+            let rect_w = rect.w.max(1) as f32;
+            let rect_h = rect.h.max(1) as f32;
+            let cross = secret_cross_diffraction(xf, yf, rect_w, rect_h);
 
-            let row_wave = yf + (xf * 0.018).sin() * 3.4 + (xf * 0.006).cos() * 2.0;
-            let fine_row_dist = wrapped_distance(row_wave, 9.0);
-            let fine_row = smooth_band(fine_row_dist, 1.9, 0.42);
-
-            let h_band_a = rect.h as f32 * 0.24 + (rect.h as f32 * 0.014) * (xf * 0.011).sin();
-            let h_band_b = rect.h as f32 * 0.46 + (rect.h as f32 * 0.018) * (xf * 0.008).cos();
-            let h_band_c = rect.h as f32 * 0.69 + (rect.h as f32 * 0.016) * (xf * 0.010).sin();
-            let h_band_d = rect.h as f32 * 0.88 + (rect.h as f32 * 0.012) * (xf * 0.013).cos();
-            let h_dist = (yf - h_band_a)
-                .abs()
-                .min((yf - h_band_b).abs())
-                .min((yf - h_band_c).abs())
-                .min((yf - h_band_d).abs());
-            let broad_row = smooth_band(h_dist, 18.0, 2.8);
-
-            let v_band_a = rect.w as f32 * 0.18 + (rect.w as f32 * 0.010) * (yf * 0.012).cos();
-            let v_band_b = rect.w as f32 * 0.52 + (rect.w as f32 * 0.012) * (yf * 0.009).sin();
-            let v_band_c = rect.w as f32 * 0.82 + (rect.w as f32 * 0.011) * (yf * 0.010).cos();
-            let v_dist = (xf - v_band_a)
-                .abs()
-                .min((xf - v_band_b).abs())
-                .min((xf - v_band_c).abs());
-            let vertical_glint = smooth_band(v_dist, 10.0, 1.5) * 0.34;
-
-            let light = (fine_row * 0.30 + broad_row * 0.56 + vertical_glint).min(1.0);
-            let hot_row = fine_row * broad_row;
-            let crossing = hot_row * vertical_glint;
-
-            let cell_x = local_x / 5;
-            let cell_y = local_y / 5;
-            let in_cell_x = local_x % 5;
-            let in_cell_y = local_y % 5;
+            let cell_x = local_x / SECRET_FLAKE_CELL;
+            let cell_y = local_y / SECRET_FLAKE_CELL;
+            let in_cell_x = local_x % SECRET_FLAKE_CELL;
+            let in_cell_y = local_y % SECRET_FLAKE_CELL;
             let cell_hash = pixel_hash(cell_x, cell_y);
+            let neighbor_hash =
+                pixel_hash(cell_x.wrapping_mul(17) + 11, cell_y.wrapping_mul(31) + 7);
 
-            let dot = in_cell_x <= 2 && in_cell_y <= 2;
-            let short_vertical = in_cell_x <= 2
-                && in_cell_y <= 3
-                && ((cell_hash >> 3) & 0x7) < 4
-                && (cell_y + cell_x * 2) % 5 != 0;
-            let short_horizontal = in_cell_y <= 2
-                && in_cell_x <= 3
-                && ((cell_hash >> 8) & 0x7) < 3
-                && (cell_x + cell_y * 3) % 6 == 0;
-            let unit = dot || short_vertical;
-            let hot_unit = unit || short_horizontal;
-            let near_unit = in_cell_x <= 3 && in_cell_y <= 3;
-            let unit_shape = if unit {
-                1.0
-            } else if short_horizontal {
-                0.78
-            } else if near_unit {
-                0.28
-            } else {
-                0.0
+            let shape = cell_hash & 0xf;
+            let facet_shape = match shape {
+                0..=4 => in_cell_x <= 3 && in_cell_y <= 3,
+                5..=11 => (2..=3).contains(&in_cell_x) && in_cell_y <= 5,
+                12 => in_cell_x <= 3 && in_cell_y <= 5,
+                13 => in_cell_x <= 1 && in_cell_y <= 5,
+                14 => in_cell_x >= 4 && in_cell_y <= 5,
+                _ => in_cell_x + in_cell_y <= 3,
             };
-            let gap_shape = if unit {
-                0.0
-            } else if near_unit {
-                0.22
-            } else {
-                0.08
+            let facet_shape = facet_shape && (cell_hash & 0xff) < 246;
+
+            let broken_row = (local_y % 12 <= 3 || cross.horizontal > 0.18)
+                && in_cell_x <= 5
+                && (neighbor_hash & 0x3) != 0
+                && (cell_x + ((neighbor_hash >> 5) & 0x3)) % 7 != 0;
+            let broken_column = (local_x % 18 <= 1 || cross.vertical > 0.22)
+                && in_cell_y <= 5
+                && ((neighbor_hash >> 9) & 0x7) < 2
+                && (cell_y + ((neighbor_hash >> 13) & 0x3)) % 5 != 0;
+
+            let jitter = (((cell_hash >> 18) & 0xff) as f32 / 255.0 - 0.5) * 0.16;
+            let angle = match (cell_hash >> 3) & 0x7 {
+                0 | 1 | 2 => jitter,
+                3 | 4 | 5 => std::f32::consts::FRAC_PI_2 + jitter,
+                6 => std::f32::consts::FRAC_PI_4 + jitter,
+                _ => -std::f32::consts::FRAC_PI_4 + jitter,
             };
+            let normal_x = angle.cos();
+            let normal_y = angle.sin();
+            let groove_phase = ((neighbor_hash >> 4) & 0xff) as f32 / 255.0 * 2.35;
+            let groove_coord = xf * normal_x + yf * normal_y + groove_phase;
+            let groove = diffraction_ridge(groove_coord, 2.35, 0.72);
 
-            let random_speck = cell_hash & 0xff < 26;
-            let local_speck = pixel_hash(x, y) & 0xfff < 18;
-            let speck_strength = if random_speck && hot_unit {
-                0.20
-            } else if local_speck {
-                0.12
-            } else {
-                0.0
-            };
+            let tilt = (((cell_hash >> 24) & 0xff) as f32 / 255.0 - 0.5) * 0.92;
+            let light_x = rect_w * 0.72;
+            let light_y = rect_h * 0.20;
+            let to_light_x = light_x - xf;
+            let to_light_y = light_y - yf;
+            let light_distance = (to_light_x * to_light_x + to_light_y * to_light_y).sqrt();
+            let inv_light_distance = 1.0 / light_distance.max(1.0);
+            let light_dir_x = to_light_x * inv_light_distance;
+            let light_dir_y = to_light_y * inv_light_distance;
+            let view_x = 0.36_f32;
+            let view_y = -0.93_f32;
+            let alignment = (light_dir_x * normal_x * 0.62
+                + light_dir_y * normal_y * 0.62
+                + view_x * normal_x * 0.38
+                + view_y * normal_y * 0.38
+                + tilt)
+                .abs()
+                .clamp(0.0, 1.0)
+                .powf(2.35);
+            let random_facet = ((neighbor_hash >> 16) & 0xff) as f32 / 255.0;
+            let angular_phase =
+                light_distance * 0.035 + alignment * 2.7 + random_facet * 3.1 + cross.phase;
+            let distance_gate = diffraction_ridge(angular_phase, 1.0, 0.14);
+            let cross_glint =
+                (cross.horizontal * 0.66 + cross.vertical * 0.58 + cross.intersection * 0.92)
+                    .min(1.0);
+            let catch_light = (0.10
+                + groove * (0.20 + alignment * 0.56)
+                + distance_gate * (0.18 + alignment * 0.30)
+                + cross_glint * 0.68)
+                * (0.64 + random_facet * 0.36);
 
-            let diffraction = (fine_row * 0.18 + broad_row * 0.42 + vertical_glint * 0.22).min(1.0);
-            let base_filter = unit_shape * 0.090 + gap_shape * 0.040;
-            let mut strength = base_filter;
-            strength += unit_shape * diffraction * 0.44;
-            strength += gap_shape * diffraction * 0.16;
-            strength += unit_shape * crossing * 0.38;
-            strength += speck_strength;
+            let idx = (y * width + x) as usize;
+            let dst = pixels[idx];
+            let luminance = (dst.red() as f32 * 0.2126
+                + dst.green() as f32 * 0.7152
+                + dst.blue() as f32 * 0.0722)
+                / 255.0;
+            let ink_visibility = (1.12 - luminance).clamp(0.55, 1.0);
 
-            let direct_reflection =
-                hot_unit && (hot_row > 0.34 || crossing > 0.08 || (random_speck && light > 0.40));
-            if direct_reflection {
-                strength += 0.34 + hot_row * 0.28 + crossing * 0.32;
+            let pixel_spark = pixel_hash(x, y);
+            let random_spark = (groove > 0.34 || cross_glint > 0.28 || distance_gate > 0.55)
+                && pixel_spark & 0xfff < 28;
+            let hot_flake = facet_shape
+                && (catch_light > 0.58
+                    || (distance_gate > 0.68 && (neighbor_hash & 0x3ff) < 96)
+                    || (neighbor_hash & 0x7ff) < 26);
+
+            let mut strength = 0.0_f32;
+            if facet_shape {
+                strength += 0.095 + catch_light * 0.68 + cross_glint * 0.14;
+            }
+            if broken_row {
+                strength += (groove + cross.horizontal).min(1.0) * (0.055 + alignment * 0.18);
+            }
+            if broken_column {
+                strength += (groove + cross.vertical).min(1.0) * (0.046 + alignment * 0.16);
+            }
+            if random_spark {
+                strength += 0.20 + alignment * 0.20 + distance_gate * 0.20;
+            }
+            if hot_flake {
+                strength += 0.24 + catch_light * 0.30 + cross.intersection * 0.32;
+            }
+            if strength <= 0.0 {
+                continue;
             }
 
-            let lower_left = ((1.0 - nx) * 0.58 + ny * 0.42).clamp(0.0, 1.0);
-            let upper_right = (nx * 0.60 + (1.0 - ny) * 0.40).clamp(0.0, 1.0);
-            let hue = (0.095 * lower_left
-                + 0.63 * upper_right
-                + broad_row * 0.10
-                + fine_row * 0.035
-                + cell_hash as f32 * 0.000_011)
+            let groove_phase = (groove_coord / 2.35).rem_euclid(1.0);
+            let spectrum = (groove_phase * 0.48
+                + alignment * 0.18
+                + random_facet * 0.26
+                + cross.phase * 0.34
+                + light_distance * 0.0018
+                + nx * 0.18
+                - ny * 0.08)
                 .rem_euclid(1.0);
-            let value = (0.54 + broad_row * 0.28 + fine_row * 0.12 + vertical_glint * 0.16)
-                .clamp(0.42, 1.0);
-            let reflection_desaturate = if direct_reflection { 0.24_f32 } else { 0.0 };
-            let saturation = (0.92 - reflection_desaturate).clamp(0.58, 0.96);
+            let hue = (0.72 - spectrum * 0.74).rem_euclid(1.0);
+            let hot = hot_flake || random_spark;
+            let saturation = if hot { 0.50 } else { 0.96 };
+            let value =
+                (0.58 + catch_light * 0.42 + alignment * 0.09 + cross_glint * 0.10).min(1.0);
             let (r, g, b) = hsv_to_rgb(hue, saturation, value);
-            let silver = if direct_reflection {
-                0.68
-            } else if unit {
-                0.05 + light * 0.17
+            let silver = if hot_flake {
+                0.46 + cross.intersection * 0.18
+            } else if broken_row || broken_column {
+                0.16 + cross_glint * 0.16
             } else {
-                0.01 + diffraction * 0.05
+                0.06
             };
             let src_r = ((r * (1.0 - silver) + silver) * 255.0).round() as u8;
             let src_g = ((g * (1.0 - silver) + silver) * 255.0).round() as u8;
             let src_b = ((b * (1.0 - silver) + silver) * 255.0).round() as u8;
-            let alpha = (strength.min(1.0) * opacity * 255.0).round() as u8;
+            let alpha = ((strength * ink_visibility).min(1.0) * opacity * 255.0).round() as u8;
 
-            let idx = (y * width + x) as usize;
-            let darken = ((1.0 - light).powf(1.25) * 0.11 + upper_right * 0.025).clamp(0.0, 0.14);
-            pixels[idx] = darken_pixel(pixels[idx], darken);
             pixels[idx] = screen_pixel(pixels[idx], src_r, src_g, src_b, alpha);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SecretCross {
+    horizontal: f32,
+    vertical: f32,
+    intersection: f32,
+    phase: f32,
+}
+
+fn secret_cross_diffraction(xf: f32, yf: f32, w: f32, h: f32) -> SecretCross {
+    let horizontal = [
+        h * 0.105 + (xf * 0.010).sin() * 4.8,
+        h * 0.235 + (xf * 0.007).cos() * 6.0,
+        h * 0.415 + (xf * 0.009).sin() * 5.4,
+        h * 0.635 + (xf * 0.006).cos() * 7.2,
+        h * 0.835 + (xf * 0.011).sin() * 4.6,
+    ]
+    .into_iter()
+    .enumerate()
+    .fold(0.0_f32, |acc, (i, center)| {
+        let width = if i == 2 { 20.0 } else { 13.5 };
+        acc.max(smooth_band((yf - center).abs(), width, 1.1))
+    });
+
+    let vertical = [
+        w * 0.185 + (yf * 0.010).cos() * 4.4,
+        w * 0.405 + (yf * 0.007).sin() * 5.8,
+        w * 0.680 + (yf * 0.009).cos() * 5.2,
+        w * 0.865 + (yf * 0.012).sin() * 3.8,
+    ]
+    .into_iter()
+    .enumerate()
+    .fold(0.0_f32, |acc, (i, center)| {
+        let width = if i == 2 { 16.5 } else { 10.5 };
+        acc.max(smooth_band((xf - center).abs(), width, 0.95))
+    });
+
+    let fine_horizontal = smooth_band(
+        wrapped_distance(yf + (xf * 0.016).sin() * 2.4, 8.0),
+        1.7,
+        0.36,
+    );
+    let fine_vertical = smooth_band(
+        wrapped_distance(xf + (yf * 0.014).cos() * 2.0, 11.0),
+        1.35,
+        0.30,
+    );
+
+    let horizontal = (horizontal * 0.78 + fine_horizontal * 0.22).min(1.0);
+    let vertical = (vertical * 0.74 + fine_vertical * 0.20).min(1.0);
+    let intersection = (horizontal * vertical).sqrt();
+    let phase = (xf * 0.0065 + yf * 0.0042 + horizontal * 0.27 - vertical * 0.19).rem_euclid(1.0);
+
+    SecretCross {
+        horizontal,
+        vertical,
+        intersection,
+        phase,
     }
 }
 
@@ -325,18 +412,15 @@ fn smooth_band(distance: f32, outer: f32, hot_core: f32) -> f32 {
     }
 }
 
-fn darken_pixel(
-    dst: tiny_skia::PremultipliedColorU8,
-    amount: f32,
-) -> tiny_skia::PremultipliedColorU8 {
-    let keep = (1.0 - amount.clamp(0.0, 1.0)).clamp(0.0, 1.0);
-    tiny_skia::PremultipliedColorU8::from_rgba(
-        (dst.red() as f32 * keep).round() as u8,
-        (dst.green() as f32 * keep).round() as u8,
-        (dst.blue() as f32 * keep).round() as u8,
-        dst.alpha(),
-    )
-    .unwrap_or(dst)
+fn diffraction_ridge(coord: f32, period: f32, half_width: f32) -> f32 {
+    let wrapped = coord.rem_euclid(period);
+    let distance = wrapped.min(period - wrapped);
+    if distance >= half_width {
+        0.0
+    } else {
+        let t = 1.0 - distance / half_width;
+        t * t * (3.0 - 2.0 * t)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
