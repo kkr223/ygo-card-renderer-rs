@@ -407,6 +407,8 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
     }
 
     with_text_engine(|engine| {
+        let resolved_family = primary_family_name(p.family_name);
+        engine.ensure_font_loaded(resolved_family.as_str());
         let TextEngine {
             font_system,
             swash_cache,
@@ -417,7 +419,6 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
         let mut buffer = Buffer::new(font_system, metrics);
         buffer.set_size(font_system, Some(p.width), Some(p.height));
 
-        let resolved_family = primary_family_name(p.family_name);
         let attrs = Attrs::new()
             .family(Family::Name(resolved_family.as_str()))
             .weight(font_weight_for_family(resolved_family.as_str()));

@@ -282,12 +282,13 @@ pub(super) fn draw_visual_effect_area(target: &mut Pixmap, area: EffectArea, eff
 
 fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
     use crate::rare_effect::{
-        draw_dot_grid, draw_holographic, draw_rainbow_foil, draw_secret_weave,
+        draw_dot_grid, draw_holographic, draw_rainbow_foil, draw_secret_foil, draw_secret_weave,
     };
     match effect {
         EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
         EffectStyle::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
         EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
+        EffectStyle::SecretFoil { opacity } => draw_secret_foil(target, rect, opacity),
         EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),
         EffectStyle::GoldWash { opacity } => draw_gold_wash(target, rect, opacity),
         EffectStyle::FrostedFoil { opacity } => draw_frosted_foil(target, rect, opacity),

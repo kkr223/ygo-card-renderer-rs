@@ -31,7 +31,7 @@ use std::{
 };
 
 use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle,
+    CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle_from_file,
     model::YgoCardMeta,
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
@@ -229,10 +229,9 @@ fn main() {
         }
     };
 
-    // Load asset bundle
-    let bundle_bytes =
-        fs::read(&args.bundle).unwrap_or_else(|e| fatal(&format!("cannot read bundle: {e}")));
-    init_global_bundle(&bundle_bytes).unwrap_or_else(|e| fatal(&format!("init bundle: {e}")));
+    // Load asset bundle via mmap so startup does not copy the whole payload.
+    init_global_bundle_from_file(&args.bundle)
+        .unwrap_or_else(|e| fatal(&format!("init bundle: {e}")));
 
     // Load CDB
     let cdb = YgoProCdb::from_path(&args.cdb)

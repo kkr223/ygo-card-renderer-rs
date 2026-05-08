@@ -502,6 +502,7 @@ pub enum EffectStyle {
     RainbowFoil { opacity: f32 },
     DotGrid { opacity: f32 },
     SecretWeave { opacity: f32 },
+    SecretFoil { opacity: f32 },
     Holographic { opacity: f32 },
     BrightBorder { opacity: f32 },
     GoldWash { opacity: f32 },
@@ -624,16 +625,16 @@ fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectStyle::SecretWeave { opacity: 0.66 },
             );
             push_effect(
-                "rare-ser-attribute-weave",
+                "rare-ser-attribute-secret-foil",
                 75,
                 EffectTarget::Attribute,
-                EffectStyle::SecretWeave { opacity: 0.66 },
+                EffectStyle::SecretFoil { opacity: 0.90 },
             );
             push_effect(
-                "rare-ser-level-rank-weave",
+                "rare-ser-level-rank-secret-foil",
                 85,
                 EffectTarget::LevelOrRank,
-                EffectStyle::SecretWeave { opacity: 0.66 },
+                EffectStyle::SecretFoil { opacity: 0.90 },
             );
         }
         RareType::Gser => {

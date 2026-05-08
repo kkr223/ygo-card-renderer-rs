@@ -2329,6 +2329,7 @@ dependencies = [
  "criterion",
  "fontdb 0.16.2",
  "image",
+ "memmap2",
  "resvg",
  "serde",
  "serde_json",

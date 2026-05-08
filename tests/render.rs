@@ -427,11 +427,11 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::Attribute, EffectStyle::SecretWeave { .. })
+        (EffectTarget::Attribute, EffectStyle::SecretFoil { .. })
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::LevelOrRank, EffectStyle::SecretWeave { .. })
+        (EffectTarget::LevelOrRank, EffectStyle::SecretFoil { .. })
     )));
     assert!(
         !effect_targets

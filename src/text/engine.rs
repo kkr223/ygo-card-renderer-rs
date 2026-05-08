@@ -5,17 +5,18 @@
 //! per OS thread via a `thread_local!` cell; callers reach it through the
 //! module-private [`with_text_engine`] helper.
 //!
-//! The font database ([`GLOBAL_FONT_DB`]) is built **once** on first access:
-//! WOFF2 fonts are decoded, loaded into a `fontdb::Database`, and then
-//! reference-counted clones are handed to each thread's `FontSystem`.  This
-//! eliminates per-thread WOFF2 decoding and filesystem scanning.
+//! Font bytes are decoded from WOFF2 globally on first use per family.  Each
+//! thread-local `FontSystem` then loads only the families it actually needs,
+//! plus a small fallback family, instead of eagerly loading every bundled font.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+use cosmic_text::{
+    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight, fontdb,
+};
 
 use crate::asset_bundle::get_bundle;
 
@@ -74,6 +75,7 @@ pub struct TextEngine {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
     pub(super) glyph_cache: GlyphWidthCache,
+    loaded_fonts: HashSet<String>,
 }
 
 impl TextEngine {
@@ -94,6 +96,7 @@ impl TextEngine {
         font_size: f32,
     ) -> (f32, usize) {
         let resolved = super::util::primary_family_name(family_name);
+        self.ensure_font_loaded(resolved.as_str());
         let weight = super::util::font_weight_for_family(resolved.as_str());
         let family_id = self.glyph_cache.family_id(resolved.as_str());
 
@@ -121,6 +124,40 @@ impl TextEngine {
         }
 
         (raw, count)
+    }
+
+    pub(super) fn ensure_font_loaded(&mut self, family: &str) {
+        let key = font_bundle_key(family);
+        if self.loaded_fonts.contains(key) {
+            return;
+        }
+
+        if key != "ygo-sc" {
+            self.load_font_key("ygo-sc");
+        }
+        self.load_font_key(key);
+    }
+
+    fn load_font_key(&mut self, key: &str) {
+        if self.loaded_fonts.contains(key) {
+            return;
+        }
+        match get_font_data(key) {
+            Some(Ok(data)) => {
+                self.font_system
+                    .db_mut()
+                    .load_font_source(fontdb::Source::Binary(data));
+                self.loaded_fonts.insert(key.to_string());
+            }
+            Some(Err(err)) => {
+                eprintln!("font load failed for {key}: {err}");
+                self.loaded_fonts.insert(key.to_string());
+            }
+            None => {
+                eprintln!("missing bundled font for key {key}");
+                self.loaded_fonts.insert(key.to_string());
+            }
+        }
     }
 }
 
@@ -159,45 +196,64 @@ fn measure_char_advance(
 // Global font database & thread-local engine
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A fully-populated `fontdb::Database` built **once** (WOFF2→TTF decode +
-/// `load_font_data`).  Each thread-local [`TextEngine`] clones this database
-/// — the clone is cheap because font binary data is reference-counted.
-static GLOBAL_FONT_DB: OnceLock<cosmic_text::fontdb::Database> = OnceLock::new();
+/// Converted font bytes by bundle key. Each font is decoded from WOFF2 at most
+/// once globally, then loaded into the current thread's FontSystem on demand.
+static FONT_DATA: OnceLock<HashMap<String, OnceLock<Result<Arc<Vec<u8>>, String>>>> =
+    OnceLock::new();
 
-fn get_global_font_db() -> &'static cosmic_text::fontdb::Database {
-    GLOBAL_FONT_DB.get_or_init(|| {
-        let bundle = get_bundle();
-        let mut db = cosmic_text::fontdb::Database::new();
-        for font_meta in bundle.index.fonts.values() {
-            if let Ok(bytes) = bundle.get_bytes(&font_meta.buffer) {
-                let font_data = if ygo_woff2::is_woff2(bytes) {
-                    match ygo_woff2::convert_woff2_to_ttf(&mut Cursor::new(bytes)) {
-                        Ok(ttf) => ttf,
-                        Err(e) => {
-                            eprintln!("woff2 decode failed for {:?}: {}", font_meta.buffer, e);
-                            continue;
-                        }
-                    }
-                } else {
-                    bytes.to_vec()
-                };
-                db.load_font_data(font_data);
-            }
-        }
-        // Skip load_system_fonts() — all required fonts are bundled.
-        db.set_sans_serif_family("ygo-sc");
-        db.set_serif_family("ygo-sc");
-        db
+fn font_data_slots() -> &'static HashMap<String, OnceLock<Result<Arc<Vec<u8>>, String>>> {
+    FONT_DATA.get_or_init(|| {
+        get_bundle()
+            .index
+            .fonts
+            .keys()
+            .map(|name| (name.clone(), OnceLock::new()))
+            .collect()
     })
 }
 
+fn get_font_data(key: &str) -> Option<Result<Arc<Vec<u8>>, String>> {
+    let slot = font_data_slots().get(key)?;
+    Some(
+        slot.get_or_init(|| {
+            let bundle = get_bundle();
+            let font_meta = bundle
+                .index
+                .fonts
+                .get(key)
+                .ok_or_else(|| format!("missing font metadata for {key}"))?;
+            let bytes = bundle.get_bytes(&font_meta.buffer)?;
+            let font_data = if ygo_woff2::is_woff2(bytes) {
+                ygo_woff2::convert_woff2_to_ttf(&mut Cursor::new(bytes))
+                    .map_err(|e| format!("woff2 decode failed: {e}"))?
+            } else {
+                bytes.to_vec()
+            };
+            Ok(Arc::new(font_data))
+        })
+        .clone(),
+    )
+}
+
+fn font_bundle_key(family: &str) -> &str {
+    match family {
+        "ygo-custom1" => "custom1",
+        "ygo-custom2" => "custom2",
+        other => other,
+    }
+}
+
 fn build_text_engine() -> TextEngine {
-    let db = get_global_font_db().clone();
+    let mut db = cosmic_text::fontdb::Database::new();
+    // Skip load_system_fonts() — all required fonts are bundled and loaded lazily.
+    db.set_sans_serif_family("ygo-sc");
+    db.set_serif_family("ygo-sc");
     let font_system = FontSystem::new_with_locale_and_db("zh-CN".to_string(), db);
     TextEngine {
         font_system,
         swash_cache: SwashCache::new(),
         glyph_cache: GlyphWidthCache::new(),
+        loaded_fonts: HashSet::new(),
     }
 }
 

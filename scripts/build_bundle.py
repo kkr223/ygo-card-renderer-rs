@@ -222,6 +222,25 @@ def read_bytes(path: Path) -> bytes:
         return f.read()
 
 
+def rasterize_svg_to_webp(path: Path) -> tuple[bytes, tuple[int, int]]:
+    """Rasterize a fixed-size SVG at build time and encode it as lossless WebP."""
+    try:
+        import cairosvg  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "SVG rasterization requires the optional Python package 'cairosvg'. "
+            "Install it or remove SVG assets before building the bundle."
+        ) from exc
+
+    png_bytes = cairosvg.svg2png(bytestring=read_bytes(path))
+    with Image.open(io.BytesIO(png_bytes)) as image:
+        rgba = image.convert("RGBA")
+        size = rgba.size
+        buffer = io.BytesIO()
+        rgba.save(buffer, format="WEBP", lossless=True, quality=100)
+        return buffer.getvalue(), size
+
+
 def is_small_sprite(path: Path, *, max_dim: int, max_area: int) -> bool:
     with Image.open(path) as image:
         width, height = image.size
@@ -343,12 +362,14 @@ def build_bundle(
             "buffer": append_bytes(payload, read_bytes(path)),
         }
 
-    print(f"Packing {len(svg_paths)} SVG images...")
+    print(f"Rasterizing {len(svg_paths)} SVG images...")
     for path in svg_paths:
+        webp_bytes, (width, height) = rasterize_svg_to_webp(path)
         images_index[path.name] = {
-            "kind": "svg",
+            "kind": "raster",
             "storage": "buffer",
-            "buffer": append_bytes(payload, read_bytes(path)),
+            "size": {"w": width, "h": height},
+            "buffer": append_bytes(payload, webp_bytes),
         }
 
     fonts_index: dict[str, dict[str, object]] = {}
