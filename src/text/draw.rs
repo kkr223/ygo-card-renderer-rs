@@ -540,40 +540,54 @@ pub(super) fn draw_buffer_to_pixmap(
 
             let scaled_glyph_width = ((glyph_width as f32) * scale_x).ceil().max(1.0) as usize;
 
-            let clip_x0 = gx.max(0) as usize;
-            let clip_y0 = gy.max(0) as usize;
-            let clip_x1 = ((gx + scaled_glyph_width as i32) as usize).min(pm_width as usize);
-            let clip_y1 = ((gy + glyph_height as i32) as usize).min(pm_height as usize);
+            let glyph_right = gx.saturating_add(scaled_glyph_width as i32);
+            let glyph_bottom = gy.saturating_add(glyph_height as i32);
+            if glyph_right <= 0
+                || glyph_bottom <= 0
+                || gx >= pm_width as i32
+                || gy >= pm_height as i32
+            {
+                continue;
+            }
+
+            let clip_x0 = gx.max(0);
+            let clip_y0 = gy.max(0);
+            let clip_x1 = glyph_right.min(pm_width as i32);
+            let clip_y1 = glyph_bottom.min(pm_height as i32);
 
             if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 {
                 continue;
             }
 
-            let local_y_start = clip_y0 as i32 - gy;
-            let local_x_start = clip_x0 as i32 - gx;
+            let local_y_start = clip_y0 - gy;
+            let local_x_start = clip_x0 - gx;
             let inv_scale_x = if scale_x > 0.0 { 1.0 / scale_x } else { 1.0 };
             let max_src_cx = (glyph_width - 1) as f32;
+            let local_x_end = (clip_x1 - gx) as usize;
+            let clip_x0 = clip_x0 as usize;
+            let clip_y0 = clip_y0 as usize;
+            let clip_y1 = clip_y1 as usize;
+            let local_y_start = local_y_start as usize;
+            let local_x_start = local_x_start as usize;
 
             // Nearest-neighbor horizontal scaling: map each destination x back
             // to a source column and reuse the original glyph alpha row.
-            for cy in local_y_start as usize..(clip_y1 - clip_y0 as usize + local_y_start as usize)
-            {
+            for cy in local_y_start..(clip_y1 - clip_y0 + local_y_start) {
                 if cy >= glyph_height {
                     break;
                 }
                 let row = &image.data[cy * glyph_width..(cy + 1) * glyph_width];
-                let py = clip_y0 + cy - local_y_start as usize;
+                let py = clip_y0 + cy - local_y_start;
                 let row_base = py * pm_width as usize;
 
-                for dest_cx in local_x_start as usize..scaled_glyph_width.min(clip_x1 - gx as usize)
-                {
+                for dest_cx in local_x_start..scaled_glyph_width.min(local_x_end) {
                     let src_cx = ((dest_cx as f32) * inv_scale_x).floor().min(max_src_cx) as usize;
                     let alpha = row[src_cx];
                     if alpha == 0 {
                         continue;
                     }
 
-                    let px = clip_x0 + dest_cx - local_x_start as usize;
+                    let px = clip_x0 + dest_cx - local_x_start;
                     let idx = row_base + px;
 
                     let color = brush.sample(px as f32, py as f32);

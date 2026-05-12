@@ -1,146 +1,100 @@
 # ygo-card-renderer-rs
 
-Rust 核心库，用于渲染游戏王（Yu-Gi-Oh!）自定义卡片图像。从 YGOPro `.cdb` 数据库或手写卡片数据出发，生成高质量 PNG 卡片图像，支持多种罕贵效果、多语言排版和扩展显示元数据。
+Rust 游戏王（Yu-Gi-Oh!）卡片渲染核心库与 CLI。项目可以从 YGOPro `.cdb` 数据库和卡图目录生成 PNG 卡片图像，支持多语言排版、罕贵效果、可编辑的 `RenderDocument` 中间层，以及纯 Rust 资源打包。
 
 ---
 
 ## 功能特性
 
-- **完整卡片渲染**：普通/效果/融合/同调/超量/连接/摆钟/速攻决斗怪兽，魔法/陷阱卡
-- **罕贵效果叠加**：SR · UR · UTR · GR · HR · SeR · GSeR · PSeR · DT 共 10 种，逐像素合成
-- **多语言排版**：`sc`（简体）、`tc`（繁体）、`jp`（日文，含振假名）、`en`（英文）
-- **文字自适应**：标题/效果文本自动缩放、压缩，多行描述自动换行
-- **卡片名渐变/描边**：任意颜色、水平或垂直渐变
-- **Out-frame 卡片**：插图延伸到卡框外，支持自定义前景/后景图层
-- **RenderDocument 中间层**：JSON 可序列化的渲染指令树，可在渲染前任意编辑节点
-- **CLI 工具**：直接从 CDB + 中间图目录批量生图
+- 完整卡片渲染：普通/效果/融合/同调/超量/连接/摆钟怪兽，魔法/陷阱卡。
+- 罕贵效果：SR、UR、UTR、GR、HR、SeR、GSeR、PSeR、PSeR Print、DT。
+- 多语言排版：`sc`、`tc`、`jp`、`kr`、`en`、`astral`、`custom1`、`custom2`。
+- 文本自适应：标题/类型/效果/描述自动测量、缩放、压缩和换行；日文支持振假名。
+- Out-frame 与扩展显示：支持卡图外溢、前景图层、周年标记、激光标识、卡包编号等显示元数据。
+- `RenderDocument` 中间层：可先构建 JSON 可序列化的渲染指令树，再编辑节点后渲染。
+- 纯 Rust 资源打包：`build_bundle` CLI 可打包图片、SVG、字体、布局元数据，不再需要 Python。
+- 运行时优化：bundle 支持 mmap 载入；图片按需解码缓存；字体按 family 懒加载。
 
 ---
 
 ## 目录结构
 
-```
+```text
 ygo-card-renderer-rs/
 ├── src/
-│   ├── lib.rs              # 公共 API 导出
-│   ├── bin/render.rs       # CLI 入口
-│   ├── renderer.rs         # Renderer 核心
-│   ├── document.rs         # RenderDocument / RenderOp 中间层
-│   ├── model.rs            # 数据模型（RenderRequest、YgoCardMeta 等）
-│   ├── asset_bundle.rs     # 资源包加载
-│   ├── card_logic.rs       # 卡片类型判断、布局计算
-│   ├── layout.rs           # 语言/类型相关排版参数
-│   ├── rare_effect.rs      # 罕贵效果合成
-│   ├── ruby.rs             # 振假名标记解析
-│   ├── text/               # 文字测量、绘制、多行排版
-│   └── ...
-├── tests/render.rs         # 集成测试
-├── benches/render.rs       # Criterion 性能基准
-├── assets/
-│   └── yugioh/
-│       ├── image/          # 源图资源（WebP/SVG，124 个文件）
-│       └── font/           # 源字体资源（woff2，18 个文件）
-├── scripts/
-│   ├── build_bundle.py          # 从源资源重新打包 yugioh_bundle.bin
-│   ├── render_single_card.ps1   # 单张卡片渲染脚本
-│   └── render_tuning.ps1        # 排版参数微调脚本
-└── resources/
-    └── yugioh_bundle.bin   # 预编译资源包（图集、字体、布局配置，gitignored）
+│   ├── asset_bundle.rs         # bundle 读取、mmap、资源解码/cache
+│   ├── document.rs             # RenderDocument / RenderOp 中间层
+│   ├── model.rs                # RenderRequest、YgoCardMeta 等数据模型
+│   ├── rare_effect.rs          # 罕贵效果合成
+│   ├── renderer/               # 卡片绘制实现
+│   ├── text/                   # 文本测量、绘制、字体懒加载
+│   └── bin/
+│       ├── render.rs           # 从 CDB + 卡图目录渲染 PNG
+│       └── build_bundle.rs     # 纯 Rust 资源打包 CLI
+├── assets/yugioh/
+│   ├── image/                  # WebP/SVG 源图资源 + filelist.csv
+│   └── font/                   # 字体资源 + filelist.csv
+├── resources/
+│   └── yugioh_bundle.bin       # 打包后的资源包（通常不提交）
+├── tests/render.rs             # 集成测试
+├── benches/render.rs           # Criterion benchmark
+└── scripts/                    # 辅助/调参脚本；打包优先使用 Rust CLI
 ```
 
 ---
 
-## 依赖
+## 依赖与前提
 
-| crate | 用途 |
-|-------|------|
-| `tiny-skia` | 2D 像素合成与变换 |
-| `cosmic-text` | 跨平台文字渲染（含 RTL/CJK） |
-| `resvg` | SVG 光栅化（部分资源） |
-| `image` | WebP/PNG 解码与编码 |
-| `serde` / `serde_json` | RenderDocument JSON 序列化 |
-| `ygopro-cdb-encode-rs` | YGOPro CDB 读取（工作区本地 crate） |
-| `ygo-woff2` | WOFF2 字体解压（工作区本地 crate） |
+- Rust 2024 edition。
+- 工作区同级目录需要存在本地 crate：`../ygo-woff2`、`../ygopro-cdb-encode-rs`。
+- 渲染 CLI 需要：`resources/yugioh_bundle.bin`、YGOPro `.cdb`、卡图目录。
+- 卡图目录按 `<code>.jpg`、`<code>.png`、`<code>.webp` 查找。
+
+主要依赖：`tiny-skia`、`image`、`resvg/usvg`、`cosmic-text/fontdb`、`memmap2`、`serde/serde_json`、`ygo-woff2`、`ygopro-cdb-encode-rs`。
 
 ---
 
-## 快速上手
+## 快速开始
 
-### 前提
+### 1. 构建资源包
 
-1. 工作区目录中存在 `ygopro-cdb-encode-rs` 和 `ygo-woff2` 两个本地 crate。
-2. 准备好 `resources/yugioh_bundle.bin` 资源包。
-3. 准备好一个 YGOPro 格式的 `.cdb` 数据库文件。
-
-### 重新打包资源包
-
-`resources/yugioh_bundle.bin` 由 `scripts/build_bundle.py` 从 `assets/yugioh/` 中的源资源生成，已在 `.gitignore` 中排除。首次使用或源资源更新后需重新生成：
+推荐使用纯 Rust CLI：
 
 ```bash
-# 安装依赖（需要 Python 3.10+ 和 Pillow）
-pip install pillow
-
-# 从仓库内源资源打包（自动写入 resources/yugioh_bundle.bin）
-python scripts/build_bundle.py
-
-# 可选参数：自定义源目录或输出路径
-python scripts/build_bundle.py --root assets/yugioh --out resources/yugioh_bundle.bin
+cargo run --bin build_bundle
 ```
 
-> **推荐**：使用 `uv` 或 `venv` 隔离 Python 环境，避免污染全局包。
+默认读取 `assets/yugioh/`，写出 `resources/yugioh_bundle.bin`。小 WebP 会合并进 atlas，大 WebP 直接打入 payload，SVG 会在构建期用 `resvg` 栅格化为 lossless WebP，字体直接打入 payload。
 
-### 编译
+自定义参数：
+
+```bash
+cargo run --bin build_bundle -- \
+  --root assets/yugioh \
+  --out resources/yugioh_bundle.bin \
+  --atlas-width 2048 \
+  --max-sprite-dim 320 \
+  --max-sprite-area 100000
+```
+
+| 参数 | 说明 | 默认值 |
+|---|---|---|
+| `--root <DIR>` | 资源根目录，内部需有 `image/` 和 `font/` | `<repo>/assets/yugioh` |
+| `--out <FILE>` | 输出 bundle 路径 | `<repo>/resources/yugioh_bundle.bin` |
+| `--atlas-width <N>` | 小图 atlas 宽度 | `2048` |
+| `--max-sprite-dim <N>` | 进入 atlas 的最大宽/高 | `320` |
+| `--max-sprite-area <N>` | 进入 atlas 的最大像素面积 | `100000` |
+
+### 2. 编译
 
 ```bash
 cargo build --release
 ```
 
-### 作为库使用
-
-```rust
-use std::path::PathBuf;
-use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer,
-    asset_bundle::init_global_bundle,
-    model::YgoCardMeta,
-};
-use ygopro_cdb_encode_rs::YgoProCdb;
-
-// 1. 加载资源包（全局初始化一次）
-let bundle = std::fs::read("resources/yugioh_bundle.bin").unwrap();
-init_global_bundle(&bundle).unwrap();
-
-// 2. 从 CDB 读取卡片数据
-let cdb = YgoProCdb::from_path("cards.cdb").unwrap();
-let entry = cdb.find_by_code(46986414).unwrap().unwrap();
-
-// 3. 构造渲染请求
-let request = RenderRequest {
-    kind: CardKind::Yugioh,
-    card: YgoCardMeta::from_entry(entry),
-    options: RenderOptions {
-        language: Some("sc".to_string()),
-        art_image: Some(PathBuf::from("art/46986414.jpg")),
-        ..RenderOptions::default()
-    },
-};
-
-// 4. 渲染为 PNG
-let renderer = Renderer::new();
-let png_bytes = renderer.render_png(&request).unwrap();
-std::fs::write("output.png", png_bytes).unwrap();
-```
-
----
-
-## CLI 工具
-
-编译后的可执行文件为 `render`（`cargo build --bin render`）。
-
-### 单张模式
+### 3. 渲染单张卡
 
 ```bash
-render \
+cargo run --bin render -- \
   --bundle resources/yugioh_bundle.bin \
   --cdb cards.cdb \
   --art-dir /path/to/art \
@@ -149,12 +103,10 @@ render \
   --lang sc
 ```
 
-### 批量模式
-
-读取 CDB 中的全部卡片，并发渲染，输出到目录：
+### 4. 批量渲染
 
 ```bash
-render \
+cargo run --bin render -- \
   --bundle resources/yugioh_bundle.bin \
   --cdb cards.cdb \
   --art-dir /path/to/art \
@@ -163,164 +115,195 @@ render \
   --jobs 8
 ```
 
-输出文件命名规则：`<code>.png`，如 `46986414.png`。
-
-### 完整参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--bundle <PATH>` | `yugioh_bundle.bin` 路径 | 必填 |
-| `--cdb <PATH>` | YGOPro `.cdb` 数据库路径 | 必填 |
-| `--art-dir <DIR>` | 中间图目录，查找 `<code>.jpg/.png/.webp` | 必填 |
-| `--out-dir <DIR>` | 批量输出目录 | 与 `--id` 二选一 |
-| `--id <CODE>` | 单张卡片数字编码 | 与 `--out-dir` 二选一 |
-| `--out <FILE>` | 单张输出 PNG 路径 | `<code>.png` |
-| `--lang <LANG>` | 语言：`sc` `tc` `jp` `en` | `sc` |
-| `--scale <F>` | 输出缩放倍数 | `1.0` |
-| `--jobs <N>` | 批量模式并行线程数 | 逻辑 CPU 数 |
-
-> 中间图目录中找不到对应编码的图片时，卡片图框渲染为空白，不报错。
+输出文件名为 `<code>.png`。
 
 ---
 
-## PowerShell 辅助脚本
+## 资源打包与 filelist
 
-### 单张渲染
+`build_bundle` 支持资源名与真实文件路径分离。每个目录会按以下顺序查找 filelist：
 
-```powershell
-.\scripts\render_single_card.ps1 `
-    -CardCode 46986414 `
-    -Language sc `
-    -ArtImage "D:\art\46986414.jpg"
+```text
+filelist.json
+filelist.csv
+filelist.tsv
+filelist
 ```
 
-### 排版微调
+- `assets/yugioh/image/filelist.*`：图片资源映射，path 相对 `image/`。
+- `assets/yugioh/font/filelist.*`：字体资源映射，path 相对 `font/`。
+- 如果没有 filelist，则回退到扫描当前目录下的 `*.webp` / `*.svg` / 字体文件。
 
-编辑 `scripts/render_tuning.ps1` 内的环境变量后直接运行：
+CSV 示例：
 
-```powershell
-pwsh -ExecutionPolicy Bypass -File .\scripts\render_tuning.ps1
+```csv
+name,path
+card-normal.webp,frames/card-normal.webp
+copyright-en-black.svg,copyright/en-black.svg
+ygo-sc,ygo-sc.woff2
 ```
 
-支持微调名称、效果、描述的字号、行距、字间距、X/Y 坐标等几十个排版参数，输出到 `export/` 目录供对比。
+JSON 示例：
+
+```json
+[
+  { "name": "card-normal.webp", "path": "frames/card-normal.webp" },
+  ["copyright-en-black.svg", "copyright/en-black.svg"]
+]
+```
+
+规则：
+
+- `name` 是 bundle index 里的资源名，也是渲染代码查找的 key。
+- `path` 是真实文件相对路径。
+- image 支持 `.webp`、`.svg`；font 支持 `.woff2`、`.woff`、`.ttf`、`.otf`。
+- filelist 顺序就是打包顺序；无 filelist 时按路径排序。
+- 重复资源名、缺失文件、不支持扩展名会直接报错。
+
+当前仓库已包含：
+
+- `assets/yugioh/image/filelist.csv`
+- `assets/yugioh/font/filelist.csv`
+
+---
+
+## render CLI 参数
+
+```text
+render --bundle <PATH> --cdb <PATH> --art-dir <DIR> --out-dir <DIR> [OPTIONS]
+render --bundle <PATH> --cdb <PATH> --art-dir <DIR> --id <CODE> --out <FILE> [OPTIONS]
+```
+
+| 参数 | 说明 | 默认值 |
+|---|---|---|
+| `--bundle <PATH>` | `yugioh_bundle.bin` 路径 | 必填 |
+| `--cdb <PATH>` | YGOPro `.cdb` 数据库 | 必填 |
+| `--art-dir <DIR>` | 卡图目录，查找 `<code>.jpg/.png/.webp` | 必填 |
+| `--out-dir <DIR>` | 批量输出目录 | 与 `--id` 二选一 |
+| `--id <CODE>` | 单张卡片 code | 与 `--out-dir` 二选一 |
+| `--out <FILE>` | 单张输出文件 | `<code>.png` |
+| `--lang <LANG>` | `sc`、`tc`、`jp`、`kr`、`en` 等 | `sc` |
+| `--scale <F>` | 输出缩放倍率 | `1.0` |
+| `--effect-mask <PATH>` | 黑白特效遮罩：黑色保护不覆特效，白色允许特效 | 无 |
+| `--jobs <N>` | 批量渲染线程数 | 逻辑 CPU 数 |
+
+如果 `art-dir` 中找不到对应卡图，卡图区域会留空，不会中断渲染。
+`--effect-mask` 可使用完整卡片尺寸遮罩，或与卡图区域同尺寸的遮罩；未指定坐标时后者会自动贴到卡图区域。
+
+---
+
+## 作为库使用
+
+```rust
+use std::path::PathBuf;
+use ygo_card_renderer_rs::{
+    CardKind, RenderOptions, RenderRequest, Renderer,
+    asset_bundle::init_global_bundle_from_file,
+    model::YgoCardMeta,
+};
+use ygopro_cdb_encode_rs::YgoProCdb;
+
+// 全局初始化资源包。文件路径初始化会使用 mmap。
+init_global_bundle_from_file("resources/yugioh_bundle.bin").unwrap();
+
+let cdb = YgoProCdb::from_path("cards.cdb").unwrap();
+let entry = cdb
+    .find_all()
+    .unwrap()
+    .into_iter()
+    .find(|card| card.code == 46986414)
+    .unwrap();
+
+let request = RenderRequest {
+    kind: CardKind::Yugioh,
+    card: YgoCardMeta::from_entry(entry),
+    options: RenderOptions {
+        language: Some("sc".to_string()),
+        art_image: Some(PathBuf::from("art/46986414.jpg")),
+        scale: 1.0,
+        ..RenderOptions::default()
+    },
+};
+
+let renderer = Renderer::new();
+let png = renderer.render_png(&request).unwrap();
+std::fs::write("output.png", png).unwrap();
+```
+
+如果调用方已经把 bundle bytes 嵌入或读入内存，也可以使用 `asset_bundle::init_global_bundle(&bytes)`。
 
 ---
 
 ## 核心 API
 
-### `Renderer`
-
 ```rust
 impl Renderer {
     pub fn new() -> Self;
-
-    /// 一步渲染为 PNG 字节。
     pub fn render_png(&self, request: &RenderRequest) -> Result<Vec<u8>, RenderError>;
-
-    /// 构建可编辑的中间层文档。
     pub fn build_document(&self, request: &RenderRequest) -> RenderDocument;
-
-    /// 渲染已（可能经过编辑的）中间层文档。
     pub fn render_document(&self, document: &RenderDocument) -> Result<Vec<u8>, RenderError>;
 }
-```
 
-### `RenderRequest`
-
-```rust
 pub struct RenderRequest {
-    pub kind: CardKind,       // Yugioh | RushDuel
-    pub card: YgoCardMeta,    // CDB 数据 + 显示元数据
+    pub kind: CardKind,
+    pub card: YgoCardMeta,
     pub options: RenderOptions,
 }
 ```
 
-### `RenderOptions`（常用字段）
-
-```rust
-pub struct RenderOptions {
-    pub language: Option<String>,                        // "sc" | "tc" | "jp" | "en"
-    pub art_image: Option<PathBuf>,                      // 卡片插图路径
-    pub foreground_image: Option<PositionedRenderImage>, // 前景叠图
-    pub scale: f32,                                      // 输出缩放，默认 1.0
-    pub text_colors: TextColorOverrides,                 // 各文字通道颜色覆盖
-    pub layout_overrides: LayoutOverrides,               // 精细排版参数覆盖
-    // ...
-}
-```
-
-### `YgoCardMeta`（显示元数据，扩展自 `CardDataEntry`）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `rare` | `Option<RareType>` | 罕贵效果叠加（SR/UR/UTR/GR/HR/SeR…） |
-| `name_color` | `NameColor` | 卡片名颜色（Auto/Dark/Light/Custom） |
-| `name_gradient` | `Option<TextGradient>` | 卡片名渐变 |
-| `package` | `Option<String>` | 卡包编号 |
-| `copyright` | `Option<String>` | 版权文字 |
-| `laser` | `Option<String>` | 激光全息标识 |
-| `twentieth` / `twenty_fifth` | `bool` | 周年纪念标记 |
-| `out_frame` | `bool` | Out-frame 模式 |
-| `scale` | `Option<f32>` | 卡片级别缩放覆盖 |
-
-### `RenderDocument`（中间层）
-
-`build_document` 返回一个包含 `Vec<RenderNode>` 的 JSON 可序列化结构。每个节点有 `id`、`z`（层叠顺序）、`visible` 和一个 `RenderOp`。可在渲染前任意修改：
+`Renderer::build_document` 会返回可编辑的中间层。常见用途：隐藏节点、修改 z-index、插入额外视觉效果、序列化为 JSON 后交给上层编辑器。
 
 ```rust
 let mut doc = renderer.build_document(&request);
 
-// 隐藏标题
-doc.nodes.iter_mut()
-    .find(|n| n.id == "title")
-    .map(|n| n.visible = false);
-
-// 自定义效果
-doc.nodes.push(RenderNode {
-    id: "my_effect".to_string(),
-    z: 100,
-    visible: true,
-    op: RenderOp::VisualEffect {
-        target: EffectTarget::Art,
-        effect: EffectStyle::RainbowFoil { opacity: 0.8 },
-    },
-});
+if let Some(title) = doc.nodes.iter_mut().find(|node| node.id == "title") {
+    title.visible = false;
+}
 
 let png = renderer.render_document(&doc).unwrap();
 ```
 
-### 罕贵效果（`RareType`）
+---
 
-| 值 | 效果 |
-|----|------|
-| `Sr` | 超级罕贵：Art 彩虹箔 |
-| `Ur` | 究极罕贵：Art 彩虹箔 + 属性/星级全息 + 标题渐变 |
-| `Utr` | 终极罕贵：Art 浮雕刻纹 + 卡面磨砂箔 + 同心圆刻纹 |
-| `Gr` | 黄金罕贵：卡框/图框金洗 + 标题金色渐变 |
-| `Hr` | 全息罕贵：全卡全息 |
-| `Ser` | 秘密罕贵：Art/属性/星级秘密织纹 + 标题渐变 |
-| `Gser` | 黄金秘密罕贵：同 SeR + 金色调 |
-| `Pser` | 棱镜秘密罕贵：Art 棱镜秘密织纹 |
-| `PserPrint` | 棱镜秘密罕贵（印刷版） |
-| `Dt` | 决斗终端平行罕贵：全卡点阵网 |
+## 资源包运行时行为
+
+- CLI 通过 `init_global_bundle_from_file` mmap 资源包，避免启动时复制完整 payload。
+- 初始化时校验 magic、version、buffer offset/len、atlas rect 等。
+- atlas 在初始化时解码，单个资源图片按需解码并通过 per-asset `OnceLock` 缓存。
+- 字体不会全部预载；文本引擎按 family 首次使用时从 bundle 解码 WOFF2/TTF 并加载。
+- 构建期 SVG 已经栅格化为 lossless WebP；读取端仍保留 SVG 解码兼容路径。
 
 ---
 
-## 测试
+## 测试与验证
 
 ```bash
-# 单元 + 集成测试（需要 resources/yugioh_bundle.bin）
+cargo check
+cargo check --bin build_bundle
+cargo run --bin build_bundle -- --out resources/yugioh_bundle.bin
 cargo test
 
-# 从 CDB 渲染单张卡片（需要 cards.cdb，输出到 export/）
 YGO_ART_DIR=/path/to/art cargo test render_single_card_from_cdb -- --nocapture
-
-# 渲染所有罕贵效果预览
 YGO_ART_DIR=/path/to/art cargo test render_rare_effects -- --nocapture
 
-# 性能基准
-YGO_CDB=cards.cdb YGO_ART_DIR=/path/to/art cargo bench
+YGO_BUNDLE=resources/yugioh_bundle.bin \
+YGO_CDB=cards.cdb \
+YGO_ART_DIR=/path/to/art \
+cargo bench
 ```
+
+Windows/MSVC 目标运行 `cargo test` 需要可用的 Visual Studio C++ Build Tools（`link.exe`）。
+
+---
+
+## 辅助脚本
+
+`scripts/` 中保留一些调试/调参工具：
+
+- `scripts/tune_ser.py`：SeR 效果调参预览，需要 Python + Pillow + NumPy。
+- `scripts/render_single_card.ps1`：PowerShell 单张渲染辅助。
+- `scripts/render_tuning.ps1`：PowerShell 排版调参辅助。
+- `scripts/build_bundle.py`：旧 Python 打包脚本；新流程优先使用 `cargo run --bin build_bundle`。
 
 ---
 

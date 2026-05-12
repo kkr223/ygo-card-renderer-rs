@@ -423,7 +423,7 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
     assert_eq!(effect_targets.len(), 3);
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::Art, EffectStyle::SecretWeave { .. })
+        (EffectTarget::Art, EffectStyle::OpticalSer { .. })
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),

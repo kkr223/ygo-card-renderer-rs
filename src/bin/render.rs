@@ -20,6 +20,7 @@
 //! | `--out <FILE>` | **Single mode**: output PNG path |
 //! | `--lang <LANG>` | Language hint (`sc`, `tc`, `jp`, `en`, …). Default: `sc` |
 //! | `--scale <F>` | Output scale factor. Default: `1.0` |
+//! | `--effect-mask <PATH>` | Optional black/white mask; black protects areas from effects |
 //! | `--jobs <N>` | Parallel workers for batch mode. Default: logical CPU count |
 //!
 //! Art images are looked up as `<art-dir>/<code>.jpg` then `<art-dir>/<code>.png`.
@@ -31,8 +32,9 @@ use std::{
 };
 
 use ygo_card_renderer_rs::{
-    CardKind, RenderOptions, RenderRequest, Renderer, asset_bundle::init_global_bundle_from_file,
-    model::YgoCardMeta,
+    CardKind, RenderOptions, RenderRequest, Renderer,
+    asset_bundle::init_global_bundle_from_file,
+    model::{EffectMask, YgoCardMeta},
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
@@ -51,6 +53,7 @@ struct Args {
     out: Option<PathBuf>,
     lang: String,
     scale: f32,
+    effect_mask: Option<PathBuf>,
     jobs: usize,
 }
 
@@ -64,6 +67,7 @@ fn parse_args() -> Result<Args, String> {
     let mut out: Option<PathBuf> = None;
     let mut lang = "sc".to_string();
     let mut scale = 1.0f32;
+    let mut effect_mask: Option<PathBuf> = None;
     let mut jobs: usize = num_cpus();
 
     let mut i = 0usize;
@@ -108,12 +112,19 @@ fn parse_args() -> Result<Args, String> {
                     .parse::<f32>()
                     .map_err(|e| format!("--scale: invalid float: {e}"))?;
             }
+            "--effect-mask" => {
+                i += 1;
+                effect_mask = Some(PathBuf::from(next(&raw, i, "--effect-mask")?));
+            }
             "--jobs" => {
                 i += 1;
                 let v = next(&raw, i, "--jobs")?;
                 jobs = v
                     .parse::<usize>()
                     .map_err(|e| format!("--jobs: invalid integer: {e}"))?;
+                if jobs == 0 {
+                    return Err("--jobs must be greater than 0".to_string());
+                }
             }
             "--help" | "-h" => {
                 print_help();
@@ -133,6 +144,7 @@ fn parse_args() -> Result<Args, String> {
         out,
         lang,
         scale,
+        effect_mask,
         jobs,
     })
 }
@@ -167,6 +179,8 @@ OPTIONS
   --out    <FILE>   single output PNG path
   --lang   <LANG>   language: sc|tc|jp|en  [default: sc]
   --scale  <F>      output scale factor    [default: 1.0]
+  --effect-mask <PATH>
+                   black protects pixels from visual/rare effects; white allows them
   --jobs   <N>      parallel workers       [default: CPU count]
   --help            show this message
 "#
@@ -187,7 +201,13 @@ fn find_art(art_dir: &Path, code: u32) -> Option<PathBuf> {
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 
-fn make_request(card: YgoCardMeta, lang: &str, scale: f32, art_dir: &Path) -> RenderRequest {
+fn make_request(
+    card: YgoCardMeta,
+    lang: &str,
+    scale: f32,
+    art_dir: &Path,
+    effect_mask: Option<&Path>,
+) -> RenderRequest {
     let art_image = find_art(art_dir, card.entry.code);
     RenderRequest {
         kind: CardKind::Yugioh,
@@ -195,6 +215,11 @@ fn make_request(card: YgoCardMeta, lang: &str, scale: f32, art_dir: &Path) -> Re
             language: Some(lang.to_string()),
             scale,
             art_image,
+            effect_mask: effect_mask.map(|path| EffectMask {
+                path: path.to_path_buf(),
+                x: None,
+                y: None,
+            }),
             ..RenderOptions::default()
         },
         card,
@@ -207,9 +232,10 @@ fn render_one(
     lang: &str,
     scale: f32,
     art_dir: &Path,
+    effect_mask: Option<&Path>,
     out_path: &Path,
 ) -> Result<(), String> {
-    let request = make_request(card.clone(), lang, scale, art_dir);
+    let request = make_request(card.clone(), lang, scale, art_dir, effect_mask);
     let png = renderer
         .render_png(&request)
         .map_err(|e| format!("render error for {}: {e}", card.entry.code))?;
@@ -260,6 +286,7 @@ fn main() {
             &args.lang,
             args.scale,
             &args.art_dir,
+            args.effect_mask.as_deref(),
             &out_path,
         )
         .unwrap_or_else(|e| fatal(&e));
@@ -290,6 +317,7 @@ fn main() {
         );
         let lang = Arc::new(args.lang.clone());
         let art_dir = Arc::new(args.art_dir.clone());
+        let effect_mask = Arc::new(args.effect_mask.clone());
         let out_dir = Arc::new(out_dir.clone());
 
         let chunk_size = (total + args.jobs - 1) / args.jobs;
@@ -301,6 +329,7 @@ fn main() {
                 let done = Arc::clone(&done);
                 let lang = Arc::clone(&lang);
                 let art_dir = Arc::clone(&art_dir);
+                let effect_mask = Arc::clone(&effect_mask);
                 let out_dir = Arc::clone(&out_dir);
                 // SAFETY: chunk lives for 'scope which is shorter than cards
                 let chunk: &[YgoCardMeta] = chunk;
@@ -309,9 +338,15 @@ fn main() {
                     for card in chunk {
                         let code = card.entry.code;
                         let out_path = out_dir.join(format!("{code}.png"));
-                        if let Err(e) =
-                            render_one(renderer, card, &lang, args.scale, &art_dir, &out_path)
-                        {
+                        if let Err(e) = render_one(
+                            renderer,
+                            card,
+                            &lang,
+                            args.scale,
+                            &art_dir,
+                            effect_mask.as_ref().as_deref(),
+                            &out_path,
+                        ) {
                             errors.lock().unwrap().push(e);
                         }
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

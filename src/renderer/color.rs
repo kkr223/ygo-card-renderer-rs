@@ -4,7 +4,7 @@ use ygopro_cdb_encode_rs::CardDataEntry;
 use crate::{
     card_logic::auto_name_light,
     constants::{NAME_COLOR_DARK, NAME_COLOR_LIGHT},
-    model::{NameColor, TextGradient, TextPaint},
+    model::{GradientDirection, NameColor, TextGradient, TextPaint},
     text::TextBrush,
 };
 
@@ -58,7 +58,9 @@ pub(super) fn resolve_name_brush(
     request: &crate::model::RenderRequest,
     fallback: Color,
     x: f32,
+    y: f32,
     width: f32,
+    height: f32,
 ) -> ResolvedPaint {
     let paint = request
         .options
@@ -78,7 +80,7 @@ pub(super) fn resolve_name_brush(
         });
     ResolvedPaint {
         color: paint_color(paint.as_ref(), None, fallback),
-        brush: text_brush(paint.as_ref(), None, fallback, x, width),
+        brush: text_brush_in_box(paint.as_ref(), None, fallback, x, y, width, height),
     }
 }
 
@@ -87,21 +89,25 @@ pub(super) fn resolve_title_brush(
     document_paint: Option<&TextPaint>,
     fallback: Color,
     x: f32,
+    y: f32,
     width: f32,
+    height: f32,
 ) -> ResolvedPaint {
     if let Some(paint) = document_paint {
         return ResolvedPaint {
             color: paint_color(Some(paint), None, fallback),
-            brush: text_brush(Some(paint), None, fallback, x, width),
+            brush: text_brush_in_box(Some(paint), None, fallback, x, y, width, height),
         };
     }
-    resolve_name_brush(request, fallback, x, width)
+    resolve_name_brush(request, fallback, x, y, width, height)
 }
 
 pub(super) fn resolve_name_shadow_brush(
     request: &crate::model::RenderRequest,
     x: f32,
+    y: f32,
     width: f32,
+    height: f32,
 ) -> ResolvedPaint {
     let paint = request
         .options
@@ -129,7 +135,15 @@ pub(super) fn resolve_name_shadow_brush(
 
     ResolvedPaint {
         color: paint_color(paint.as_ref(), None, Color::TRANSPARENT),
-        brush: text_brush(paint.as_ref(), None, Color::TRANSPARENT, x, width),
+        brush: text_brush_in_box(
+            paint.as_ref(),
+            None,
+            Color::TRANSPARENT,
+            x,
+            y,
+            width,
+            height,
+        ),
     }
 }
 
@@ -137,15 +151,17 @@ pub(super) fn resolve_title_shadow_brush(
     request: &crate::model::RenderRequest,
     document_paint: Option<&TextPaint>,
     x: f32,
+    y: f32,
     width: f32,
+    height: f32,
 ) -> ResolvedPaint {
     if let Some(paint) = document_paint {
         return ResolvedPaint {
             color: paint_color(Some(paint), None, Color::TRANSPARENT),
-            brush: text_brush(Some(paint), None, Color::TRANSPARENT, x, width),
+            brush: text_brush_in_box(Some(paint), None, Color::TRANSPARENT, x, y, width, height),
         };
     }
-    resolve_name_shadow_brush(request, x, width)
+    resolve_name_shadow_brush(request, x, y, width, height)
 }
 
 pub(super) fn text_brush(
@@ -155,6 +171,18 @@ pub(super) fn text_brush(
     x: f32,
     width: f32,
 ) -> Option<TextBrush> {
+    text_brush_in_box(paint, legacy_color, fallback, x, 0.0, width, 1.0)
+}
+
+pub(super) fn text_brush_in_box(
+    paint: Option<&TextPaint>,
+    legacy_color: Option<&str>,
+    fallback: Color,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<TextBrush> {
     let Some(paint) = paint else {
         return legacy_color.and_then(parse_hex_color).map(TextBrush::solid);
     };
@@ -162,7 +190,7 @@ pub(super) fn text_brush(
     if let Some(brush) = paint
         .gradient
         .as_ref()
-        .and_then(|gradient| gradient_brush(gradient, x, width))
+        .and_then(|gradient| gradient_brush(gradient, x, y, width, height))
     {
         return Some(brush);
     }
@@ -202,10 +230,39 @@ pub(super) fn paint_color(
         .unwrap_or(fallback)
 }
 
-fn gradient_brush(gradient: &TextGradient, x: f32, width: f32) -> Option<TextBrush> {
+fn gradient_brush(
+    gradient: &TextGradient,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<TextBrush> {
     let start = parse_hex_color(&gradient.start)?;
     let end = parse_hex_color(&gradient.end)?;
-    Some(TextBrush::horizontal_gradient(start, end, x, width))
+    match gradient.direction {
+        GradientDirection::Horizontal => Some(TextBrush::horizontal_gradient(start, end, x, width)),
+        GradientDirection::Vertical => {
+            let middle = match gradient.middle.as_deref() {
+                Some(value) => parse_hex_color(value)?,
+                None => mix_color(start, end, 0.5),
+            };
+            Some(TextBrush::vertical_middle_gradient(
+                start, middle, end, y, height,
+            ))
+        }
+    }
+}
+
+fn mix_color(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    Color::from_rgba(
+        a.red() * inv + b.red() * t,
+        a.green() * inv + b.green() * t,
+        a.blue() * inv + b.blue() * t,
+        a.alpha() * inv + b.alpha() * t,
+    )
+    .unwrap_or(a)
 }
 
 /// Parse a CSS-style hex color string (`#rrggbb`, `#rrggbbaa`, `#rgb`).

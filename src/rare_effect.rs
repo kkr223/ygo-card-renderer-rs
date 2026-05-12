@@ -71,6 +71,7 @@ pub fn draw_rare_effect(
         match layer.kind {
             LayerKind::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
             LayerKind::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
+            LayerKind::OpticalSer { opacity } => draw_optical_ser(target, rect, opacity),
             LayerKind::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
             LayerKind::Holographic { opacity } => draw_holographic(target, rect, opacity),
             LayerKind::BrightBorder { opacity } => {
@@ -100,6 +101,8 @@ enum LayerKind {
     DotGrid { opacity: f32 },
     /// Fine prismatic weave used by Secret Rare style cards.
     SecretWeave { opacity: f32 },
+    /// Optical diffraction simulation used by modern Secret Rare art foil.
+    OpticalSer { opacity: f32 },
     /// Full-spectrum horizontal gradient + noise tile.
     Holographic { opacity: f32 },
     /// Silver-blue bright border used by pser-print.
@@ -134,7 +137,7 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 
         RareType::Hr => vec![EffectLayer::full(LayerKind::Holographic { opacity: 0.45 })],
 
-        RareType::Ser => vec![EffectLayer::art(LayerKind::SecretWeave { opacity: 1.0 })],
+        RareType::Ser => vec![EffectLayer::art(LayerKind::OpticalSer { opacity: 1.0 })],
 
         RareType::Gser => vec![
             EffectLayer::full(LayerKind::SecretWeave { opacity: 0.58 }),
@@ -153,6 +156,394 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
         // See [`draw_rare_effect`] doc comment for details.
         RareType::Gr | RareType::Ur | RareType::Utr | RareType::Dt => vec![],
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Primitive: Optical Secret Rare
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OPTICAL_LUT_SIZE: usize = 1024;
+const OPTICAL_LAM_MIN: f32 = 380.0;
+const OPTICAL_LAM_MAX: f32 = 720.0;
+
+#[derive(Debug, Clone, Copy)]
+struct OpticalSerParams {
+    seed: u32,
+    cell_w: u32,
+    cell_h: u32,
+    cell_gap: u32,
+    tilt_strength: f32,
+    dome_depth: f32,
+    grating_d_nm: f32,
+    diffraction_order: u32,
+    blaze1: f32,
+    blaze2: f32,
+    tilt_factor: f32,
+    band_v1: f32,
+    band_v2: f32,
+    band_h1: f32,
+    band_h2: f32,
+    band_width: f32,
+    band_base: f32,
+    sheet_gain: f32,
+    micro_gain: f32,
+    sparkle_gain: f32,
+    light_x: f32,
+    light_y: f32,
+    light_z: f32,
+    light_blaze_shift: f32,
+    shininess: f32,
+    white_gain: f32,
+    darken: f32,
+    foil_gain: f32,
+    macro_cell: f32,
+    cluster_cell: f32,
+    energy_floor: f32,
+    macro_low: f32,
+    macro_high: f32,
+    cluster_low: f32,
+    cluster_high: f32,
+}
+
+const OPTICAL_SER_PARAMS: OpticalSerParams = OpticalSerParams {
+    seed: 42,
+    cell_w: 7,
+    cell_h: 7,
+    cell_gap: 2,
+    tilt_strength: 0.75,
+    dome_depth: 0.06,
+    grating_d_nm: 850.0,
+    diffraction_order: 1,
+    blaze1: 0.65,
+    blaze2: 0.30,
+    tilt_factor: 0.45,
+    band_v1: 0.30,
+    band_v2: 0.68,
+    band_h1: 0.32,
+    band_h2: 0.66,
+    band_width: 0.022,
+    band_base: 0.02,
+    sheet_gain: 3.00,
+    micro_gain: 2.50,
+    sparkle_gain: 0.90,
+    light_x: 0.50,
+    light_y: -0.40,
+    light_z: 1.00,
+    light_blaze_shift: 0.25,
+    shininess: 35.0,
+    white_gain: 1.00,
+    darken: 0.48,
+    foil_gain: 1.90,
+    macro_cell: 150.0,
+    cluster_cell: 24.0,
+    energy_floor: 0.28,
+    macro_low: 0.15,
+    macro_high: 0.92,
+    cluster_low: 0.38,
+    cluster_high: 0.90,
+};
+
+/// Physically-inspired Secret Rare foil for the illustration: a staggered
+/// micro-facet normal map, two orthogonal diffraction gratings, broad “#” band
+/// efficiency, FBM energy variation, and Blinn-Phong white glints.
+pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= f32::EPSILON {
+        return;
+    }
+
+    let params = OPTICAL_SER_PARAMS;
+    let width = target.width();
+    let height = target.height();
+    let x_start = rect.x.min(width);
+    let y_start = rect.y.min(height);
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    if x_start >= x_end || y_start >= y_end {
+        return;
+    }
+
+    let rect_w = rect.w.max(1) as f32;
+    let rect_h = rect.h.max(1) as f32;
+    let norm_w = (rect_w - 1.0).max(1.0);
+    let norm_h = (rect_h - 1.0).max(1.0);
+    let light = vec_norm3(params.light_x, params.light_y, params.light_z);
+    let half_vec = vec_norm3(light.0, light.1, light.2 + 1.0);
+    let light_xy_len = (light.0 * light.0 + light.1 * light.1).sqrt().max(1e-6);
+    let pixels = target.pixels_mut();
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let local_x = x.saturating_sub(rect.x);
+            let local_y = y.saturating_sub(rect.y);
+            let xf = local_x as f32;
+            let yf = local_y as f32;
+            let u = xf / norm_w;
+            let v = yf / norm_h;
+            let u_centered = u - 0.5;
+            let v_centered = v - 0.5;
+
+            let (nx, ny, nz, inside, col, row) = optical_micro_facet(local_x, local_y, params);
+            let n_dot_l = clamp01(nx * light.0 + ny * light.1 + nz * light.2);
+            let n_dot_h = clamp01(nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2);
+            let macro_axis = (u_centered * light.0 + v_centered * light.1) / light_xy_len;
+            let macro_light = smoothstep(-0.70, 0.70, macro_axis);
+            let energy = optical_energy(xf, yf, params);
+
+            let light_mod = (n_dot_l - 0.5) * params.light_blaze_shift;
+            let delta1 = nx * params.tilt_factor + params.blaze1 + light_mod;
+            let delta2 = ny * params.tilt_factor + params.blaze2 - light_mod;
+            let order = params.diffraction_order.max(1) as f32;
+            let lam1 = params.grating_d_nm * delta1.abs() / order;
+            let lam2 = params.grating_d_nm * delta2.abs() / order;
+            let rgb1 = optical_lut_lookup(lam1);
+            let rgb2 = optical_lut_lookup(lam2);
+
+            let bw = params.band_width.max(0.002);
+            let bb = params.band_base;
+            let bw_vary = bw * (0.72 + 0.28 * (1.0 - energy));
+            let band_intensity = 0.45 + 0.55 * energy;
+            let band_v =
+                gauss_line(u, params.band_v1, bw_vary).max(gauss_line(u, params.band_v2, bw_vary));
+            let band_h =
+                gauss_line(v, params.band_h1, bw_vary).max(gauss_line(v, params.band_h2, bw_vary));
+            let eff1 = (bb + (1.0 - bb) * band_v * band_intensity).clamp(bb, 1.0);
+            let eff2 = (bb + (1.0 - bb) * band_h * band_intensity).clamp(bb, 1.0);
+
+            let light_energy = 0.30 + 0.70 * n_dot_l;
+            let combined_energy = energy * inside * light_energy;
+            let macro_brightness = 0.25 + 0.75 * macro_light;
+            let micro_scale = combined_energy * macro_brightness * params.micro_gain * 0.5;
+            let micro_rgb = (
+                (rgb1.0 + rgb2.0) * micro_scale,
+                (rgb1.1 + rgb2.1) * micro_scale,
+                (rgb1.2 + rgb2.2) * micro_scale,
+            );
+
+            let band_boost1 = clamp01(eff1 - bb);
+            let band_boost2 = clamp01(eff2 - bb);
+            let band_rgb = (
+                (rgb1.0 * band_boost1 + rgb2.0 * band_boost2) * combined_energy,
+                (rgb1.1 * band_boost1 + rgb2.1 * band_boost2) * combined_energy,
+                (rgb1.2 * band_boost1 + rgb2.2 * band_boost2) * combined_energy,
+            );
+
+            let inv_band_base = (1.0 - bb).max(1e-6);
+            let line1 = band_boost1 / inv_band_base;
+            let line2 = band_boost2 / inv_band_base;
+            let hash_band = (line1 * 0.95).max(line2 * 1.05) + line1 * line2 * 0.70;
+            let hash_band = hash_band.clamp(0.0, 1.0);
+            let sheet_lam = 440.0
+                + 200.0 * macro_light
+                + 14.0 * (std::f32::consts::TAU * (u * 11.0 + v * 7.0)).sin();
+            let sheet_base = optical_lut_lookup(sheet_lam);
+            let sheet_energy = hash_band
+                * (0.18 + 0.82 * macro_light)
+                * (0.35 + 0.65 * energy)
+                * inside
+                * params.sheet_gain;
+            let sheet_rgb = (
+                sheet_base.0 * sheet_energy,
+                sheet_base.1 * sheet_energy,
+                sheet_base.2 * sheet_energy,
+            );
+
+            let diff_r = 1.0 - (-(micro_rgb.0 + band_rgb.0 + sheet_rgb.0) * params.foil_gain).exp();
+            let diff_g = 1.0 - (-(micro_rgb.1 + band_rgb.1 + sheet_rgb.1) * params.foil_gain).exp();
+            let diff_b = 1.0 - (-(micro_rgb.2 + band_rgb.2 + sheet_rgb.2) * params.foil_gain).exp();
+
+            let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
+            let pin = smoothstep(0.84, 0.995, optical_cell_hash(col, row, params.seed + 4242));
+            spec += pin
+                * (0.18 + 0.82 * hash_band)
+                * combined_energy
+                * params.sparkle_gain
+                * macro_brightness;
+
+            let idx = (y * width + x) as usize;
+            let dst = pixels[idx];
+            let base_r = dst.red() as f32 / 255.0;
+            let base_g = dst.green() as f32 / 255.0;
+            let base_b = dst.blue() as f32 / 255.0;
+
+            let dark_r = base_r * params.darken;
+            let dark_g = base_g * params.darken;
+            let dark_b = base_b * params.darken;
+            let reveal = (spec * 0.06).clamp(0.0, 0.06);
+            let result_r = clamp01(
+                1.0 - (1.0 - dark_r) * (1.0 - diff_r) + spec * params.white_gain + base_r * reveal,
+            );
+            let result_g = clamp01(
+                1.0 - (1.0 - dark_g) * (1.0 - diff_g) + spec * params.white_gain + base_g * reveal,
+            );
+            let result_b = clamp01(
+                1.0 - (1.0 - dark_b) * (1.0 - diff_b) + spec * params.white_gain + base_b * reveal,
+            );
+
+            let out_r = lerp_f32(base_r, result_r, opacity);
+            let out_g = lerp_f32(base_g, result_g, opacity);
+            let out_b = lerp_f32(base_b, result_b, opacity);
+            pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
+                (out_r * 255.0).round() as u8,
+                (out_g * 255.0).round() as u8,
+                (out_b * 255.0).round() as u8,
+                dst.alpha(),
+            )
+            .unwrap_or(dst);
+        }
+    }
+}
+
+fn optical_micro_facet(
+    local_x: u32,
+    local_y: u32,
+    params: OpticalSerParams,
+) -> (f32, f32, f32, f32, i32, i32) {
+    let pitch_x = (params.cell_w + params.cell_gap).max(1) as i32;
+    let pitch_y = (params.cell_h + params.cell_gap).max(1) as i32;
+    let px = local_x as i32;
+    let py = local_y as i32;
+    let col = px.div_euclid(pitch_x);
+    let stagger = if (col & 1) == 1 { pitch_y / 2 } else { 0 };
+    let row = (py - stagger).div_euclid(pitch_y);
+
+    let rnd_line = optical_cell_hash(col, row, params.seed + 5555);
+    let line_len = if rnd_line > 0.80 {
+        (optical_cell_hash(col, row, params.seed + 6666) * 3.0 + 2.0).floor()
+    } else {
+        1.0
+    };
+
+    let cx = (col as f32 + 0.5) * pitch_x as f32;
+    let cy = (row as f32 + 0.5) * pitch_y as f32 + stagger as f32;
+    let dx = (local_x as f32 - cx) / (params.cell_w.max(1) as f32 * 0.5);
+    let dy = (local_y as f32 - cy) / (params.cell_h.max(1) as f32 * 0.5);
+    let dy_stretched = dy / line_len.max(1.0);
+    let r = (dx.abs().powf(3.0) + dy_stretched.abs().powf(3.0)).powf(1.0 / 3.0);
+    let inside = 1.0 - smoothstep(0.85, 1.08, r);
+
+    let tilt_x =
+        (optical_cell_hash(col, row, params.seed + 1337) - 0.5) * 2.0 * params.tilt_strength;
+    let tilt_y =
+        (optical_cell_hash(col, row, params.seed + 8128) - 0.5) * 2.0 * params.tilt_strength;
+    let r_dist = (dx * dx + dy * dy).sqrt();
+    let slope = params.dome_depth * r_dist.clamp(0.0, 1.0);
+    let active = if inside > 0.001 { 1.0 } else { 0.0 };
+    let nx = (-dx * slope + tilt_x) * active;
+    let ny = (-dy * slope + tilt_y) * active;
+    let inv_len = 1.0 / (nx * nx + ny * ny + 1.0).sqrt();
+    (nx * inv_len, ny * inv_len, inv_len, inside, col, row)
+}
+
+fn optical_energy(x: f32, y: f32, params: OpticalSerParams) -> f32 {
+    let macro_noise = optical_fbm(x, y, params.macro_cell, params.seed + 10_001, 5);
+    let macro_energy = smoothstep(params.macro_low, params.macro_high, macro_noise);
+    let cluster_noise = optical_fbm(x, y, params.cluster_cell, params.seed + 20_003, 4);
+    let cluster_energy = smoothstep(params.cluster_low, params.cluster_high, cluster_noise);
+    params.energy_floor.max(macro_energy * cluster_energy)
+}
+
+fn optical_fbm(x: f32, y: f32, base_cell: f32, seed: u32, octaves: u32) -> f32 {
+    let mut total = 0.0;
+    let mut amp_sum = 0.0;
+    let mut amp = 1.0;
+    let mut cell = base_cell.max(1.0);
+    for octave in 0..octaves {
+        total += optical_smooth_noise(x, y, cell, seed + octave * 7919) * amp;
+        amp_sum += amp;
+        amp *= 0.5;
+        cell = (cell * 0.5).max(1.0);
+    }
+    if amp_sum > 1e-6 { total / amp_sum } else { 0.0 }
+}
+
+fn optical_smooth_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
+    let px = x / cell.max(1.0);
+    let py = y / cell.max(1.0);
+    let ix = px.floor() as i32;
+    let iy = py.floor() as i32;
+    let fx = px - ix as f32;
+    let fy = py - iy as f32;
+    let sx = fx * fx * (3.0 - 2.0 * fx);
+    let sy = fy * fy * (3.0 - 2.0 * fy);
+    let a = optical_cell_hash(ix, iy, seed);
+    let b = optical_cell_hash(ix + 1, iy, seed);
+    let c = optical_cell_hash(ix, iy + 1, seed);
+    let d = optical_cell_hash(ix + 1, iy + 1, seed);
+    (a * (1.0 - sx) + b * sx) * (1.0 - sy) + (c * (1.0 - sx) + d * sx) * sy
+}
+
+#[inline]
+fn optical_cell_hash(col: i32, row: i32, seed: u32) -> f32 {
+    let mut x = (col as u32).wrapping_mul(1_664_525).wrapping_add(seed)
+        ^ (row as u32).wrapping_mul(1_013_904_223);
+    x ^= x >> 16;
+    x = x.wrapping_mul(2_246_822_519);
+    x ^= x >> 13;
+    x = x.wrapping_mul(3_266_489_917);
+    x ^= x >> 16;
+    x as f32 / u32::MAX as f32
+}
+
+fn wavelength_lut() -> &'static [(f32, f32, f32)] {
+    static LUT: OnceLock<Vec<(f32, f32, f32)>> = OnceLock::new();
+    LUT.get_or_init(|| {
+        (0..OPTICAL_LUT_SIZE)
+            .map(|i| {
+                let t = i as f32 / (OPTICAL_LUT_SIZE - 1) as f32;
+                wavelength_rgb(OPTICAL_LAM_MIN + (OPTICAL_LAM_MAX - OPTICAL_LAM_MIN) * t)
+            })
+            .collect()
+    })
+}
+
+fn optical_lut_lookup(lam_nm: f32) -> (f32, f32, f32) {
+    if !(OPTICAL_LAM_MIN..=OPTICAL_LAM_MAX).contains(&lam_nm) {
+        return (0.0, 0.0, 0.0);
+    }
+    let lut = wavelength_lut();
+    let idx = (lam_nm - OPTICAL_LAM_MIN) / (OPTICAL_LAM_MAX - OPTICAL_LAM_MIN)
+        * (OPTICAL_LUT_SIZE - 1) as f32;
+    let i0 = idx.floor() as usize;
+    let i1 = (i0 + 1).min(OPTICAL_LUT_SIZE - 1);
+    let t = idx - i0 as f32;
+    lerp_rgb(lut[i0], lut[i1], t)
+}
+
+fn wavelength_rgb(lam: f32) -> (f32, f32, f32) {
+    let x = 1.056 * gauss_asym(lam, 599.8, 37.9, 31.0) + 0.362 * gauss_asym(lam, 442.0, 16.0, 26.7)
+        - 0.065 * gauss_asym(lam, 501.1, 20.4, 26.2);
+    let y = 0.821 * gauss_asym(lam, 568.8, 46.9, 40.5) + 0.286 * gauss_asym(lam, 530.9, 16.3, 31.1);
+    let z = 1.217 * gauss_asym(lam, 437.0, 11.8, 36.0) + 0.681 * gauss_asym(lam, 459.0, 26.0, 13.8);
+    let mut r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
+    let mut g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
+    let mut b = 0.0557 * x - 0.2040 * y + 1.0570 * z;
+    r = r.max(0.0);
+    g = g.max(0.0);
+    b = b.max(0.0);
+    let peak = r.max(g).max(b);
+    if peak > 1e-6 {
+        (r / peak, g / peak, b / peak)
+    } else {
+        (0.0, 0.0, 0.0)
+    }
+}
+
+#[inline]
+fn gauss_asym(x: f32, mu: f32, s1: f32, s2: f32) -> f32 {
+    let s = if x < mu { s1 } else { s2 };
+    (-0.5 * ((x - mu) / s).powi(2)).exp()
+}
+
+#[inline]
+fn gauss_line(x: f32, centre: f32, sigma: f32) -> f32 {
+    (-0.5 * ((x - centre) / sigma.max(1e-6)).powi(2)).exp()
+}
+
+#[inline]
+fn vec_norm3(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let inv = 1.0 / (x * x + y * y + z * z).sqrt().max(1e-8);
+    (x * inv, y * inv, z * inv)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +592,12 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let xf = local_x as f32;
             let yf = local_y as f32;
             let cell_x = local_x / SECRET_CELL;
-            let stagger_y = local_y + if (cell_x & 1) != 0 { SECRET_CELL / 2 } else { 0 };
+            let stagger_y = local_y
+                + if (cell_x & 1) != 0 {
+                    SECRET_CELL / 2
+                } else {
+                    0
+                };
             let cell_y = stagger_y / SECRET_CELL;
             let in_cell_x = local_x % SECRET_CELL;
             let in_cell_y = stagger_y % SECRET_CELL;
@@ -232,7 +628,9 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                         break;
                     }
                 }
-                if elem_mask >= 1.0 { break; }
+                if elem_mask >= 1.0 {
+                    break;
+                }
             }
 
             let u = xf / rect_w;
@@ -241,7 +639,8 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let diagonal_grating = (ser_sin((xf + yf) * 0.11) * 0.5 + 0.5).powf(10.0);
             let pin_hash = ser_pixel_hash(local_x / 2, local_y / 2);
             let pin_spark = if (pin_hash & 0x1ff) < 11 { 1.0 } else { 0.0 };
-            let broad_wave = (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
+            let broad_wave =
+                (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
             let cloud_a = value_noise(u, v, 2.4, 3, 11);
             let cloud_b = value_noise(u, v, 5.6, 7, 13);
             let cloud_c = value_noise(u, v, 9.0, 17, 5);
@@ -275,16 +674,30 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let light_dist = (to_lx * to_lx + to_ly * to_ly).sqrt();
             let near_light = 1.0 - (light_dist / (max_dist * 0.56)).clamp(0.0, 1.0);
             let glow = near_light.powi(3) * 0.20;
-            let glow_skirt = (1.0 - (light_dist / (max_dist * 0.72)).clamp(0.0, 1.0)).powi(4) * 0.08;
+            let glow_skirt =
+                (1.0 - (light_dist / (max_dist * 0.72)).clamp(0.0, 1.0)).powi(4) * 0.08;
             let glow_angle = to_ly.atan2(to_lx);
             let glow_phase = (glow_angle + std::f32::consts::PI) / (2.0 * std::f32::consts::PI);
             let hue_dist = light_dist / max_dist;
             let _hue_diff = 0.035 + hue_dist * (0.780 - 0.035);
-            let h_prism = prism_peak(u * 31.0 + v * 1.6 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 1.7 + cloud_a * 0.42, 8.0)
-                + prism_peak(u * 53.0 - v * 2.4 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.9 + cloud_c * 0.35, 10.0) * 0.58;
-            let v_prism = prism_peak(v * 35.0 - u * 1.9 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.6 + cloud_b * 0.40, 8.0)
-                + prism_peak(v * 59.0 + u * 2.1 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 2.0 + cloud_a * 0.36, 10.0) * 0.52;
-            let diag_prism = prism_peak((u + v) * 26.0 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 1.8 + cloud_c * 0.50, 9.0);
+            let h_prism = prism_peak(
+                u * 31.0 + v * 1.6 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 1.7 + cloud_a * 0.42,
+                8.0,
+            ) + prism_peak(
+                u * 53.0 - v * 2.4 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.9 + cloud_c * 0.35,
+                10.0,
+            ) * 0.58;
+            let v_prism = prism_peak(
+                v * 35.0 - u * 1.9 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.6 + cloud_b * 0.40,
+                8.0,
+            ) + prism_peak(
+                v * 59.0 + u * 2.1 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 2.0 + cloud_a * 0.36,
+                10.0,
+            ) * 0.52;
+            let diag_prism = prism_peak(
+                (u + v) * 26.0 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 1.8 + cloud_c * 0.50,
+                9.0,
+            );
 
             let h_center0 = 0.165 + ser_sin(u * 9.0 + 0.8) * 0.018 + (cloud_a - 0.5) * 0.030;
             let h_center1 = 0.318 + ser_sin(u * 7.4 + 2.1) * 0.024 + (cloud_b - 0.5) * 0.034;
@@ -301,34 +714,90 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let v_lobe0 = gauss(u - (0.185 + ser_sin(v * 6.2) * 0.026), 0.052);
             let v_lobe1 = gauss(u - (0.525 + ser_sin(v * 5.8 + 1.1) * 0.035), 0.072);
             let v_lobe2 = gauss(u - (0.815 + ser_sin(v * 6.8 + 2.4) * 0.034), 0.066);
-            let h_cloud = (h_band0 * 0.28 + h_band1 * 0.40 + h_band2 * 0.44 + h_band3 * 0.36 + h_band4 * 0.24 + slant_band * 0.22).min(1.0);
-            let v_cloud = (v_lobe0 * 0.22 + v_lobe1 * 0.28 + v_lobe2 * 0.24 + slant_band * 0.16).min(1.0);
+            let h_cloud = (h_band0 * 0.28
+                + h_band1 * 0.40
+                + h_band2 * 0.44
+                + h_band3 * 0.36
+                + h_band4 * 0.24
+                + slant_band * 0.22)
+                .min(1.0);
+            let v_cloud =
+                (v_lobe0 * 0.22 + v_lobe1 * 0.28 + v_lobe2 * 0.24 + slant_band * 0.16).min(1.0);
             let granular = ((ch >> 10) & 0xff) as f32 / 255.0;
-            let fine_hash = ((ser_pixel_hash(local_x / 2, local_y / 2) >> 11) & 0xff) as f32 / 255.0;
-            let speckle = smoothstep(0.50, 0.96, granular * 0.36 + fine_hash * 0.30 + cloud_c * 0.34);
+            let fine_hash =
+                ((ser_pixel_hash(local_x / 2, local_y / 2) >> 11) & 0xff) as f32 / 255.0;
+            let speckle = smoothstep(
+                0.50,
+                0.96,
+                granular * 0.36 + fine_hash * 0.30 + cloud_c * 0.34,
+            );
             let cloud_gate = 0.36 + patch * 0.64;
             let unit_gate = 0.46 + elem_mask * 0.54 + vertical_grating * 0.14 + pin_spark * 0.18;
             let h_scan_gate = 0.18 + h_prism.max(speckle).min(1.0) * 0.82;
             let v_scan_gate = 0.18 + v_prism.max(speckle).min(1.0) * 0.82;
-            let line_foil_gate = (elem_mask * 0.72 + vertical_grating * 0.18 + diagonal_grating * 0.08 + speckle * 0.34 + h_prism.max(v_prism) * 0.24 + pin_spark * 0.30).min(1.0);
+            let line_foil_gate = (elem_mask * 0.72
+                + vertical_grating * 0.18
+                + diagonal_grating * 0.08
+                + speckle * 0.34
+                + h_prism.max(v_prism) * 0.24
+                + pin_spark * 0.30)
+                .min(1.0);
             let line_reflect_gate = 0.08 + line_foil_gate * 0.92;
-            let h_response = (h_cloud * cloud_gate * h_scan_gate * 0.48 + h_prism * unit_gate * 0.64 + diag_prism * 0.16 + speckle * 0.48 + preset_h * 0.78 * line_reflect_gate).min(1.0);
-            let v_response = (v_cloud * cloud_gate * v_scan_gate * 0.39 + v_prism * unit_gate * 0.5632 + diag_prism * 0.18 + speckle * 0.3552 + preset_v * 0.6084 * line_reflect_gate).min(1.0);
-            let grain_response = (speckle * 0.72 + h_prism.max(v_prism) * 0.42 + pin_spark * 0.34 + diag_prism * 0.22).min(1.0);
-            let line_bright = ((preset_line_core * 0.82 + preset_h.max(preset_v) * 0.42) * line_reflect_gate).min(1.0);
+            let h_response = (h_cloud * cloud_gate * h_scan_gate * 0.48
+                + h_prism * unit_gate * 0.64
+                + diag_prism * 0.16
+                + speckle * 0.48
+                + preset_h * 0.78 * line_reflect_gate)
+                .min(1.0);
+            let v_response = (v_cloud * cloud_gate * v_scan_gate * 0.39
+                + v_prism * unit_gate * 0.5632
+                + diag_prism * 0.18
+                + speckle * 0.3552
+                + preset_v * 0.6084 * line_reflect_gate)
+                .min(1.0);
+            let grain_response = (speckle * 0.72
+                + h_prism.max(v_prism) * 0.42
+                + pin_spark * 0.34
+                + diag_prism * 0.22)
+                .min(1.0);
+            let line_bright = ((preset_line_core * 0.82 + preset_h.max(preset_v) * 0.42)
+                * line_reflect_gate)
+                .min(1.0);
             let warm_warm = smoothstep(0.20, 0.78, near_light);
-            let warm_response = ((h_band1 * 0.30 + h_band2 * 0.22 + preset_h * 0.22 * line_reflect_gate + preset_v * 0.12 * line_reflect_gate + warm_warm * 0.22) * (0.38 + h_prism * 0.48 + speckle * 0.14) * (1.06 - width_t * 0.24)).min(1.0);
-            let grid_rggb = ser_grid_distribution_rgb(u, v, band_x0 / rect_w, band_x1 / rect_w, band_y0 / rect_h, band_y1 / rect_h, h_response + preset_h * 0.55 * line_reflect_gate, v_response + preset_v * 0.55 * line_reflect_gate, grain_response * 0.72 + fine_hash * 0.28);
-            let speckle_rgb = ser_independent_speckle_rgb(u, v, ((ch >> 17) & 0xffff) as f32 / 65535.0, ((ch >> 33) & 0xffff) as f32 / 65535.0, ((ch >> 49) & 0x7fff) as f32 / 32767.0, warm_warm * 0.45 + warm_response * 0.35);
+            let warm_response = ((h_band1 * 0.30
+                + h_band2 * 0.22
+                + preset_h * 0.22 * line_reflect_gate
+                + preset_v * 0.12 * line_reflect_gate
+                + warm_warm * 0.22)
+                * (0.38 + h_prism * 0.48 + speckle * 0.14)
+                * (1.06 - width_t * 0.24))
+                .min(1.0);
+            let grid_rggb = ser_grid_distribution_rgb(
+                u,
+                v,
+                band_x0 / rect_w,
+                band_x1 / rect_w,
+                band_y0 / rect_h,
+                band_y1 / rect_h,
+                h_response + preset_h * 0.55 * line_reflect_gate,
+                v_response + preset_v * 0.55 * line_reflect_gate,
+                grain_response * 0.72 + fine_hash * 0.28,
+            );
+            let speckle_rgb = ser_independent_speckle_rgb(
+                u,
+                v,
+                ((ch >> 17) & 0xffff) as f32 / 65535.0,
+                ((ch >> 33) & 0xffff) as f32 / 65535.0,
+                ((ch >> 49) & 0x7fff) as f32 / 32767.0,
+                warm_warm * 0.45 + warm_response * 0.35,
+            );
             // Hash-driven colour pops that activate existing foil fragments with
             // an opposite colour temperature. They should not create extra dot
             // geometry; they only re-colour already-visible foil units/grains.
             let loose_hash = ser_pixel_hash(local_x / 2 + 19, local_y / 2 + 43);
             let loose_grain = (loose_hash & 0xffff) as f32 / 65535.0;
             let loose_phase = avoid_magenta_phase(
-                (((loose_hash >> 16) & 0xffff) as f32 / 65535.0
-                    + u * 0.23
-                    - v * 0.17
+                (((loose_hash >> 16) & 0xffff) as f32 / 65535.0 + u * 0.23 - v * 0.17
                     + cloud_b * 0.11)
                     .rem_euclid(1.0),
                 warm_warm * 0.25,
@@ -359,33 +828,66 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 + loose_gate * foil_colour_gate * 0.34
                 + opposite_activation * 0.42)
                 .min(0.76);
-            let loose_mix = (loose_gate * foil_colour_gate * 0.30 + opposite_activation * 0.50).min(0.68);
+            let loose_mix =
+                (loose_gate * foil_colour_gate * 0.30 + opposite_activation * 0.50).min(0.68);
             let independent_r = speckle_rgb.0 * (1.0 - loose_mix) + loose_rgb.0 * loose_mix;
             let independent_g = speckle_rgb.1 * (1.0 - loose_mix) + loose_rgb.1 * loose_mix;
             let independent_b = speckle_rgb.2 * (1.0 - loose_mix) + loose_rgb.2 * loose_mix;
             let diff_r = grid_rggb.0 * (1.0 - speckle_mix) + independent_r * speckle_mix;
             let diff_g = grid_rggb.1 * (1.0 - speckle_mix) + independent_g * speckle_mix;
             let diff_b = grid_rggb.2 * (1.0 - speckle_mix) + independent_b * speckle_mix;
-            let line_core = (preset_line_core * 0.62 * line_reflect_gate + h_response.max(v_response) * 0.64 + grain_response * 0.26).min(1.0);
-            let core = (h_response.max(v_response) * 0.88 + grain_response * 0.28 + warm_response * 0.16 + preset_core * 0.045 + line_bright * 0.16).min(1.0);
+            let line_core = (preset_line_core * 0.62 * line_reflect_gate
+                + h_response.max(v_response) * 0.64
+                + grain_response * 0.26)
+                .min(1.0);
+            let core = (h_response.max(v_response) * 0.88
+                + grain_response * 0.28
+                + warm_response * 0.16
+                + preset_core * 0.045
+                + line_bright * 0.16)
+                .min(1.0);
             let halo = (h_cloud.max(v_cloud) * 0.20 + patch * 0.08 + preset_halo * 0.035).min(1.0);
             let mut strength = core * 0.48 + halo * 0.36;
             let in_band = strength;
-            let ambient_glow = if in_band < 0.01 { glow * 0.16 + glow_skirt * 0.10 } else { (glow + glow_skirt) * 0.16 };
-            let mut surface = (0.040 + elem_mask * 0.28 + vertical_grating * 0.060 + diagonal_grating * 0.018 + pin_spark * 0.16) * (0.72 + broad_wave * 0.34);
-            let lit_gate = (line_core * 0.70 + core * 0.55 + halo * 0.18 + ambient_glow * 1.10).min(1.0);
+            let ambient_glow = if in_band < 0.01 {
+                glow * 0.16 + glow_skirt * 0.10
+            } else {
+                (glow + glow_skirt) * 0.16
+            };
+            let mut surface = (0.040
+                + elem_mask * 0.28
+                + vertical_grating * 0.060
+                + diagonal_grating * 0.018
+                + pin_spark * 0.16)
+                * (0.72 + broad_wave * 0.34);
+            let lit_gate =
+                (line_core * 0.70 + core * 0.55 + halo * 0.18 + ambient_glow * 1.10).min(1.0);
             surface *= 0.88 + lit_gate * (1.08 - 0.88);
-            strength = (surface * (0.54 + strength * 1.34) + ambient_glow + line_core.powf(1.32) * line_core_lift).min(0.92);
+            strength = (surface * (0.54 + strength * 1.34)
+                + ambient_glow
+                + line_core.powf(1.32) * line_core_lift)
+                .min(0.92);
             strength = (strength + line_bright * 0.055).min(0.94);
-            if elem_mask > 0.2 { strength *= 1.08; }
-            let unit_mask = (elem_mask + vertical_grating * 0.26 + diagonal_grating * 0.14 + pin_spark * 0.22).min(1.0);
-            if strength < 0.012 && unit_mask < 0.01 { continue; }
+            if elem_mask > 0.2 {
+                strength *= 1.08;
+            }
+            let unit_mask =
+                (elem_mask + vertical_grating * 0.26 + diagonal_grating * 0.14 + pin_spark * 0.22)
+                    .min(1.0);
+            if strength < 0.012 && unit_mask < 0.01 {
+                continue;
+            }
             let spark_hash = ser_pixel_hash(local_x / 3, local_y / 3);
             let spark_on = core > 0.58 && (spark_hash & 0x7ff) < 58;
-            if strength <= 0.0 && !spark_on { continue; }
+            if strength <= 0.0 && !spark_on {
+                continue;
+            }
             let idx = (y * width + x) as usize;
             let dst = pixels[idx];
-            let luminance = (dst.red() as f32 * 0.2126 + dst.green() as f32 * 0.7152 + dst.blue() as f32 * 0.0722) / 255.0;
+            let luminance = (dst.red() as f32 * 0.2126
+                + dst.green() as f32 * 0.7152
+                + dst.blue() as f32 * 0.0722)
+                / 255.0;
             let ink_visibility = (1.16 - luminance).clamp(0.34, 1.0);
             let dark_foil_vis = smoothstep(0.92, 0.24, luminance);
             let base_unit_alpha = (unit_mask * 0.52 * (0.70 + broad_wave * 0.30)).min(1.0);
@@ -400,35 +902,65 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 let gw = (ambient_glow / strength.max(0.001)).clamp(0.0, 1.0);
                 let bw = 1.0 - gw;
                 let cell_hue = ((ch >> 24) & 0xff) as f32 / 255.0;
-                let texture_hue = avoid_magenta_phase((cell_hue * 0.62 + u * 0.16 - v * 0.12 + broad_wave * 0.18 + vertical_grating * 0.08).rem_euclid(1.0), 0.08);
+                let texture_hue = avoid_magenta_phase(
+                    (cell_hue * 0.62 + u * 0.16 - v * 0.12
+                        + broad_wave * 0.18
+                        + vertical_grating * 0.08)
+                        .rem_euclid(1.0),
+                    0.08,
+                );
                 let band_sat = 0.98 + (0.92 - 0.98) * width_t;
                 let band_val_cap = 1.0 + (0.88 - 1.0) * width_t;
                 let (tex_r, tex_g, tex_b) = hsv_to_rgb(texture_hue, band_sat, 1.0);
-                let band_val = (strength * 1.16 * (1.10 - width_t * 0.08)).max(0.36 * (0.22 + line_core.max(core).max(halo) * 0.78)).min(band_val_cap).min(1.0);
+                let band_val = (strength * 1.16 * (1.10 - width_t * 0.08))
+                    .max(0.36 * (0.22 + line_core.max(core).max(halo) * 0.78))
+                    .min(band_val_cap)
+                    .min(1.0);
                 let band_r = diff_r * (1.0 - 0.10) + tex_r * 0.10;
                 let band_g = diff_g * (1.0 - 0.10) + tex_g * 0.10;
                 let band_b = diff_b * (1.0 - 0.10) + tex_b * 0.10;
-                let rainbow_glow_hue = avoid_magenta_phase(0.040 + bw * 0.04 + glow_phase * 0.34, 0.5);
-                let warm_glow_hue = 0.030 + broad_wave * 0.030 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 0.020;
+                let rainbow_glow_hue =
+                    avoid_magenta_phase(0.040 + bw * 0.04 + glow_phase * 0.34, 0.5);
+                let warm_glow_hue =
+                    0.030 + broad_wave * 0.030 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 0.020;
                 let glow_hue = lerp_f32(rainbow_glow_hue, warm_glow_hue, warm_warm);
-                let (glow_r, glow_g, glow_b) = hsv_to_rgb(glow_hue, 0.88 + near_light * 0.12, (strength * 0.92).min(0.92));
-                ((band_r * band_val) * bw + glow_r * gw, (band_g * band_val) * bw + glow_g * gw, (band_b * band_val) * bw + glow_b * gw)
+                let (glow_r, glow_g, glow_b) = hsv_to_rgb(
+                    glow_hue,
+                    0.88 + near_light * 0.12,
+                    (strength * 0.92).min(0.92),
+                );
+                (
+                    (band_r * band_val) * bw + glow_r * gw,
+                    (band_g * band_val) * bw + glow_g * gw,
+                    (band_b * band_val) * bw + glow_b * gw,
+                )
             };
-            let mut alpha = (strength * ink_visibility * (0.64 + dark_foil_vis * 0.42 + line_bright * 0.18)).min(1.0) * opacity;
+            let mut alpha =
+                (strength * ink_visibility * (0.64 + dark_foil_vis * 0.42 + line_bright * 0.18))
+                    .min(1.0)
+                    * opacity;
             alpha *= 1.0 + lit_gate * 0.66 + line_core * 1.08;
             alpha *= 1.0 + line_bright * 0.18;
             alpha = alpha.min(0.99);
-            if spark_on { alpha = 0.82 * opacity; }
+            if spark_on {
+                alpha = 0.82 * opacity;
+            }
             let screen_alpha = (alpha * 0.66).min(1.0);
             let src_lum = (0.2126 * r + 0.7152 * g + 0.0722 * b).max(0.001);
-            let reflect_lum = (luminance * (0.70 + line_core * 0.10) + strength * 0.22 + grain_response * 0.08)
-                .max(0.16 + line_core * 0.14 + line_bright * 0.18)
-                .min(0.98);
+            let reflect_lum =
+                (luminance * (0.70 + line_core * 0.10) + strength * 0.22 + grain_response * 0.08)
+                    .max(0.16 + line_core * 0.14 + line_bright * 0.18)
+                    .min(0.98);
             let reflect_scale = reflect_lum / src_lum;
             let rr = clamp01(r * reflect_scale);
             let rg = clamp01(g * reflect_scale);
             let rb = clamp01(b * reflect_scale);
-            let color_overlay = (alpha * (0.94 * (0.35 + lit_gate * 0.65) + line_core * 1.58 + lit_gate * 0.54 + line_bright * 0.52)).min(0.98);
+            let color_overlay = (alpha
+                * (0.94 * (0.35 + lit_gate * 0.65)
+                    + line_core * 1.58
+                    + lit_gate * 0.54
+                    + line_bright * 0.52))
+                .min(0.98);
             let sr = screen_channel_float(br, r, screen_alpha);
             let sg = screen_channel_float(bg, g, screen_alpha);
             let sb = screen_channel_float(bb, b, screen_alpha);
@@ -440,7 +972,8 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 (out_g * 255.0).round() as u8,
                 (out_b * 255.0).round() as u8,
                 dst.alpha(),
-            ).unwrap_or(dst);
+            )
+            .unwrap_or(dst);
         }
     }
 }
@@ -469,7 +1002,12 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             let v = yf / rect_h;
 
             let cell_x = local_x / SECRET_CELL;
-            let stagger_y = local_y + if (cell_x & 1) != 0 { SECRET_CELL / 2 } else { 0 };
+            let stagger_y = local_y
+                + if (cell_x & 1) != 0 {
+                    SECRET_CELL / 2
+                } else {
+                    0
+                };
             let cell_y = stagger_y / SECRET_CELL;
             let in_cell_x = local_x % SECRET_CELL;
             let ch = ser_pixel_hash(cell_x, cell_y);
@@ -504,16 +1042,30 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             let diagonal_grating = (ser_sin((xf + yf) * 0.11) * 0.5 + 0.5).powf(10.0);
             let pin_hash = ser_pixel_hash(local_x / 2, local_y / 2);
             let pin_spark = if (pin_hash & 0x1ff) < 11 { 1.0 } else { 0.0 };
-            let broad_wave = (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
+            let broad_wave =
+                (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
             let cloud_a = value_noise(u, v, 2.4, 3, 11);
             let cloud_b = value_noise(u, v, 5.6, 7, 13);
             let cloud_c = value_noise(u, v, 9.0, 17, 5);
             let granular = ((ch >> 10) & 0xff) as f32 / 255.0;
             let fine_hash = ((pin_hash >> 11) & 0xff) as f32 / 255.0;
-            let speckle = smoothstep(0.46, 0.94, granular * 0.38 + fine_hash * 0.34 + cloud_c * 0.28);
-            let h_prism = prism_peak(u * 31.0 + v * 1.6 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 1.7 + cloud_a * 0.42, 8.0);
-            let v_prism = prism_peak(v * 35.0 - u * 1.9 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.6 + cloud_b * 0.40, 8.0);
-            let diag_prism = prism_peak((u + v) * 26.0 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 1.8 + cloud_c * 0.50, 9.0);
+            let speckle = smoothstep(
+                0.46,
+                0.94,
+                granular * 0.38 + fine_hash * 0.34 + cloud_c * 0.28,
+            );
+            let h_prism = prism_peak(
+                u * 31.0 + v * 1.6 + ((ch >> 17) & 0xffff) as f32 / 65535.0 * 1.7 + cloud_a * 0.42,
+                8.0,
+            );
+            let v_prism = prism_peak(
+                v * 35.0 - u * 1.9 + ((ch >> 33) & 0xffff) as f32 / 65535.0 * 1.6 + cloud_b * 0.40,
+                8.0,
+            );
+            let diag_prism = prism_peak(
+                (u + v) * 26.0 + ((ch >> 49) & 0x7fff) as f32 / 32767.0 * 1.8 + cloud_c * 0.50,
+                9.0,
+            );
             let foil_gate = (elem_mask * 0.56
                 + vertical_grating * 0.26
                 + diagonal_grating * 0.10
@@ -526,7 +1078,11 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             // the full rainbow cover. This breaks regularity without punching
             // visible holes in the foil.
             let activation_hash = ser_pixel_hash(cell_x.wrapping_add(97), cell_y.wrapping_add(193));
-            let activation_scale = if (activation_hash & 0xffff) < 16_384 { 0.36 } else { 1.0 };
+            let activation_scale = if (activation_hash & 0xffff) < 16_384 {
+                0.36
+            } else {
+                1.0
+            };
             if foil_gate < 0.015 {
                 continue;
             }
@@ -534,7 +1090,8 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             let phase_a = ((ch >> 17) & 0xffff) as f32 / 65535.0;
             let phase_b = ((ch >> 33) & 0xffff) as f32 / 65535.0;
             let phase_c = ((ch >> 49) & 0x7fff) as f32 / 32767.0;
-            let base_rgb = ser_independent_speckle_rgb(u, v, phase_a, phase_b, phase_c, 0.22 + cloud_a * 0.28);
+            let base_rgb =
+                ser_independent_speckle_rgb(u, v, phase_a, phase_b, phase_c, 0.22 + cloud_a * 0.28);
 
             // Region-local horizontal rainbow activation. Left is red/orange,
             // right is blue/indigo; every attribute/star mask gets the full sweep.
@@ -552,10 +1109,21 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             };
             let gradient_rgb = spectral_phase_rgb(gradient_hue, 0.98, 1.0);
 
-            let local_hue = avoid_magenta_phase((u * 0.30 - v * 0.18 + phase_a * 0.42 + broad_wave * 0.16).rem_euclid(1.0), 0.18);
+            let local_hue = avoid_magenta_phase(
+                (u * 0.30 - v * 0.18 + phase_a * 0.42 + broad_wave * 0.16).rem_euclid(1.0),
+                0.18,
+            );
             let local_rgb = spectral_phase_rgb(local_hue, 0.96, 1.0);
-            let shimmer_rgb = lerp_rgb(local_rgb, base_rgb, (0.28 + speckle * 0.32 + h_prism.max(v_prism) * 0.14).min(0.66));
-            let mut rgb = lerp_rgb(shimmer_rgb, gradient_rgb, (0.58 + foil_gate * 0.28 + speckle * 0.12).min(0.92));
+            let shimmer_rgb = lerp_rgb(
+                local_rgb,
+                base_rgb,
+                (0.28 + speckle * 0.32 + h_prism.max(v_prism) * 0.14).min(0.66),
+            );
+            let mut rgb = lerp_rgb(
+                shimmer_rgb,
+                gradient_rgb,
+                (0.58 + foil_gate * 0.28 + speckle * 0.12).min(0.92),
+            );
 
             // Some already-active foil fragments flip to the opposite colour
             // temperature, but this only changes colour, not geometry/mask.
@@ -572,7 +1140,10 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
 
             let idx = (y * width + x) as usize;
             let dst = pixels[idx];
-            let lum = (dst.red() as f32 * 0.2126 + dst.green() as f32 * 0.7152 + dst.blue() as f32 * 0.0722) / 255.0;
+            let lum = (dst.red() as f32 * 0.2126
+                + dst.green() as f32 * 0.7152
+                + dst.blue() as f32 * 0.0722)
+                / 255.0;
             let ink_visibility = (1.16 - lum).clamp(0.34, 1.0);
             let strength = (0.12 + foil_gate * 0.88 + speckle * 0.34 + diag_prism * 0.22)
                 * (0.88 + broad_wave * 0.38);
@@ -580,8 +1151,11 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             // does not visually dominate the warm side.
             let right_fade = lerp_f32(1.0, 0.70, smoothstep(0.12, 1.0, u));
             let local_opacity = opacity * right_fade;
-            let alpha = (strength * (0.78 + ink_visibility * 0.22) * local_opacity * activation_scale).min(1.0);
-            let dark_alpha = (foil_gate * 0.56 * local_opacity * (0.58 + activation_scale * 0.42)).min(0.64);
+            let alpha =
+                (strength * (0.78 + ink_visibility * 0.22) * local_opacity * activation_scale)
+                    .min(1.0);
+            let dark_alpha =
+                (foil_gate * 0.56 * local_opacity * (0.58 + activation_scale * 0.42)).min(0.64);
             let keep = 1.0 - dark_alpha * 0.54;
             let br = dst.red() as f32 / 255.0 * keep;
             let bg = dst.green() as f32 / 255.0 * keep;
@@ -590,7 +1164,8 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             let sr = screen_channel_float(br, rgb.0, screen_alpha);
             let sg = screen_channel_float(bg, rgb.1, screen_alpha);
             let sb = screen_channel_float(bb, rgb.2, screen_alpha);
-            let overlay = (alpha * (0.82 + foil_gate * 0.76) * (0.72 + activation_scale * 0.28)).min(0.98);
+            let overlay =
+                (alpha * (0.82 + foil_gate * 0.76) * (0.72 + activation_scale * 0.28)).min(0.98);
             let src_lum = (0.2126 * rgb.0 + 0.7152 * rgb.1 + 0.0722 * rgb.2).max(0.001);
             let reflect_lum = (lum * 0.36 + strength * 0.52 + speckle * 0.12).clamp(0.24, 1.0);
             let scale = reflect_lum / src_lum;
@@ -902,16 +1477,24 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 #[inline]
-fn clamp01(v: f32) -> f32 { v.clamp(0.0, 1.0) }
+fn clamp01(v: f32) -> f32 {
+    v.clamp(0.0, 1.0)
+}
 
 #[inline]
-fn lerp_f32(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t.clamp(0.0, 1.0) }
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t.clamp(0.0, 1.0)
+}
 
 #[inline]
-fn gauss(d: f32, sigma: f32) -> f32 { (-d * d / (2.0 * sigma * sigma)).exp() }
+fn gauss(d: f32, sigma: f32) -> f32 {
+    (-d * d / (2.0 * sigma * sigma)).exp()
+}
 
 #[inline]
-fn ser_sin(v: f32) -> f32 { v.sin() }
+fn ser_sin(v: f32) -> f32 {
+    v.sin()
+}
 
 #[inline]
 fn ser_pixel_hash(x: u32, y: u32) -> u64 {
@@ -924,7 +1507,9 @@ fn ser_pixel_hash(x: u32, y: u32) -> u64 {
 }
 
 #[inline]
-fn ser_hash01(x: u32, y: u32) -> f32 { (ser_pixel_hash(x, y) & 0xFFFF) as f32 / 65535.0 }
+fn ser_hash01(x: u32, y: u32) -> f32 {
+    (ser_pixel_hash(x, y) & 0xFFFF) as f32 / 65535.0
+}
 
 #[inline]
 fn value_noise(u: f32, v: f32, scale: f32, seed_x: i32, seed_y: i32) -> f32 {
@@ -944,11 +1529,26 @@ fn value_noise(u: f32, v: f32, scale: f32, seed_x: i32, seed_y: i32) -> f32 {
 }
 
 #[inline]
-fn prism_peak(phase: f32, power: f32) -> f32 { (ser_sin(phase * std::f32::consts::TAU) * 0.5 + 0.5).powf(power) }
+fn prism_peak(phase: f32, power: f32) -> f32 {
+    (ser_sin(phase * std::f32::consts::TAU) * 0.5 + 0.5).powf(power)
+}
 
 #[inline]
-fn ser_independent_speckle_rgb(u: f32, v: f32, phase_a: f32, phase_b: f32, phase_c: f32, warm_bias: f32) -> (f32, f32, f32) {
-    let mut phase = (phase_a * 0.42 + phase_b * 0.31 + phase_c * 0.27 + ser_sin(u * 38.0 + v * 17.0) * 0.055 + u * 0.18 - v * 0.11).rem_euclid(1.0);
+fn ser_independent_speckle_rgb(
+    u: f32,
+    v: f32,
+    phase_a: f32,
+    phase_b: f32,
+    phase_c: f32,
+    warm_bias: f32,
+) -> (f32, f32, f32) {
+    let mut phase = (phase_a * 0.42
+        + phase_b * 0.31
+        + phase_c * 0.27
+        + ser_sin(u * 38.0 + v * 17.0) * 0.055
+        + u * 0.18
+        - v * 0.11)
+        .rem_euclid(1.0);
     phase = avoid_magenta_phase(phase, warm_bias);
     let r = spectral_phase_rgb(phase, 0.99, 1.0);
     let cool = spectral_phase_rgb(0.57 + phase_b * 0.12, 0.96, 1.0);
@@ -959,7 +1559,17 @@ fn ser_independent_speckle_rgb(u: f32, v: f32, phase_a: f32, phase_b: f32, phase
 }
 
 #[inline]
-fn ser_grid_distribution_rgb(u: f32, v: f32, x0: f32, x1: f32, y0: f32, y1: f32, h_weight: f32, v_weight: f32, grain: f32) -> (f32, f32, f32) {
+fn ser_grid_distribution_rgb(
+    u: f32,
+    v: f32,
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    h_weight: f32,
+    v_weight: f32,
+    grain: f32,
+) -> (f32, f32, f32) {
     let cyan = (0.00, 0.66, 0.96);
     let blue = (0.02, 0.12, 1.00);
     let deep_blue = (0.02, 0.02, 0.92);
@@ -968,16 +1578,65 @@ fn ser_grid_distribution_rgb(u: f32, v: f32, x0: f32, x1: f32, y0: f32, y1: f32,
     let yellow = (1.00, 0.96, 0.00);
     let orange = (1.00, 0.52, 0.00);
     let red_orange = (1.00, 0.18, 0.03);
-    let top_h = palette_ramp(&[(0.0, cyan), (x0, green), (x0 + (x1 - x0) * 0.42, cyan), (x1, blue), (1.0, deep_blue)], u);
-    let bottom_h = palette_ramp(&[(0.0, yellow), (x0 * 0.68, yellow), (x0, orange), (x0 + (x1 - x0) * 0.52, yellow), (x1 - (x1 - x0) * 0.10, lime), (x1, green), (1.0, cyan)], u);
-    let left_v = palette_ramp(&[(0.0, cyan), (y0, green), (y0 + (y1 - y0) * 0.24, lime), (y0 + (y1 - y0) * 0.50, yellow), (y0 + (y1 - y0) * 0.78, red_orange), (y1, yellow), (1.0, yellow)], v);
-    let right_v = palette_ramp(&[(0.0, deep_blue), (y0, blue), (y0 + (y1 - y0) * 0.50, cyan), (y0 + (y1 - y0) * 0.70, lime), (y1, cyan), (1.0, cyan)], v);
+    let top_h = palette_ramp(
+        &[
+            (0.0, cyan),
+            (x0, green),
+            (x0 + (x1 - x0) * 0.42, cyan),
+            (x1, blue),
+            (1.0, deep_blue),
+        ],
+        u,
+    );
+    let bottom_h = palette_ramp(
+        &[
+            (0.0, yellow),
+            (x0 * 0.68, yellow),
+            (x0, orange),
+            (x0 + (x1 - x0) * 0.52, yellow),
+            (x1 - (x1 - x0) * 0.10, lime),
+            (x1, green),
+            (1.0, cyan),
+        ],
+        u,
+    );
+    let left_v = palette_ramp(
+        &[
+            (0.0, cyan),
+            (y0, green),
+            (y0 + (y1 - y0) * 0.24, lime),
+            (y0 + (y1 - y0) * 0.50, yellow),
+            (y0 + (y1 - y0) * 0.78, red_orange),
+            (y1, yellow),
+            (1.0, yellow),
+        ],
+        v,
+    );
+    let right_v = palette_ramp(
+        &[
+            (0.0, deep_blue),
+            (y0, blue),
+            (y0 + (y1 - y0) * 0.50, cyan),
+            (y0 + (y1 - y0) * 0.70, lime),
+            (y1, cyan),
+            (1.0, cyan),
+        ],
+        v,
+    );
     let top_near = (-((v - y0) * (v - y0)) / (2.0 * 0.115 * 0.115)).exp();
     let bottom_near = (-((v - y1) * (v - y1)) / (2.0 * 0.115 * 0.115)).exp();
     let left_near = (-((u - x0) * (u - x0)) / (2.0 * 0.105 * 0.105)).exp();
     let right_near = (-((u - x1) * (u - x1)) / (2.0 * 0.105 * 0.105)).exp();
-    let h_color = lerp_rgb(top_h, bottom_h, bottom_near / (top_near + bottom_near).max(0.001));
-    let v_color = lerp_rgb(left_v, right_v, right_near / (left_near + right_near).max(0.001));
+    let h_color = lerp_rgb(
+        top_h,
+        bottom_h,
+        bottom_near / (top_near + bottom_near).max(0.001),
+    );
+    let v_color = lerp_rgb(
+        left_v,
+        right_v,
+        right_near / (left_near + right_near).max(0.001),
+    );
     let hw = h_weight.max(0.0) * (0.35 + top_near + bottom_near);
     let vw = v_weight.max(0.0) * (0.35 + left_near + right_near);
     let vertical_mix = vw / (hw + vw).max(0.001);
@@ -992,7 +1651,11 @@ fn ser_grid_distribution_rgb(u: f32, v: f32, x0: f32, x1: f32, y0: f32, y1: f32,
 #[inline]
 fn lerp_rgb(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
     let t = t.clamp(0.0, 1.0);
-    (a.0 * (1.0 - t) + b.0 * t, a.1 * (1.0 - t) + b.1 * t, a.2 * (1.0 - t) + b.2 * t)
+    (
+        a.0 * (1.0 - t) + b.0 * t,
+        a.1 * (1.0 - t) + b.1 * t,
+        a.2 * (1.0 - t) + b.2 * t,
+    )
 }
 
 #[inline]
@@ -1012,9 +1675,13 @@ fn palette_ramp(stops: &[(f32, (f32, f32, f32))], t: f32) -> (f32, f32, f32) {
 #[inline]
 fn avoid_magenta_phase(phase: f32, warm_bias: f32) -> f32 {
     let h = phase.rem_euclid(1.0);
-    if !(0.76..=0.965).contains(&h) { return h; }
+    if !(0.76..=0.965).contains(&h) {
+        return h;
+    }
     let t = (h - 0.76) / 0.205;
-    if warm_bias > 0.55 { return (0.030 + t * 0.070).rem_euclid(1.0); }
+    if warm_bias > 0.55 {
+        return (0.030 + t * 0.070).rem_euclid(1.0);
+    }
     let blue_target = 0.610 - t * 0.070;
     let warm_target = 0.045 + t * 0.045;
     let use_warm = smoothstep(0.56, 0.88, t) * (0.38 + warm_bias * 0.62);
@@ -1022,14 +1689,19 @@ fn avoid_magenta_phase(phase: f32, warm_bias: f32) -> f32 {
 }
 
 #[inline]
-fn spectral_phase_rgb(phase: f32, saturation: f32, value: f32) -> (f32, f32, f32) { hsv_to_rgb(phase.rem_euclid(1.0), saturation, value) }
+fn spectral_phase_rgb(phase: f32, saturation: f32, value: f32) -> (f32, f32, f32) {
+    hsv_to_rgb(phase.rem_euclid(1.0), saturation, value)
+}
 
 #[inline]
-fn screen_channel_float(dst: f32, src: f32, alpha: f32) -> f32 { 1.0 - (1.0 - dst) * (1.0 - src * alpha) }
+fn screen_channel_float(dst: f32, src: f32, alpha: f32) -> f32 {
+    1.0 - (1.0 - dst) * (1.0 - src * alpha)
+}
 
 #[inline]
-fn hard_unit_mask(radius: f32, dist: f32) -> f32 { if dist <= radius { 1.0 } else { 0.0 } }
-
+fn hard_unit_mask(radius: f32, dist: f32) -> f32 {
+    if dist <= radius { 1.0 } else { 0.0 }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
@@ -1085,11 +1757,11 @@ mod tests {
     }
 
     #[test]
-    fn ser_maps_to_secret_weave_art_only() {
+    fn ser_maps_to_optical_ser_art_only() {
         let layers = layers_for(RareType::Ser);
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].coverage, RareCoverage::Art);
-        assert!(matches!(layers[0].kind, LayerKind::SecretWeave { .. }));
+        assert!(matches!(layers[0].kind, LayerKind::OpticalSer { .. }));
     }
 
     #[test]

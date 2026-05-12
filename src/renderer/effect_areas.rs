@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tiny_skia::Pixmap;
 
 use crate::{
@@ -5,18 +7,74 @@ use crate::{
     card_logic::{attribute_asset_name, image_frame, uses_rank},
     constants::{CARD_HEIGHT, CARD_WIDTH},
     document::{EffectStyle, EffectTarget},
-    model::RenderRequest,
+    model::{RenderError, RenderRequest},
     rare_effect::CoverageRect,
 };
 
-use super::visual_effects::{
-    draw_concentric_engrave, draw_frosted_foil, draw_gold_wash, draw_relief_engrave,
+use super::{
+    draw_card::load_external_pixmap,
+    visual_effects::{
+        draw_concentric_engrave, draw_frosted_foil, draw_gold_wash, draw_relief_engrave,
+    },
 };
 
 #[derive(Debug, Clone)]
 pub(super) enum EffectArea {
     Rect(CoverageRect),
-    MaskedRect { rect: CoverageRect, mask: Pixmap },
+    MaskedRect {
+        rect: CoverageRect,
+        mask: Arc<Pixmap>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EffectProtectionMask {
+    x: i32,
+    y: i32,
+    pixmap: Pixmap,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EffectRectSnapshot {
+    rect: CoverageRect,
+    x_start: u32,
+    y_start: u32,
+    x_end: u32,
+    y_end: u32,
+    sub_w: usize,
+    pixels: Vec<tiny_skia::PremultipliedColorU8>,
+}
+
+pub(super) fn load_effect_protection_mask(
+    request: &RenderRequest,
+    base: &BaseLayout,
+) -> Result<Option<EffectProtectionMask>, RenderError> {
+    let Some(mask) = request.options.effect_mask.as_ref() else {
+        return Ok(None);
+    };
+    let Some(pixmap) = load_external_pixmap(&mask.path) else {
+        return Err(RenderError::Backend(format!(
+            "Failed to load effect mask {:?}",
+            mask.path
+        )));
+    };
+    let art_rect = art_coverage_rect(request, base);
+    let full_card_sized = pixmap.width() == CARD_WIDTH && pixmap.height() == CARD_HEIGHT;
+    let default_x = if full_card_sized {
+        0
+    } else {
+        art_rect.x as i32
+    };
+    let default_y = if full_card_sized {
+        0
+    } else {
+        art_rect.y as i32
+    };
+    Ok(Some(EffectProtectionMask {
+        x: mask.x.unwrap_or(default_x),
+        y: mask.y.unwrap_or(default_y),
+        pixmap,
+    }))
 }
 
 pub(super) fn effect_target_areas(
@@ -114,6 +172,7 @@ pub(super) fn art_frame_effect_areas(
     };
 
     if let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) {
+        let mask = Arc::new(mask);
         return vec![EffectArea::MaskedRect {
             rect: CoverageRect {
                 x: frame_mask.x,
@@ -197,7 +256,7 @@ fn attribute_effect_area(
     language: Option<&str>,
 ) -> Option<EffectArea> {
     let asset = attribute_asset_name(&request.card, language)?;
-    let mask = decode_bundle_image(bundle, &asset)?;
+    let mask = Arc::new(decode_bundle_image(bundle, &asset)?);
     let rect = CoverageRect {
         x: base.attribute.x,
         y: base.attribute.y,
@@ -222,7 +281,7 @@ fn level_or_rank_effect_areas(
     } else {
         (&base.level, false)
     };
-    let Some(mask) = decode_bundle_image(bundle, &layout.asset) else {
+    let Some(mask) = decode_bundle_image(bundle, &layout.asset).map(Arc::new) else {
         return Vec::new();
     };
     let h = mask.height();
@@ -271,22 +330,34 @@ pub(super) fn decode_bundle_image(bundle: &AssetBundle, asset: &str) -> Option<P
 
 // ── Visual effect dispatch ────────────────────────────────────────────────────
 
-pub(super) fn draw_visual_effect_area(target: &mut Pixmap, area: EffectArea, effect: EffectStyle) {
+pub(super) fn draw_visual_effect_area(
+    target: &mut Pixmap,
+    area: EffectArea,
+    effect: EffectStyle,
+    protection_mask: Option<&EffectProtectionMask>,
+) {
     match area {
-        EffectArea::Rect(rect) => draw_visual_effect_rect(target, rect, effect),
+        EffectArea::Rect(rect) if protection_mask.is_none() => {
+            draw_visual_effect_rect(target, rect, effect)
+        }
+        EffectArea::Rect(rect) => {
+            draw_masked_visual_effect(target, rect, None, effect, protection_mask)
+        }
         EffectArea::MaskedRect { rect, mask } => {
-            draw_masked_visual_effect(target, rect, &mask, effect)
+            draw_masked_visual_effect(target, rect, Some(mask.as_ref()), effect, protection_mask)
         }
     }
 }
 
 fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
     use crate::rare_effect::{
-        draw_dot_grid, draw_holographic, draw_rainbow_foil, draw_secret_foil, draw_secret_weave,
+        draw_dot_grid, draw_holographic, draw_optical_ser, draw_rainbow_foil, draw_secret_foil,
+        draw_secret_weave,
     };
     match effect {
         EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
         EffectStyle::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
+        EffectStyle::OpticalSer { opacity } => draw_optical_ser(target, rect, opacity),
         EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
         EffectStyle::SecretFoil { opacity } => draw_secret_foil(target, rect, opacity),
         EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),
@@ -303,9 +374,18 @@ fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: Effe
 fn draw_masked_visual_effect(
     target: &mut Pixmap,
     rect: CoverageRect,
-    mask: &Pixmap,
+    mask: Option<&Pixmap>,
     effect: EffectStyle,
+    protection_mask: Option<&EffectProtectionMask>,
 ) {
+    let before = snapshot_effect_rect(target, rect);
+
+    draw_visual_effect_rect(target, rect, effect);
+
+    restore_effect_pixels(target, &before, mask, protection_mask);
+}
+
+pub(super) fn snapshot_effect_rect(target: &Pixmap, rect: CoverageRect) -> EffectRectSnapshot {
     let width = target.width();
     let height = target.height();
     let x_start = rect.x.min(width);
@@ -314,44 +394,109 @@ fn draw_masked_visual_effect(
     let y_end = rect.y.saturating_add(rect.h).min(height);
     let sub_w = (x_end - x_start) as usize;
 
-    // Snapshot only the rect sub-region instead of the full pixmap (~4 MB → KB).
-    let mut before_sub: Vec<tiny_skia::PremultipliedColorU8> =
+    let mut pixels: Vec<tiny_skia::PremultipliedColorU8> =
         Vec::with_capacity(sub_w * (y_end - y_start) as usize);
-    {
-        let src = target.pixels();
-        for y in y_start..y_end {
-            let row_start = (y * width + x_start) as usize;
-            before_sub.extend_from_slice(&src[row_start..row_start + sub_w]);
-        }
+    let src = target.pixels();
+    for y in y_start..y_end {
+        let row_start = (y * width + x_start) as usize;
+        pixels.extend_from_slice(&src[row_start..row_start + sub_w]);
     }
 
-    draw_visual_effect_rect(target, rect, effect);
+    EffectRectSnapshot {
+        rect,
+        x_start,
+        y_start,
+        x_end,
+        y_end,
+        sub_w,
+        pixels,
+    }
+}
 
-    let mask_w = mask.width();
-    let mask_h = mask.height();
-    let mask_pixels = mask.pixels();
+pub(super) fn restore_protected_effect_pixels(
+    target: &mut Pixmap,
+    before: &EffectRectSnapshot,
+    protection_mask: Option<&EffectProtectionMask>,
+) {
+    restore_effect_pixels(target, before, None, protection_mask);
+}
+
+fn restore_effect_pixels(
+    target: &mut Pixmap,
+    before: &EffectRectSnapshot,
+    mask: Option<&Pixmap>,
+    protection_mask: Option<&EffectProtectionMask>,
+) {
+    if before.x_start >= before.x_end || before.y_start >= before.y_end {
+        return;
+    }
+
+    let mask_w = mask.map(Pixmap::width).unwrap_or(0);
+    let mask_h = mask.map(Pixmap::height).unwrap_or(0);
+    let mask_pixels = mask.map(Pixmap::pixels);
+    let width = target.width();
     let pixels = target.pixels_mut();
 
-    for (iy, y) in (y_start..y_end).enumerate() {
-        let local_y = y - y_start;
-        for (ix, x) in (x_start..x_end).enumerate() {
-            let local_x = x - x_start;
+    for (iy, y) in (before.y_start..before.y_end).enumerate() {
+        for (ix, x) in (before.x_start..before.x_end).enumerate() {
             let target_idx = (y * width + x) as usize;
-            let before_idx = iy * sub_w + ix;
+            let before_idx = iy * before.sub_w + ix;
 
-            if local_x >= mask_w || local_y >= mask_h {
-                pixels[target_idx] = before_sub[before_idx];
-                continue;
+            let mut alpha = 255_u16;
+
+            if let Some(mask_pixels) = mask_pixels {
+                let local_x = x.saturating_sub(before.rect.x);
+                let local_y = y.saturating_sub(before.rect.y);
+                if local_x >= mask_w || local_y >= mask_h {
+                    alpha = 0;
+                } else {
+                    let mask_idx = (local_y * mask_w + local_x) as usize;
+                    alpha = mask_pixels[mask_idx].alpha() as u16;
+                }
             }
 
-            let mask_idx = (local_y * mask_w + local_x) as usize;
-            let alpha = mask_pixels[mask_idx].alpha() as u16;
+            if let Some(protection_mask) = protection_mask {
+                alpha = alpha * protection_mask.coverage_alpha(x, y) / 255;
+            }
+
             if alpha == 0 {
-                pixels[target_idx] = before_sub[before_idx];
+                pixels[target_idx] = before.pixels[before_idx];
             } else if alpha < 255 {
-                pixels[target_idx] = lerp_premul(before_sub[before_idx], pixels[target_idx], alpha);
+                pixels[target_idx] =
+                    lerp_premul(before.pixels[before_idx], pixels[target_idx], alpha);
             }
         }
+    }
+}
+
+impl EffectProtectionMask {
+    fn coverage_alpha(&self, x: u32, y: u32) -> u16 {
+        let local_x = x as i32 - self.x;
+        let local_y = y as i32 - self.y;
+        if local_x < 0
+            || local_y < 0
+            || local_x >= self.pixmap.width() as i32
+            || local_y >= self.pixmap.height() as i32
+        {
+            return 255;
+        }
+
+        let idx = (local_y as u32 * self.pixmap.width() + local_x as u32) as usize;
+        let pixel = self.pixmap.pixels()[idx];
+        let alpha = pixel.alpha() as u16;
+        if alpha == 0 {
+            return 255;
+        }
+
+        // External masks are premultiplied when loaded. Un-premultiply before
+        // luminance so semi-transparent white remains “allow effects”.
+        let channel = |c: u8| -> u32 { (c as u32 * 255 / alpha as u32).min(255) };
+        let r = channel(pixel.red());
+        let g = channel(pixel.green());
+        let b = channel(pixel.blue());
+        let luma = (r * 2126 + g * 7152 + b * 722 + 5000) / 10_000;
+        let protect = alpha as u32 * (255 - luma.min(255)) / 255;
+        (255 - protect.min(255)) as u16
     }
 }
 
@@ -369,4 +514,47 @@ fn lerp_premul(
         channel(from.alpha(), to.alpha()),
     )
     .unwrap_or(from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn px(r: u8, g: u8, b: u8, a: u8) -> tiny_skia::PremultipliedColorU8 {
+        tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a).unwrap()
+    }
+
+    #[test]
+    fn black_effect_mask_restores_pixels_and_white_keeps_effects() {
+        let mut target = Pixmap::new(2, 1).unwrap();
+        target.pixels_mut()[0] = px(10, 20, 30, 255);
+        target.pixels_mut()[1] = px(40, 50, 60, 255);
+
+        let before = snapshot_effect_rect(
+            &target,
+            CoverageRect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+        );
+
+        target.pixels_mut()[0] = px(200, 0, 0, 255);
+        target.pixels_mut()[1] = px(0, 200, 0, 255);
+
+        let mut mask = Pixmap::new(2, 1).unwrap();
+        mask.pixels_mut()[0] = px(0, 0, 0, 255);
+        mask.pixels_mut()[1] = px(255, 255, 255, 255);
+        let protection_mask = EffectProtectionMask {
+            x: 0,
+            y: 0,
+            pixmap: mask,
+        };
+
+        restore_protected_effect_pixels(&mut target, &before, Some(&protection_mask));
+
+        assert_eq!(target.pixels()[0], px(10, 20, 30, 255));
+        assert_eq!(target.pixels()[1], px(0, 200, 0, 255));
+    }
 }

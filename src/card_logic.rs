@@ -647,7 +647,7 @@ pub(crate) fn split_pendulum_description(
     let Some(marker_index) = marker_index else {
         return PendulumTextSections {
             pendulum_effect: None,
-            monster_effect: desc.to_string(),
+            monster_effect: join_trimmed_lines(&lines),
         };
     };
 
@@ -829,6 +829,14 @@ mod tests {
     #[test]
     fn leaves_unmarked_text_unchanged() {
         let sections = split_pendulum_description("没有分隔标记。", Some("sc"));
+
+        assert_eq!(sections.pendulum_effect, None);
+        assert_eq!(sections.monster_effect, "没有分隔标记。");
+    }
+
+    #[test]
+    fn removes_pendulum_header_without_marker() {
+        let sections = split_pendulum_description("←6 【灵摆】 6→\n没有分隔标记。", Some("sc"));
 
         assert_eq!(sections.pendulum_effect, None);
         assert_eq!(sections.monster_effect, "没有分隔标记。");

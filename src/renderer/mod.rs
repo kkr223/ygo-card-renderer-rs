@@ -22,18 +22,23 @@ use crate::{
     },
 };
 
-use color::text_brush;
+use color::{parse_hex_color, text_brush};
 use draw_card::{
     draw_anniversary_mark, draw_art, draw_attribute, draw_copyright_asset, draw_copyright_text,
-    draw_document_link_arrows, draw_document_password, draw_document_text_block,
-    draw_document_title, draw_external_image, draw_foreground_image, draw_frame, draw_laser,
-    draw_level_or_rank, draw_link_arrows, draw_mask, draw_monster_type_line, draw_out_frame_blocks,
-    draw_package, draw_password, draw_pendulum_description, draw_positioned_render_image,
-    draw_spell_trap_line, draw_stats,
+    draw_document_link_arrows, draw_document_monster_type_line, draw_document_password,
+    draw_document_spell_trap_line, draw_document_text_block, draw_document_title,
+    draw_external_image, draw_foreground_image, draw_frame, draw_laser, draw_level_or_rank,
+    draw_link_arrows, draw_mask, draw_out_frame_blocks, draw_package, draw_password,
+    draw_pendulum_description, draw_positioned_render_image, draw_spell_trap_line, draw_stats,
 };
-use effect_areas::{art_coverage_rect, draw_visual_effect_area, effect_target_areas};
+use effect_areas::{
+    art_coverage_rect, draw_visual_effect_area, effect_target_areas, load_effect_protection_mask,
+    restore_protected_effect_pixels, snapshot_effect_rect,
+};
 
 pub struct Renderer;
+
+const MAX_RENDER_PIXELS: u64 = 4096 * 4096;
 
 impl Default for Renderer {
     fn default() -> Self {
@@ -71,24 +76,13 @@ impl Renderer {
             &bundle.layout,
             &request.options.layout_overrides,
         );
-        let document_link_arrow_count = document.nodes.iter().find_map(|node| {
-            if !node.visible {
-                return None;
-            }
-            match &node.op {
-                RenderOp::LinkArrows { arrows } => Some(arrows.len().max(1) as u32),
-                _ => None,
-            }
-        });
+        let document_link_arrow_count = document_link_arrow_count(document);
+        let effect_protection_mask = load_effect_protection_mask(&request, base)?;
 
+        validate_render_dimensions(document.canvas.width, document.canvas.height)?;
         let mut target = Pixmap::new(document.canvas.width, document.canvas.height)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
-        target.fill(Color::from_rgba8(
-            BACKGROUND_CREAM.0,
-            BACKGROUND_CREAM.1,
-            BACKGROUND_CREAM.2,
-            255,
-        ));
+        target.fill(canvas_background_color(document));
 
         let mut nodes: Vec<_> = document
             .nodes
@@ -130,6 +124,7 @@ impl Renderer {
                         language,
                         *effect_target,
                         *effect,
+                        effect_protection_mask.as_ref(),
                     );
                 }
                 RenderOp::OutFrameBlocks => {
@@ -181,11 +176,34 @@ impl Renderer {
                         shadow.as_ref(),
                     );
                 }
-                RenderOp::SpellTrapLine { .. } => {
-                    draw_spell_trap_line(bundle, &mut target, &request, &style, base, language)?;
+                RenderOp::SpellTrapLine { label, icon_asset } => {
+                    draw_document_spell_trap_line(
+                        bundle,
+                        &mut target,
+                        &request,
+                        &style,
+                        language,
+                        label,
+                        icon_asset.as_deref(),
+                    )?;
                 }
-                RenderOp::MonsterTypeLine { text, .. } => {
-                    draw_monster_type_line(&mut target, &request, &style, base, language, text);
+                RenderOp::MonsterTypeLine {
+                    text,
+                    rect,
+                    font_family,
+                    font_size,
+                    letter_spacing,
+                } => {
+                    draw_document_monster_type_line(
+                        &mut target,
+                        &request,
+                        language,
+                        text,
+                        rect,
+                        font_family,
+                        *font_size,
+                        *letter_spacing,
+                    );
                 }
                 RenderOp::TextBlock {
                     text,
@@ -220,7 +238,16 @@ impl Renderer {
                     draw_stats(bundle, &mut target, &request, &style, base, language);
                 }
                 RenderOp::Password { text, x, y } => {
-                    draw_document_password(&mut target, &request, &style, language, text, *x, *y);
+                    draw_document_password(
+                        &mut target,
+                        &request,
+                        &style,
+                        language,
+                        text,
+                        *x,
+                        *y,
+                        base.password.font_size as f32,
+                    );
                 }
                 RenderOp::Package { text } => {
                     let mut request = request.clone();
@@ -239,8 +266,9 @@ impl Renderer {
             }
         }
 
-        let output = if (document.output_scale - 1.0).abs() > f32::EPSILON {
-            scale_pixmap(&target, document.output_scale)?
+        let output_scale = sanitize_output_scale(document.output_scale);
+        let output = if (output_scale - 1.0).abs() > f32::EPSILON {
+            scale_pixmap(&target, output_scale)?
         } else {
             target
         };
@@ -264,6 +292,7 @@ impl Renderer {
             &bundle.layout,
             &request.options.layout_overrides,
         );
+        let effect_protection_mask = load_effect_protection_mask(request, base)?;
 
         let mut target = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
@@ -278,7 +307,23 @@ impl Renderer {
         draw_art(bundle, &mut target, request, base)?;
         draw_mask(bundle, &mut target, request, base)?;
         if let Some(rare) = request.card.rare {
+            let full_rect = CoverageRect {
+                x: 0,
+                y: 0,
+                w: CARD_WIDTH,
+                h: CARD_HEIGHT,
+            };
+            let before = effect_protection_mask
+                .as_ref()
+                .map(|_| snapshot_effect_rect(&target, full_rect));
             draw_rare_effect(&mut target, rare, &request.card, base);
+            if let Some(before) = before.as_ref() {
+                restore_protected_effect_pixels(
+                    &mut target,
+                    before,
+                    effect_protection_mask.as_ref(),
+                );
+            }
         }
         draw_foreground_image(&mut target, request)?;
         draw_out_frame_blocks(bundle, &mut target, request, base)?;
@@ -401,6 +446,7 @@ impl Renderer {
         draw_copyright_text(&mut target, request, &style, base, language);
         draw_laser(bundle, &mut target, request, base)?;
 
+        let output_scale = sanitize_output_scale(output_scale);
         let output = if (output_scale - 1.0).abs() > f32::EPSILON {
             scale_pixmap(&target, output_scale)?
         } else {
@@ -416,6 +462,7 @@ impl Renderer {
 fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
     let width = ((source.width() as f32 * scale).round() as u32).max(1);
     let height = ((source.height() as f32 * scale).round() as u32).max(1);
+    validate_render_dimensions(width, height)?;
     let mut target = Pixmap::new(width, height).ok_or_else(|| {
         RenderError::Backend(format!("Failed to allocate scaled Pixmap {width}x{height}"))
     })?;
@@ -432,6 +479,52 @@ fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
     Ok(target)
 }
 
+fn validate_render_dimensions(width: u32, height: u32) -> Result<(), RenderError> {
+    let pixels = width as u64 * height as u64;
+    if pixels == 0 || pixels > MAX_RENDER_PIXELS {
+        return Err(RenderError::Backend(format!(
+            "Render dimensions out of bounds: {width}x{height}"
+        )));
+    }
+    Ok(())
+}
+
+fn sanitize_output_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+fn canvas_background_color(document: &RenderDocument) -> Color {
+    document
+        .canvas
+        .background
+        .as_deref()
+        .and_then(parse_hex_color)
+        .unwrap_or_else(|| {
+            Color::from_rgba8(
+                BACKGROUND_CREAM.0,
+                BACKGROUND_CREAM.1,
+                BACKGROUND_CREAM.2,
+                255,
+            )
+        })
+}
+
+fn document_link_arrow_count(document: &RenderDocument) -> Option<u32> {
+    document.nodes.iter().find_map(|node| {
+        if !node.visible {
+            return None;
+        }
+        match &node.op {
+            RenderOp::LinkArrows { arrows } => Some(arrows.len() as u32),
+            _ => None,
+        }
+    })
+}
+
 fn draw_document_visual_effect(
     bundle: &crate::asset_bundle::AssetBundle,
     target: &mut Pixmap,
@@ -440,7 +533,9 @@ fn draw_document_visual_effect(
     language: Option<&str>,
     effect_target: EffectTarget,
     effect: EffectStyle,
+    protection_mask: Option<&effect_areas::EffectProtectionMask>,
 ) {
+    let effect = sanitize_effect_style(effect);
     let full_rect = CoverageRect {
         x: 0,
         y: 0,
@@ -453,7 +548,11 @@ fn draw_document_visual_effect(
         // BrightBorder operates on both the outer card edge and the art frame
         // bevel simultaneously, so it needs both rects and cannot be expressed
         // as a single EffectArea.  Dispatch it here before the area loop.
+        let before = protection_mask.map(|_| snapshot_effect_rect(target, full_rect));
         draw_bright_border(target, full_rect, art_rect, opacity);
+        if let Some(before) = before.as_ref() {
+            restore_protected_effect_pixels(target, before, protection_mask);
+        }
         return;
     }
 
@@ -466,7 +565,53 @@ fn draw_document_visual_effect(
         full_rect,
         art_rect,
     ) {
-        draw_visual_effect_area(target, area, effect);
+        draw_visual_effect_area(target, area, effect, protection_mask);
+    }
+}
+
+fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
+    match effect {
+        EffectStyle::RainbowFoil { opacity } => EffectStyle::RainbowFoil {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::DotGrid { opacity } => EffectStyle::DotGrid {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::OpticalSer { opacity } => EffectStyle::OpticalSer {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::SecretWeave { opacity } => EffectStyle::SecretWeave {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::SecretFoil { opacity } => EffectStyle::SecretFoil {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::Holographic { opacity } => EffectStyle::Holographic {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::BrightBorder { opacity } => EffectStyle::BrightBorder {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::GoldWash { opacity } => EffectStyle::GoldWash {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::FrostedFoil { opacity } => EffectStyle::FrostedFoil {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::ConcentricEngrave { opacity } => EffectStyle::ConcentricEngrave {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::ReliefEngrave { opacity } => EffectStyle::ReliefEngrave {
+            opacity: sanitize_opacity(opacity),
+        },
+    }
+}
+
+fn sanitize_opacity(opacity: f32) -> f32 {
+    if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -546,6 +691,69 @@ mod tests {
         assert_eq!(partial.red(), 100);
         assert_eq!(partial.green(), 50);
         assert_eq!(partial.blue(), 25);
+    }
+
+    #[test]
+    fn sanitizes_effect_style_opacity() {
+        let nan = f32::NAN;
+
+        assert!(matches!(
+            super::sanitize_effect_style(crate::document::EffectStyle::RainbowFoil {
+                opacity: nan,
+            }),
+            crate::document::EffectStyle::RainbowFoil { opacity } if opacity == 0.0
+        ));
+
+        assert!(matches!(
+            super::sanitize_effect_style(crate::document::EffectStyle::BrightBorder {
+                opacity: 1.7,
+            }),
+            crate::document::EffectStyle::BrightBorder { opacity } if opacity == 1.0
+        ));
+
+        assert!(matches!(
+            super::sanitize_effect_style(crate::document::EffectStyle::ReliefEngrave {
+                opacity: -0.25,
+            }),
+            crate::document::EffectStyle::ReliefEngrave { opacity } if opacity == 0.0
+        ));
+    }
+
+    #[test]
+    fn validates_render_dimensions_bounds() {
+        assert!(matches!(
+            super::validate_render_dimensions(0, 1),
+            Err(crate::model::RenderError::Backend(_))
+        ));
+        assert!(matches!(
+            super::validate_render_dimensions(4097, 4097),
+            Err(crate::model::RenderError::Backend(_))
+        ));
+        assert!(super::validate_render_dimensions(1, 1).is_ok());
+    }
+
+    #[test]
+    fn document_link_arrow_count_honors_empty_arrows() {
+        let document = crate::document::RenderDocument {
+            schema_version: crate::document::RenderDocument::SCHEMA_VERSION,
+            kind: CardKind::Yugioh,
+            canvas: crate::document::RenderCanvas {
+                width: 1,
+                height: 1,
+                background: None,
+            },
+            language: None,
+            output_scale: 1.0,
+            card: YgoCardMeta::from(CardDataEntry::default()),
+            options: RenderOptions::default(),
+            nodes: vec![crate::document::RenderNode::new(
+                "link-arrows",
+                0,
+                crate::document::RenderOp::LinkArrows { arrows: vec![] },
+            )],
+        };
+
+        assert_eq!(super::document_link_arrow_count(&document), Some(0));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use image::{ImageReader, Limits};
 use tiny_skia::{Color, Paint, Pixmap, PixmapPaint, Rect, Transform};
 
 use crate::{
@@ -27,17 +28,73 @@ use super::color::{
 
 // ── Image loading ─────────────────────────────────────────────────────────────
 
+const MAX_EXTERNAL_DECODED_PIXELS: u64 = 4096 * 4096;
+const MAX_DOCUMENT_RECT_PIXELS: u64 = 4096 * 4096;
+
 pub(super) fn load_external_pixmap(path: &std::path::Path) -> Option<Pixmap> {
-    let img = image::open(path).ok()?;
+    let dimensions_reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let (declared_width, declared_height) = dimensions_reader.into_dimensions().ok()?;
+    validate_external_decode_size(declared_width, declared_height).ok()?;
+
+    let mut reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(declared_width);
+    limits.max_image_height = Some(declared_height);
+    limits.max_alloc = Some(MAX_EXTERNAL_DECODED_PIXELS * 4);
+    reader.limits(limits);
+
+    let img = reader.decode().ok()?;
     let rgba = img.into_rgba8();
     let width = rgba.width();
     let height = rgba.height();
+    validate_external_decode_size(width, height).ok()?;
     let mut pixmap = Pixmap::from_vec(
         rgba.into_raw(),
         tiny_skia::IntSize::from_wh(width, height).unwrap(),
     )?;
     premultiply_pixmap_alpha(&mut pixmap);
     Some(pixmap)
+}
+
+fn validate_external_decode_size(width: u32, height: u32) -> Result<(), ()> {
+    let pixels = width as u64 * height as u64;
+    if pixels == 0 || pixels > MAX_EXTERNAL_DECODED_PIXELS {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn sanitize_render_rect(rect: &RenderRect) -> Option<RenderRect> {
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
+        return None;
+    }
+
+    let width = rect.width.round().max(1.0);
+    let height = rect.height.round().max(1.0);
+    if width as u64 * height as u64 > MAX_DOCUMENT_RECT_PIXELS {
+        return None;
+    }
+
+    if rect.x < i32::MIN as f32
+        || rect.x > i32::MAX as f32
+        || rect.y < i32::MIN as f32
+        || rect.y > i32::MAX as f32
+    {
+        return None;
+    }
+
+    Some(RenderRect {
+        x: rect.x,
+        y: rect.y,
+        width,
+        height,
+    })
 }
 
 pub(super) fn premultiply_pixmap_alpha(pixmap: &mut Pixmap) {
@@ -163,13 +220,16 @@ pub(super) fn draw_external_image(
     let Some(path) = path else {
         return;
     };
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
     let Some(pixmap) = load_external_pixmap(path) else {
         return;
     };
 
     let source_w = pixmap.width() as f32;
     let source_h = pixmap.height() as f32;
-    if source_w <= 0.0 || source_h <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+    if source_w <= 0.0 || source_h <= 0.0 {
         return;
     }
 
@@ -282,6 +342,7 @@ fn draw_out_frame_effect_background(
         .out_frame_effect_opacity
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
+    let opacity = if opacity.is_finite() { opacity } else { 0.0 };
     if opacity <= 0.0 {
         return;
     }
@@ -491,15 +552,27 @@ pub(super) fn draw_title(
     let show_attribute =
         request.card.attribute != 0 || request.card.is_spell() || request.card.is_trap();
     let title_width = if show_attribute {
-        base.name.width_with_attribute
+        style.title_max_width_with_attribute
     } else {
-        base.name.width_without_attribute
+        style.title_max_width_without_attribute
     };
 
     let name_color = resolve_name_color(&request.card.name_color, &request.card);
-    let name_brush =
-        resolve_name_brush(request, name_color, style.name_x as f32, title_width as f32);
-    let name_shadow = resolve_name_shadow_brush(request, style.name_x as f32, title_width as f32);
+    let name_brush = resolve_name_brush(
+        request,
+        name_color,
+        style.name_x as f32,
+        style.name_top as f32,
+        title_width as f32,
+        base.name.height as f32,
+    );
+    let name_shadow = resolve_name_shadow_brush(
+        request,
+        style.name_x as f32,
+        style.name_top as f32,
+        title_width as f32,
+        base.name.height as f32,
+    );
 
     // Ruby path: JP language with rt_font_size set and markup present.
     if style.name_rt_font_size > 0 && contains_ruby_markup(&request.card.name) {
@@ -642,9 +715,21 @@ pub(super) fn draw_document_title(
     fill: Option<&TextPaint>,
     shadow: Option<&TextPaint>,
 ) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
     let name_color = resolve_name_color(color, &request.card);
-    let name_brush = resolve_title_brush(request, fill, name_color, rect.x, rect.width);
-    let name_shadow = resolve_title_shadow_brush(request, shadow, rect.x, rect.width);
+    let name_brush = resolve_title_brush(
+        request,
+        fill,
+        name_color,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    );
+    let name_shadow =
+        resolve_title_shadow_brush(request, shadow, rect.x, rect.y, rect.width, rect.height);
 
     if contains_ruby_markup(text) {
         let tokens = parse_ruby_text(text);
@@ -660,6 +745,28 @@ pub(super) fn draw_document_title(
                 rect.width,
             )
             .max(0.3);
+            if name_shadow.color.alpha() > 0.0 || name_shadow.brush.is_some() {
+                draw_ruby_text_line(
+                    target,
+                    RubyLineParams {
+                        tokens: &tokens,
+                        x: rect.x + 7.0,
+                        y: rect.y + 7.0,
+                        font_size: font_size as f32,
+                        rt_font_size,
+                        rt_top: -18.0,
+                        rt_font_scale_x_override: 1.0,
+                        color: name_shadow.color,
+                        shadow_color: Color::TRANSPARENT,
+                        brush: name_shadow.brush,
+                        shadow_brush: None,
+                        family: font_family,
+                        language,
+                        letter_spacing,
+                        scale_x,
+                    },
+                );
+            }
             draw_ruby_text_line(
                 target,
                 RubyLineParams {
@@ -906,6 +1013,157 @@ pub(super) fn draw_spell_trap_line(
     Ok(())
 }
 
+pub(super) fn draw_document_spell_trap_line(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    style: &LayoutStyle,
+    language: Option<&str>,
+    label: &str,
+    icon_asset: Option<&str>,
+) -> Result<(), RenderError> {
+    let (left_bracket, right_bracket) = localized_brackets(language);
+    let left_text = format!("{left_bracket}{label}");
+    let right_text = right_bracket;
+    let font_size = style.type_size as f32;
+    let letter_spacing = style.type_letter_spacing;
+    let text_color = Color::from_rgba8(TYPE_COLOR.0, TYPE_COLOR.1, TYPE_COLOR.2, 255);
+
+    let right_margin = style.type_right as f32;
+    let right_width = estimate_text_width(
+        right_text,
+        language,
+        &style.type_font_family,
+        font_size,
+        letter_spacing,
+    );
+    let right_x = CARD_WIDTH as f32 - right_margin - right_width;
+
+    draw_text_line(
+        target,
+        DrawTextLine::unscaled(
+            right_text,
+            right_x,
+            style.type_top as f32,
+            font_size,
+            right_width.ceil().max(32.0),
+            text_color,
+            Color::TRANSPARENT,
+            &style.type_font_family,
+            TextAlign::Left,
+            language,
+            letter_spacing,
+        ),
+    );
+
+    let icon_asset = icon_asset.filter(|asset| bundle.has_image(asset));
+    let icon_margins = bundle_style_icon_margins(language, bundle);
+    let icon_width = icon_asset
+        .and_then(|asset| image_dimensions(bundle, asset).map(|(width, _)| width as f32))
+        .unwrap_or(72.0);
+    let icon_x = if icon_asset.is_some() {
+        right_x - icon_margins.right - icon_width
+    } else {
+        right_x
+    };
+
+    if let Some(icon_asset) = icon_asset {
+        let text_top_correction = font_size * 0.092;
+        let icon_y = style.type_top as f32 + icon_margins.top - text_top_correction;
+        bundle
+            .draw_image_at(target, icon_asset, icon_x, icon_y)
+            .map_err(RenderError::Backend)?;
+    }
+
+    let left_text_stripped = strip_ruby_markup(&left_text);
+    let left_width = estimate_text_width(
+        &left_text_stripped,
+        language,
+        &style.type_font_family,
+        font_size,
+        letter_spacing,
+    );
+    let left_x = icon_x
+        - if icon_asset.is_some() {
+            icon_margins.left
+        } else {
+            0.0
+        }
+        - left_width;
+
+    if style.type_rt_font_size > 0 && contains_ruby_markup(&left_text) {
+        let tokens = parse_ruby_text(&left_text);
+        draw_ruby_text_line(
+            target,
+            RubyLineParams {
+                tokens: &tokens,
+                x: left_x,
+                y: style.type_top as f32,
+                font_size,
+                rt_font_size: style.type_rt_font_size as f32,
+                rt_top: style.type_rt_top,
+                rt_font_scale_x_override: style.type_rt_font_scale_x,
+                color: text_color,
+                shadow_color: Color::TRANSPARENT,
+                brush: text_brush(
+                    request.options.text_colors.type_line.as_ref(),
+                    None,
+                    text_color,
+                    left_x,
+                    left_width,
+                ),
+                shadow_brush: text_brush(
+                    request.options.text_colors.type_line_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    left_x,
+                    left_width,
+                ),
+                family: &style.type_font_family,
+                language,
+                letter_spacing,
+                scale_x: 1.0,
+            },
+        );
+    } else {
+        draw_text_line(
+            target,
+            DrawTextLine::unscaled(
+                &left_text,
+                left_x,
+                style.type_top as f32,
+                font_size,
+                left_width.ceil().max(80.0),
+                text_color,
+                Color::TRANSPARENT,
+                &style.type_font_family,
+                TextAlign::Left,
+                language,
+                letter_spacing,
+            )
+            .with_brushes(
+                text_brush(
+                    request.options.text_colors.type_line.as_ref(),
+                    None,
+                    text_color,
+                    left_x,
+                    left_width,
+                ),
+                text_brush(
+                    request.options.text_colors.type_line_shadow.as_ref(),
+                    None,
+                    Color::TRANSPARENT,
+                    left_x,
+                    left_width,
+                ),
+            ),
+        );
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(super) fn draw_monster_type_line(
     target: &mut Pixmap,
     request: &RenderRequest,
@@ -951,6 +1209,62 @@ pub(super) fn draw_monster_type_line(
                 None,
                 Color::TRANSPARENT,
                 style.effect_x as f32,
+                line_layout.max_width as f32,
+            ),
+        ),
+    );
+}
+
+pub(super) fn draw_document_monster_type_line(
+    target: &mut Pixmap,
+    request: &RenderRequest,
+    language: Option<&str>,
+    line: &str,
+    rect: &RenderRect,
+    font_family: &str,
+    font_size: u32,
+    letter_spacing: f32,
+) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
+    let line_layout = fit_single_line(
+        line,
+        language,
+        font_size,
+        font_family,
+        rect.width.round().max(1.0) as u32,
+        letter_spacing,
+        font_size.saturating_sub(10),
+    );
+    draw_text_line(
+        target,
+        DrawTextLine::unscaled(
+            &line_layout.text,
+            rect.x,
+            rect.y,
+            line_layout.font_size as f32,
+            line_layout.max_width as f32,
+            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+            Color::TRANSPARENT,
+            font_family,
+            TextAlign::Left,
+            language,
+            line_layout.letter_spacing,
+        )
+        .with_brushes(
+            text_brush(
+                request.options.text_colors.effect.as_ref(),
+                None,
+                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
+                rect.x,
+                line_layout.max_width as f32,
+            ),
+            text_brush(
+                request.options.text_colors.effect_shadow.as_ref(),
+                None,
+                Color::TRANSPARENT,
+                rect.x,
                 line_layout.max_width as f32,
             ),
         ),
@@ -1019,6 +1333,9 @@ pub(super) fn draw_document_text_block(
     letter_spacing: f32,
     channel: TextChannel,
 ) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
     let (brush, shadow_brush) = match channel {
         TextChannel::Description => (
             text_brush(
@@ -1123,7 +1440,7 @@ pub(super) fn draw_stats(
             draw_text_line(
                 target,
                 DrawTextLine {
-                    text: &request.card.level.max(1).to_string(),
+                    text: &request.card.level.to_string(),
                     x: style.stat_link_x as f32,
                     y: style.link_top as f32,
                     font_size: style.link_size as f32,
@@ -1390,6 +1707,7 @@ pub(super) fn draw_document_password(
     text: &str,
     x: f32,
     y: f32,
+    font_size: f32,
 ) {
     draw_text_line(
         target,
@@ -1397,7 +1715,7 @@ pub(super) fn draw_document_password(
             text,
             x,
             y,
-            40.0,
+            font_size,
             260.0,
             Color::from_rgba8(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2, 255),
             Color::TRANSPARENT,

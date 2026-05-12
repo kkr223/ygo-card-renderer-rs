@@ -32,7 +32,7 @@ pub struct RenderDocument {
 }
 
 impl RenderDocument {
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
 
     pub fn from_request(request: &RenderRequest, bundle: &AssetBundle) -> Self {
         let language = request.options.language.as_deref();
@@ -142,9 +142,9 @@ impl RenderDocument {
 
         let title_width =
             if request.card.attribute != 0 || request.card.is_spell() || request.card.is_trap() {
-                base.name.width_with_attribute
+                style.title_max_width_with_attribute
             } else {
-                base.name.width_without_attribute
+                style.title_max_width_without_attribute
             };
         let (title_fill, title_shadow) = rare_title_paints(request.card.rare);
         nodes.push(RenderNode::new(
@@ -501,6 +501,7 @@ pub enum EffectTarget {
 pub enum EffectStyle {
     RainbowFoil { opacity: f32 },
     DotGrid { opacity: f32 },
+    OpticalSer { opacity: f32 },
     SecretWeave { opacity: f32 },
     SecretFoil { opacity: f32 },
     Holographic { opacity: f32 },
@@ -619,10 +620,10 @@ fn add_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
         ),
         RareType::Ser => {
             push_effect(
-                "rare-ser-art-weave",
+                "rare-ser-art-optical",
                 30,
                 EffectTarget::Art,
-                EffectStyle::SecretWeave { opacity: 0.66 },
+                EffectStyle::OpticalSer { opacity: 1.00 },
             );
             push_effect(
                 "rare-ser-attribute-secret-foil",

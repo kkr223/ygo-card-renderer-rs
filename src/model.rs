@@ -221,6 +221,22 @@ pub struct PositionedRenderImage {
     pub y: i32,
 }
 
+/// Optional grayscale protection mask for visual/rare effects.
+///
+/// Mask pixels are interpreted like print white ink: opaque black protects the
+/// underlying card from effects, opaque white allows effects, and gray/alpha
+/// values create a soft transition.  When `x`/`y` are omitted the renderer
+/// places full-card masks at `(0, 0)` and art-sized masks on the illustration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectMask {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<i32>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -424,6 +440,8 @@ pub struct RenderOptions {
     pub language: Option<String>,
     pub art_image: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_mask: Option<EffectMask>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreground_image: Option<PositionedRenderImage>,
     pub scale: f32,
     /// Override the description text color (CSS-style hex or named color).
@@ -445,6 +463,7 @@ impl Default for RenderOptions {
         Self {
             language: None,
             art_image: None,
+            effect_mask: None,
             foreground_image: None,
             scale: 1.0,
             description_color_override: None,
