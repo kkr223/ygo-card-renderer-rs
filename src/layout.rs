@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::asset_bundle::{LayoutPayload, StyleDefinition};
 use crate::model::{CardKind, LayoutOverrides};
 

@@ -302,6 +302,10 @@ fn main() {
             .unwrap_or_else(|e| fatal(&format!("cannot create out-dir {:?}: {e}", out_dir)));
 
         let total = cards.len();
+        if total == 0 {
+            println!("No cards found in CDB — nothing to render.");
+            return;
+        }
         println!("Rendering {total} cards with {} workers…", args.jobs);
 
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

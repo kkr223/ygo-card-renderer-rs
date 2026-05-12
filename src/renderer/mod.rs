@@ -62,205 +62,211 @@ impl Renderer {
     }
 
     pub fn render_document(&self, document: &RenderDocument) -> Result<Vec<u8>, RenderError> {
-        let request = document.to_request();
-        if document.nodes.is_empty() {
-            return self.render_request_png(&request, document.output_scale);
+        if document.schema_version != RenderDocument::SCHEMA_VERSION {
+            return Err(RenderError::Backend(format!(
+                "unsupported schema version {} (expected {})",
+                document.schema_version,
+                RenderDocument::SCHEMA_VERSION,
+            )));
         }
-
-        let bundle = get_bundle();
-        let base = &bundle.layout.base;
-        let language = document.language.as_deref();
-        let style = layout_style(
-            document.kind,
-            language,
-            &bundle.layout,
-            &request.options.layout_overrides,
-        );
-        let document_link_arrow_count = document_link_arrow_count(document);
-        let effect_protection_mask = load_effect_protection_mask(&request, base)?;
 
         validate_render_dimensions(document.canvas.width, document.canvas.height)?;
         let mut target = Pixmap::new(document.canvas.width, document.canvas.height)
             .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
         target.fill(canvas_background_color(document));
 
-        let mut nodes: Vec<_> = document
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| node.visible)
-            .collect();
-        nodes.sort_by_key(|(index, node)| (node.z, *index));
+        if !document.nodes.is_empty() {
+            let request = document.to_request();
+            let bundle = get_bundle();
+            let base = &bundle.layout.base;
+            let language = document.language.as_deref();
+            let style = layout_style(
+                document.kind,
+                language,
+                &bundle.layout,
+                &request.options.layout_overrides,
+            );
+            let document_link_arrow_count = document_link_arrow_count(document);
+            let effect_protection_mask = load_effect_protection_mask(&request, base)?;
 
-        for (_, node) in nodes {
-            match &node.op {
-                RenderOp::BundleImage { asset, x, y } => {
-                    if bundle.has_image(asset) {
-                        bundle
-                            .draw_image_at(&mut target, asset, *x, *y)
-                            .map_err(RenderError::Backend)?;
-                    }
-                }
-                RenderOp::ExternalImage {
-                    path,
-                    rect,
-                    fit,
-                    align,
-                } => {
-                    draw_external_image(&mut target, path.as_deref(), rect, *fit, *align);
-                }
-                RenderOp::PositionedImage { image } => {
-                    draw_positioned_render_image(&mut target, image);
-                }
-                RenderOp::VisualEffect {
-                    target: effect_target,
-                    effect,
-                } => {
-                    draw_document_visual_effect(
-                        bundle,
-                        &mut target,
-                        &request,
-                        base,
-                        language,
-                        *effect_target,
-                        *effect,
-                        effect_protection_mask.as_ref(),
-                    );
-                }
-                RenderOp::OutFrameBlocks => {
-                    draw_out_frame_blocks(bundle, &mut target, &request, base)?;
-                }
-                RenderOp::AnniversaryMark => {
-                    draw_anniversary_mark(bundle, &mut target, &request, base)?;
-                }
-                RenderOp::Attribute { asset, x, y } => {
-                    if let Some(asset) = asset {
+            let mut nodes: Vec<_> = document
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.visible)
+                .collect();
+            nodes.sort_by_key(|(index, node)| (node.z, *index));
+
+            for (_, node) in nodes {
+                match &node.op {
+                    RenderOp::BundleImage { asset, x, y } => {
                         if bundle.has_image(asset) {
                             bundle
                                 .draw_image_at(&mut target, asset, *x, *y)
                                 .map_err(RenderError::Backend)?;
                         }
                     }
-                }
-                RenderOp::LevelOrRank => {
-                    draw_level_or_rank(bundle, &mut target, &request, base)?;
-                }
-                RenderOp::LinkArrows { arrows } => {
-                    draw_document_link_arrows(bundle, &mut target, arrows, base)?;
-                }
-                RenderOp::Title {
-                    text,
-                    rect,
-                    font_family,
-                    font_size,
-                    letter_spacing,
-                    color,
-                    width_compress,
-                    align,
-                    fill,
-                    shadow,
-                } => {
-                    draw_document_title(
-                        &mut target,
-                        &request,
-                        language,
-                        text,
+                    RenderOp::ExternalImage {
+                        path,
                         rect,
-                        font_family,
-                        *font_size,
-                        *letter_spacing,
-                        color,
-                        *width_compress,
-                        *align,
-                        fill.as_ref(),
-                        shadow.as_ref(),
-                    );
-                }
-                RenderOp::SpellTrapLine { label, icon_asset } => {
-                    draw_document_spell_trap_line(
-                        bundle,
-                        &mut target,
-                        &request,
-                        &style,
-                        language,
-                        label,
-                        icon_asset.as_deref(),
-                    )?;
-                }
-                RenderOp::MonsterTypeLine {
-                    text,
-                    rect,
-                    font_family,
-                    font_size,
-                    letter_spacing,
-                } => {
-                    draw_document_monster_type_line(
-                        &mut target,
-                        &request,
-                        language,
-                        text,
-                        rect,
-                        font_family,
-                        *font_size,
-                        *letter_spacing,
-                    );
-                }
-                RenderOp::TextBlock {
-                    text,
-                    rect,
-                    font_family,
-                    font_size,
-                    line_height,
-                    letter_spacing,
-                    channel,
-                } => {
-                    draw_document_text_block(
-                        &mut target,
-                        &request,
-                        &style,
-                        language,
-                        text,
-                        rect,
-                        font_family,
-                        *font_size,
-                        *line_height,
-                        *letter_spacing,
-                        *channel,
-                    );
-                }
-                RenderOp::Stats => {
-                    let mut request = request.clone();
-                    if request.card.is_link() {
-                        if let Some(count) = document_link_arrow_count {
-                            request.card.level = count;
+                        fit,
+                        align,
+                    } => {
+                        draw_external_image(&mut target, path.as_deref(), rect, *fit, *align);
+                    }
+                    RenderOp::PositionedImage { image } => {
+                        draw_positioned_render_image(&mut target, image);
+                    }
+                    RenderOp::VisualEffect {
+                        target: effect_target,
+                        effect,
+                    } => {
+                        draw_document_visual_effect(
+                            bundle,
+                            &mut target,
+                            &request,
+                            base,
+                            language,
+                            *effect_target,
+                            *effect,
+                            effect_protection_mask.as_ref(),
+                        );
+                    }
+                    RenderOp::OutFrameBlocks => {
+                        draw_out_frame_blocks(bundle, &mut target, &request, base)?;
+                    }
+                    RenderOp::AnniversaryMark => {
+                        draw_anniversary_mark(bundle, &mut target, &request, base)?;
+                    }
+                    RenderOp::Attribute { asset, x, y } => {
+                        if let Some(asset) = asset {
+                            if bundle.has_image(asset) {
+                                bundle
+                                    .draw_image_at(&mut target, asset, *x, *y)
+                                    .map_err(RenderError::Backend)?;
+                            }
                         }
                     }
-                    draw_stats(bundle, &mut target, &request, &style, base, language);
-                }
-                RenderOp::Password { text, x, y } => {
-                    draw_document_password(
-                        &mut target,
-                        &request,
-                        &style,
-                        language,
+                    RenderOp::LevelOrRank => {
+                        draw_level_or_rank(bundle, &mut target, &request, base)?;
+                    }
+                    RenderOp::LinkArrows { arrows } => {
+                        draw_document_link_arrows(bundle, &mut target, arrows, base)?;
+                    }
+                    RenderOp::Title {
                         text,
-                        *x,
-                        *y,
-                        base.password.font_size as f32,
-                    );
-                }
-                RenderOp::Package { text } => {
-                    let mut request = request.clone();
-                    request.card.package = Some(text.clone());
-                    draw_package(&mut target, &request, &style, base, language);
-                }
-                RenderOp::Copyright { value, asset } => {
-                    if let Some(asset) = asset {
-                        draw_copyright_asset(bundle, &mut target, asset, base)?;
-                    } else {
+                        rect,
+                        font_family,
+                        font_size,
+                        letter_spacing,
+                        color,
+                        width_compress,
+                        align,
+                        fill,
+                        shadow,
+                    } => {
+                        draw_document_title(
+                            &mut target,
+                            &request,
+                            language,
+                            text,
+                            rect,
+                            font_family,
+                            *font_size,
+                            *letter_spacing,
+                            color,
+                            *width_compress,
+                            *align,
+                            fill.as_ref(),
+                            shadow.as_ref(),
+                        );
+                    }
+                    RenderOp::SpellTrapLine { label, icon_asset } => {
+                        draw_document_spell_trap_line(
+                            bundle,
+                            &mut target,
+                            &request,
+                            &style,
+                            language,
+                            label,
+                            icon_asset.as_deref(),
+                        )?;
+                    }
+                    RenderOp::MonsterTypeLine {
+                        text,
+                        rect,
+                        font_family,
+                        font_size,
+                        letter_spacing,
+                    } => {
+                        draw_document_monster_type_line(
+                            &mut target,
+                            &request,
+                            language,
+                            text,
+                            rect,
+                            font_family,
+                            *font_size,
+                            *letter_spacing,
+                        );
+                    }
+                    RenderOp::TextBlock {
+                        text,
+                        rect,
+                        font_family,
+                        font_size,
+                        line_height,
+                        letter_spacing,
+                        channel,
+                    } => {
+                        draw_document_text_block(
+                            &mut target,
+                            &request,
+                            &style,
+                            language,
+                            text,
+                            rect,
+                            font_family,
+                            *font_size,
+                            *line_height,
+                            *letter_spacing,
+                            *channel,
+                        );
+                    }
+                    RenderOp::Stats => {
                         let mut request = request.clone();
-                        request.card.copyright = Some(value.clone());
-                        draw_copyright_text(&mut target, &request, &style, base, language);
+                        if request.card.is_link() {
+                            if let Some(count) = document_link_arrow_count {
+                                request.card.level = count;
+                            }
+                        }
+                        draw_stats(bundle, &mut target, &request, &style, base, language);
+                    }
+                    RenderOp::Password { text, x, y } => {
+                        draw_document_password(
+                            &mut target,
+                            &request,
+                            &style,
+                            language,
+                            text,
+                            *x,
+                            *y,
+                            base.password.font_size as f32,
+                        );
+                    }
+                    RenderOp::Package { text } => {
+                        let mut request = request.clone();
+                        request.card.package = Some(text.clone());
+                        draw_package(&mut target, &request, &style, base, language);
+                    }
+                    RenderOp::Copyright { value, asset } => {
+                        if let Some(asset) = asset {
+                            draw_copyright_asset(bundle, &mut target, asset, base)?;
+                        } else {
+                            let mut request = request.clone();
+                            request.card.copyright = Some(value.clone());
+                            draw_copyright_text(&mut target, &request, &style, base, language);
+                        }
                     }
                 }
             }

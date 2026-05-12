@@ -1163,58 +1163,6 @@ pub(super) fn draw_document_spell_trap_line(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(super) fn draw_monster_type_line(
-    target: &mut Pixmap,
-    request: &RenderRequest,
-    style: &LayoutStyle,
-    base: &BaseLayout,
-    language: Option<&str>,
-    line: &str,
-) {
-    let line_layout = fit_single_line(
-        line,
-        language,
-        style.effect_size,
-        &style.effect_font_family,
-        base.effect.width,
-        style.effect_letter_spacing,
-        style.effect_size.saturating_sub(10),
-    );
-    draw_text_line(
-        target,
-        DrawTextLine::unscaled(
-            &line_layout.text,
-            style.effect_x as f32,
-            style.effect_top as f32,
-            line_layout.font_size as f32,
-            line_layout.max_width as f32,
-            Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-            Color::TRANSPARENT,
-            &style.effect_font_family,
-            TextAlign::Left,
-            language,
-            line_layout.letter_spacing,
-        )
-        .with_brushes(
-            text_brush(
-                request.options.text_colors.effect.as_ref(),
-                None,
-                Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-                style.effect_x as f32,
-                line_layout.max_width as f32,
-            ),
-            text_brush(
-                request.options.text_colors.effect_shadow.as_ref(),
-                None,
-                Color::TRANSPARENT,
-                style.effect_x as f32,
-                line_layout.max_width as f32,
-            ),
-        ),
-    );
-}
-
 pub(super) fn draw_document_monster_type_line(
     target: &mut Pixmap,
     request: &RenderRequest,
