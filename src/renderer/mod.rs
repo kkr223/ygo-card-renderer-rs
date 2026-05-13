@@ -6,30 +6,21 @@ mod visual_effects;
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 
 use crate::{
-    asset_bundle::{BaseLayout, get_bundle},
-    card_logic::{
-        build_effect_line, description_height, description_y, frame_asset_name,
-        split_pendulum_description,
-    },
-    constants::{BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, TEXT_COLOR_DARK},
-    document::{EffectStyle, EffectTarget, RenderDocument, RenderOp},
-    layout::layout_style,
+    asset_bundle::{AssetBundle, BaseLayout, try_get_bundle},
+    constants::{BACKGROUND_CREAM, CARD_WIDTH},
+    document::{EffectStyle, EffectTarget, RenderDocument, RenderOp, RenderRect, RubyStyle},
     model::{RenderError, RenderRequest},
-    rare_effect::{CoverageRect, draw_bright_border, draw_rare_effect},
+    rare_effect::{CoverageRect, draw_bright_border},
     text::{
-        DrawTextLine, RubyMultilineParams, TextAlign, draw_multiline_ruby_text, draw_text_line,
-        fit_single_line,
+        DrawTextLine, RubyLineParams, RubyMultilineParams, draw_multiline_ruby_text,
+        draw_ruby_text_line, draw_text_line, fit_ruby_text_scale, fit_single_line,
+        fit_single_line_compressed,
     },
 };
 
-use color::{parse_hex_color, text_brush};
+use color::{parse_hex_color, text_brush_in_box};
 use draw_card::{
-    draw_anniversary_mark, draw_art, draw_attribute, draw_copyright_asset, draw_copyright_text,
-    draw_document_link_arrows, draw_document_monster_type_line, draw_document_password,
-    draw_document_spell_trap_line, draw_document_text_block, draw_document_title,
-    draw_external_image, draw_foreground_image, draw_frame, draw_laser, draw_level_or_rank,
-    draw_link_arrows, draw_mask, draw_out_frame_blocks, draw_package, draw_password,
-    draw_pendulum_description, draw_positioned_render_image, draw_spell_trap_line, draw_stats,
+    draw_external_image, draw_positioned_render_image, sanitize_render_rect, text_align_choice,
 };
 use effect_areas::{
     art_coverage_rect, draw_visual_effect_area, effect_target_areas, load_effect_protection_mask,
@@ -52,13 +43,13 @@ impl Renderer {
     }
 
     pub fn render_png(&self, request: &RenderRequest) -> Result<Vec<u8>, RenderError> {
-        let document = self.build_document(request);
+        let document = self.build_document(request)?;
         self.render_document(&document)
     }
 
-    pub fn build_document(&self, request: &RenderRequest) -> RenderDocument {
-        let bundle = get_bundle();
-        RenderDocument::from_request(request, bundle)
+    pub fn build_document(&self, request: &RenderRequest) -> Result<RenderDocument, RenderError> {
+        let bundle = renderer_bundle()?;
+        Ok(RenderDocument::from_request(request, bundle))
     }
 
     pub fn render_document(&self, document: &RenderDocument) -> Result<Vec<u8>, RenderError> {
@@ -76,18 +67,10 @@ impl Renderer {
         target.fill(canvas_background_color(document));
 
         if !document.nodes.is_empty() {
-            let request = document.to_request();
-            let bundle = get_bundle();
+            let bundle = renderer_bundle()?;
             let base = &bundle.layout.base;
             let language = document.language.as_deref();
-            let style = layout_style(
-                document.kind,
-                language,
-                &bundle.layout,
-                &request.options.layout_overrides,
-            );
-            let document_link_arrow_count = document_link_arrow_count(document);
-            let effect_protection_mask = load_effect_protection_mask(&request, base)?;
+            let effect_protection_mask = load_effect_protection_mask(document, base)?;
 
             let mut nodes: Vec<_> = document
                 .nodes
@@ -99,7 +82,7 @@ impl Renderer {
 
             for (_, node) in nodes {
                 match &node.op {
-                    RenderOp::BundleImage { asset, x, y } => {
+                    RenderOp::ImageAsset { asset, x, y } => {
                         if bundle.has_image(asset) {
                             bundle
                                 .draw_image_at(&mut target, asset, *x, *y)
@@ -111,105 +94,40 @@ impl Renderer {
                         rect,
                         fit,
                         align,
-                    } => {
-                        draw_external_image(&mut target, path.as_deref(), rect, *fit, *align);
-                    }
+                    } => draw_external_image(&mut target, path.as_deref(), rect, *fit, *align),
                     RenderOp::PositionedImage { image } => {
-                        draw_positioned_render_image(&mut target, image);
+                        draw_positioned_render_image(&mut target, image)
                     }
-                    RenderOp::VisualEffect {
-                        target: effect_target,
-                        effect,
-                    } => {
-                        draw_document_visual_effect(
-                            bundle,
-                            &mut target,
-                            &request,
-                            base,
-                            language,
-                            *effect_target,
-                            *effect,
-                            effect_protection_mask.as_ref(),
-                        );
-                    }
-                    RenderOp::OutFrameBlocks => {
-                        draw_out_frame_blocks(bundle, &mut target, &request, base)?;
-                    }
-                    RenderOp::AnniversaryMark => {
-                        draw_anniversary_mark(bundle, &mut target, &request, base)?;
-                    }
-                    RenderOp::Attribute { asset, x, y } => {
-                        if let Some(asset) = asset {
-                            if bundle.has_image(asset) {
-                                bundle
-                                    .draw_image_at(&mut target, asset, *x, *y)
-                                    .map_err(RenderError::Backend)?;
-                            }
-                        }
-                    }
-                    RenderOp::LevelOrRank => {
-                        draw_level_or_rank(bundle, &mut target, &request, base)?;
-                    }
-                    RenderOp::LinkArrows { arrows } => {
-                        draw_document_link_arrows(bundle, &mut target, arrows, base)?;
-                    }
-                    RenderOp::Title {
+                    RenderOp::FillRect {
+                        rect,
+                        color,
+                        opacity,
+                    } => draw_fill_rect(&mut target, rect, color, *opacity),
+                    RenderOp::TextLine {
                         text,
                         rect,
                         font_family,
                         font_size,
                         letter_spacing,
-                        color,
-                        width_compress,
                         align,
                         fill,
                         shadow,
-                    } => {
-                        draw_document_title(
-                            &mut target,
-                            &request,
-                            language,
-                            text,
-                            rect,
-                            font_family,
-                            *font_size,
-                            *letter_spacing,
-                            color,
-                            *width_compress,
-                            *align,
-                            fill.as_ref(),
-                            shadow.as_ref(),
-                        );
-                    }
-                    RenderOp::SpellTrapLine { label, icon_asset } => {
-                        draw_document_spell_trap_line(
-                            bundle,
-                            &mut target,
-                            &request,
-                            &style,
-                            language,
-                            label,
-                            icon_asset.as_deref(),
-                        )?;
-                    }
-                    RenderOp::MonsterTypeLine {
+                        ruby,
+                        width_compress,
+                    } => draw_text_line_op(
+                        &mut target,
+                        language,
                         text,
                         rect,
                         font_family,
-                        font_size,
-                        letter_spacing,
-                    } => {
-                        draw_document_monster_type_line(
-                            &mut target,
-                            &request,
-                            language,
-                            text,
-                            rect,
-                            font_family,
-                            *font_size,
-                            *letter_spacing,
-                        );
-                    }
+                        *font_size,
+                        *letter_spacing,
+                        *align,
+                        fill,
+                        shadow.as_ref(),
+                        ruby.as_ref(),
+                        *width_compress,
+                    ),
                     RenderOp::TextBlock {
                         text,
                         rect,
@@ -217,57 +135,37 @@ impl Renderer {
                         font_size,
                         line_height,
                         letter_spacing,
-                        channel,
-                    } => {
-                        draw_document_text_block(
-                            &mut target,
-                            &request,
-                            &style,
-                            language,
-                            text,
-                            rect,
-                            font_family,
-                            *font_size,
-                            *line_height,
-                            *letter_spacing,
-                            *channel,
-                        );
-                    }
-                    RenderOp::Stats => {
-                        let mut request = request.clone();
-                        if request.card.is_link() {
-                            if let Some(count) = document_link_arrow_count {
-                                request.card.level = count;
-                            }
-                        }
-                        draw_stats(bundle, &mut target, &request, &style, base, language);
-                    }
-                    RenderOp::Password { text, x, y } => {
-                        draw_document_password(
-                            &mut target,
-                            &request,
-                            &style,
-                            language,
-                            text,
-                            *x,
-                            *y,
-                            base.password.font_size as f32,
-                        );
-                    }
-                    RenderOp::Package { text } => {
-                        let mut request = request.clone();
-                        request.card.package = Some(text.clone());
-                        draw_package(&mut target, &request, &style, base, language);
-                    }
-                    RenderOp::Copyright { value, asset } => {
-                        if let Some(asset) = asset {
-                            draw_copyright_asset(bundle, &mut target, asset, base)?;
-                        } else {
-                            let mut request = request.clone();
-                            request.card.copyright = Some(value.clone());
-                            draw_copyright_text(&mut target, &request, &style, base, language);
-                        }
-                    }
+                        fill,
+                        shadow,
+                        ruby,
+                        first_line_compress,
+                    } => draw_text_block_op(
+                        &mut target,
+                        language,
+                        text,
+                        rect,
+                        font_family,
+                        *font_size,
+                        *line_height,
+                        *letter_spacing,
+                        fill,
+                        shadow.as_ref(),
+                        ruby.as_ref(),
+                        *first_line_compress,
+                    ),
+                    RenderOp::VisualEffect {
+                        target: effect_target,
+                        effect,
+                    } => draw_document_visual_effect(
+                        bundle,
+                        &mut target,
+                        document,
+                        base,
+                        language,
+                        *effect_target,
+                        *effect,
+                        effect_protection_mask.as_ref(),
+                    ),
                 }
             }
         }
@@ -283,186 +181,10 @@ impl Renderer {
             .encode_png()
             .map_err(|e| RenderError::PngEncode(e.to_string()))
     }
+}
 
-    fn render_request_png(
-        &self,
-        request: &RenderRequest,
-        output_scale: f32,
-    ) -> Result<Vec<u8>, RenderError> {
-        let bundle = get_bundle();
-        let base = &bundle.layout.base;
-        let language = request.options.language.as_deref();
-        let style = layout_style(
-            request.kind,
-            language,
-            &bundle.layout,
-            &request.options.layout_overrides,
-        );
-        let effect_protection_mask = load_effect_protection_mask(request, base)?;
-
-        let mut target = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)
-            .ok_or_else(|| RenderError::Backend("Failed to allocate Pixmap".to_string()))?;
-        target.fill(Color::from_rgba8(
-            BACKGROUND_CREAM.0,
-            BACKGROUND_CREAM.1,
-            BACKGROUND_CREAM.2,
-            255,
-        ));
-
-        draw_frame(bundle, &mut target, frame_asset_name(&request.card))?;
-        draw_art(bundle, &mut target, request, base)?;
-        draw_mask(bundle, &mut target, request, base)?;
-        if let Some(rare) = request.card.rare {
-            let full_rect = CoverageRect {
-                x: 0,
-                y: 0,
-                w: CARD_WIDTH,
-                h: CARD_HEIGHT,
-            };
-            let before = effect_protection_mask
-                .as_ref()
-                .map(|_| snapshot_effect_rect(&target, full_rect));
-            draw_rare_effect(&mut target, rare, &request.card, base);
-            if let Some(before) = before.as_ref() {
-                restore_protected_effect_pixels(
-                    &mut target,
-                    before,
-                    effect_protection_mask.as_ref(),
-                );
-            }
-        }
-        draw_foreground_image(&mut target, request)?;
-        draw_out_frame_blocks(bundle, &mut target, request, base)?;
-        draw_anniversary_mark(bundle, &mut target, request, base)?;
-        draw_attribute(bundle, &mut target, request, base, language)?;
-        draw_level_or_rank(bundle, &mut target, request, base)?;
-        draw_link_arrows(bundle, &mut target, request, base)?;
-
-        draw_card::draw_title(&mut target, request, &style, base, language);
-
-        if request.card.is_spell() || request.card.is_trap() {
-            draw_spell_trap_line(bundle, &mut target, request, &style, base, language)?;
-        } else if let Some(line) = build_effect_line(&request.card, request.kind, language) {
-            let line_layout = fit_single_line(
-                &line,
-                language,
-                style.effect_size,
-                &style.effect_font_family,
-                base.effect.width,
-                style.effect_letter_spacing,
-                style.effect_size.saturating_sub(10),
-            );
-            draw_text_line(
-                &mut target,
-                DrawTextLine::unscaled(
-                    &line_layout.text,
-                    style.effect_x as f32,
-                    style.effect_top as f32,
-                    line_layout.font_size as f32,
-                    line_layout.max_width as f32,
-                    Color::from_rgba8(TEXT_COLOR_DARK.0, TEXT_COLOR_DARK.1, TEXT_COLOR_DARK.2, 255),
-                    Color::TRANSPARENT,
-                    &style.effect_font_family,
-                    TextAlign::Left,
-                    language,
-                    line_layout.letter_spacing,
-                )
-                .with_brushes(
-                    text_brush(
-                        request.options.text_colors.effect.as_ref(),
-                        None,
-                        Color::from_rgba8(
-                            TEXT_COLOR_DARK.0,
-                            TEXT_COLOR_DARK.1,
-                            TEXT_COLOR_DARK.2,
-                            255,
-                        ),
-                        style.effect_x as f32,
-                        line_layout.max_width as f32,
-                    ),
-                    text_brush(
-                        request.options.text_colors.effect_shadow.as_ref(),
-                        None,
-                        Color::TRANSPARENT,
-                        style.effect_x as f32,
-                        line_layout.max_width as f32,
-                    ),
-                ),
-            );
-        }
-
-        let description_text;
-        if request.card.is_pendulum() {
-            let sections = split_pendulum_description(&request.card.desc, language);
-            if let Some(pendulum_effect) = sections.pendulum_effect.as_deref() {
-                draw_pendulum_description(
-                    &mut target,
-                    request,
-                    &style,
-                    base,
-                    language,
-                    pendulum_effect,
-                );
-            }
-            description_text = sections.monster_effect;
-        } else {
-            description_text = request.card.desc.clone();
-        }
-
-        draw_multiline_ruby_text(
-            &mut target,
-            RubyMultilineParams {
-                text: &description_text,
-                x: style.description_x as f32,
-                y: description_y(&request.card, &style) as f32,
-                width: style.body_max_width as f32,
-                height: description_height(&request.card, &style, base) as f32,
-                family: &style.base_font_family,
-                color: Color::BLACK,
-                shadow_color: Color::TRANSPARENT,
-                brush: text_brush(
-                    request.options.text_colors.description.as_ref(),
-                    request.options.description_color_override.as_deref(),
-                    Color::BLACK,
-                    style.description_x as f32,
-                    style.body_max_width as f32,
-                ),
-                shadow_brush: text_brush(
-                    request.options.text_colors.description_shadow.as_ref(),
-                    None,
-                    Color::TRANSPARENT,
-                    style.description_x as f32,
-                    style.body_max_width as f32,
-                ),
-                language,
-                base_font_size: style.description_size,
-                rt_font_size: style.description_rt_font_size,
-                rt_top: style.description_rt_top,
-                rt_font_scale_x: style.description_rt_font_scale_x,
-                line_height: style.description_line_height,
-                letter_spacing: style.description_letter_spacing,
-                min_font_size: style.description_size.saturating_sub(8),
-                first_line_compress: request.options.description_first_line_compress,
-            },
-        );
-
-        draw_stats(bundle, &mut target, request, &style, base, language);
-        draw_password(&mut target, request, &style, base, language);
-        draw_package(&mut target, request, &style, base, language);
-        draw_copyright_text(&mut target, request, &style, base, language);
-        draw_laser(bundle, &mut target, request, base)?;
-
-        let output_scale = sanitize_output_scale(output_scale);
-        let output = if (output_scale - 1.0).abs() > f32::EPSILON {
-            scale_pixmap(&target, output_scale)?
-        } else {
-            target
-        };
-
-        output
-            .encode_png()
-            .map_err(|e| RenderError::PngEncode(e.to_string()))
-    }
+fn renderer_bundle() -> Result<&'static AssetBundle, RenderError> {
+    try_get_bundle().map_err(RenderError::Backend)
 }
 
 fn scale_pixmap(source: &Pixmap, scale: f32) -> Result<Pixmap, RenderError> {
@@ -519,22 +241,10 @@ fn canvas_background_color(document: &RenderDocument) -> Color {
         })
 }
 
-fn document_link_arrow_count(document: &RenderDocument) -> Option<u32> {
-    document.nodes.iter().find_map(|node| {
-        if !node.visible {
-            return None;
-        }
-        match &node.op {
-            RenderOp::LinkArrows { arrows } => Some(arrows.len() as u32),
-            _ => None,
-        }
-    })
-}
-
 fn draw_document_visual_effect(
-    bundle: &crate::asset_bundle::AssetBundle,
+    bundle: &AssetBundle,
     target: &mut Pixmap,
-    request: &RenderRequest,
+    document: &RenderDocument,
     base: &BaseLayout,
     language: Option<&str>,
     effect_target: EffectTarget,
@@ -548,7 +258,7 @@ fn draw_document_visual_effect(
         w: CARD_WIDTH,
         h: crate::constants::CARD_HEIGHT,
     };
-    let art_rect = art_coverage_rect(request, base);
+    let art_rect = art_coverage_rect(&document.card, base);
 
     if let EffectStyle::BrightBorder { opacity } = effect {
         // BrightBorder operates on both the outer card edge and the art frame
@@ -564,7 +274,7 @@ fn draw_document_visual_effect(
 
     for area in effect_target_areas(
         bundle,
-        request,
+        document,
         base,
         language,
         effect_target,
@@ -573,6 +283,261 @@ fn draw_document_visual_effect(
     ) {
         draw_visual_effect_area(target, area, effect, protection_mask);
     }
+}
+
+fn draw_fill_rect(target: &mut Pixmap, rect: &RenderRect, color: &str, opacity: f32) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
+    let Some(tiny_color) = parse_hex_color(color) else {
+        return;
+    };
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return;
+    }
+    let Some(color) = Color::from_rgba(
+        tiny_color.red(),
+        tiny_color.green(),
+        tiny_color.blue(),
+        tiny_color.alpha() * opacity,
+    ) else {
+        return;
+    };
+    let Some(tiny_rect) = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+    else {
+        return;
+    };
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(color);
+    target.fill_rect(tiny_rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_line_op(
+    target: &mut Pixmap,
+    language: Option<&str>,
+    text: &str,
+    rect: &RenderRect,
+    font_family: &str,
+    font_size: u32,
+    letter_spacing: f32,
+    align: crate::model::TextAlignChoice,
+    fill: &crate::model::TextPaint,
+    shadow: Option<&crate::model::TextPaint>,
+    ruby: Option<&RubyStyle>,
+    width_compress: bool,
+) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
+    let text_align = text_align_choice(align);
+    let brush = text_brush_in_box(
+        Some(fill),
+        None,
+        Color::BLACK,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    );
+    let shadow_brush = shadow.and_then(|s| {
+        text_brush_in_box(
+            Some(s),
+            None,
+            Color::TRANSPARENT,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+        )
+    });
+    if let Some(ruby) = ruby {
+        if ruby.rt_font_size > 0.0 && crate::ruby::contains_ruby_markup(text) {
+            let tokens = crate::ruby::parse_ruby_text(text);
+            let scale_x = fit_ruby_text_scale(
+                &tokens,
+                font_family,
+                font_size as f32,
+                ruby.rt_font_size,
+                letter_spacing,
+                ruby.rt_font_scale_x,
+                rect.width,
+            )
+            .max(0.3);
+            let shadow_color = Color::TRANSPARENT;
+            if shadow_brush.is_some() {
+                draw_ruby_text_line(
+                    target,
+                    RubyLineParams {
+                        tokens: &tokens,
+                        x: rect.x + 7.0,
+                        y: rect.y + 7.0,
+                        font_size: font_size as f32,
+                        rt_font_size: ruby.rt_font_size,
+                        rt_top: ruby.rt_top,
+                        rt_font_scale_x_override: ruby.rt_font_scale_x,
+                        color: shadow_color,
+                        shadow_color: Color::TRANSPARENT,
+                        brush: shadow_brush.clone(),
+                        shadow_brush: None,
+                        family: font_family,
+                        language,
+                        letter_spacing,
+                        scale_x,
+                    },
+                );
+            }
+            draw_ruby_text_line(
+                target,
+                RubyLineParams {
+                    tokens: &tokens,
+                    x: rect.x,
+                    y: rect.y,
+                    font_size: font_size as f32,
+                    rt_font_size: ruby.rt_font_size,
+                    rt_top: ruby.rt_top,
+                    rt_font_scale_x_override: ruby.rt_font_scale_x,
+                    color: Color::BLACK,
+                    shadow_color: Color::TRANSPARENT,
+                    brush,
+                    shadow_brush: None,
+                    family: font_family,
+                    language,
+                    letter_spacing,
+                    scale_x,
+                },
+            );
+            return;
+        }
+    }
+    let title_layout = if width_compress {
+        fit_single_line_compressed(
+            text,
+            language,
+            font_size,
+            font_family,
+            rect.width.round() as u32,
+            letter_spacing,
+            0.3,
+        )
+    } else {
+        fit_single_line(
+            text,
+            language,
+            font_size,
+            font_family,
+            rect.width.round() as u32,
+            letter_spacing,
+            font_size.saturating_sub(26),
+        )
+    };
+    if shadow_brush.is_some() {
+        draw_text_line(
+            target,
+            DrawTextLine {
+                text: &title_layout.text,
+                x: rect.x + 7.0,
+                y: rect.y + 7.0,
+                font_size: title_layout.font_size as f32,
+                max_width: title_layout.max_width as f32,
+                color: Color::TRANSPARENT,
+                shadow_color: Color::TRANSPARENT,
+                brush: shadow_brush.clone(),
+                shadow_brush: None,
+                family_name: font_family,
+                align: text_align,
+                language,
+                letter_spacing: title_layout.letter_spacing,
+                scale_x: title_layout.scale_x,
+            },
+        );
+    }
+    draw_text_line(
+        target,
+        DrawTextLine {
+            text: &title_layout.text,
+            x: rect.x,
+            y: rect.y,
+            font_size: title_layout.font_size as f32,
+            max_width: title_layout.max_width as f32,
+            color: Color::BLACK,
+            shadow_color: Color::TRANSPARENT,
+            brush,
+            shadow_brush: None,
+            family_name: font_family,
+            align: text_align,
+            language,
+            letter_spacing: title_layout.letter_spacing,
+            scale_x: title_layout.scale_x,
+        },
+    );
+}
+
+fn draw_text_block_op(
+    target: &mut Pixmap,
+    language: Option<&str>,
+    text: &str,
+    rect: &RenderRect,
+    font_family: &str,
+    font_size: u32,
+    line_height: f32,
+    letter_spacing: f32,
+    fill: &crate::model::TextPaint,
+    shadow: Option<&crate::model::TextPaint>,
+    ruby: Option<&RubyStyle>,
+    first_line_compress: bool,
+) {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return;
+    };
+    let brush = text_brush_in_box(
+        Some(fill),
+        None,
+        Color::BLACK,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    );
+    let shadow_brush = shadow.and_then(|s| {
+        text_brush_in_box(
+            Some(s),
+            None,
+            Color::TRANSPARENT,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+        )
+    });
+    let rt_font_size = ruby.map(|r| r.rt_font_size as u32).unwrap_or(0);
+    let rt_top = ruby.map(|r| r.rt_top).unwrap_or(0.0);
+    let rt_font_scale_x = ruby.map(|r| r.rt_font_scale_x).unwrap_or(1.0);
+    draw_multiline_ruby_text(
+        target,
+        RubyMultilineParams {
+            text,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            family: font_family,
+            color: Color::BLACK,
+            shadow_color: Color::TRANSPARENT,
+            brush,
+            shadow_brush,
+            language,
+            base_font_size: font_size,
+            rt_font_size,
+            rt_top,
+            rt_font_scale_x,
+            line_height,
+            letter_spacing,
+            min_font_size: font_size.saturating_sub(8),
+            first_line_compress,
+        },
+    );
 }
 
 fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
@@ -621,17 +586,11 @@ fn sanitize_opacity(opacity: f32) -> f32 {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ResolvedPaint {
-    color: Color,
-    brush: Option<crate::text::TextBrush>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         CoverageRect, art_coverage_rect,
-        draw_card::{laser_asset_name, premultiply_pixmap_alpha},
+        draw_card::premultiply_pixmap_alpha,
         effect_areas::{EffectArea, art_frame_coverage_rect, art_frame_effect_areas},
         scale_pixmap,
         visual_effects::{draw_frosted_foil, draw_relief_engrave},
@@ -639,6 +598,7 @@ mod tests {
     use crate::{
         CardKind, RenderOptions, RenderRequest,
         asset_bundle::{get_bundle, init_global_bundle},
+        document::laser_asset_name,
         model::YgoCardMeta,
     };
     use std::{fs, path::PathBuf, sync::Once};
@@ -736,30 +696,6 @@ mod tests {
             Err(crate::model::RenderError::Backend(_))
         ));
         assert!(super::validate_render_dimensions(1, 1).is_ok());
-    }
-
-    #[test]
-    fn document_link_arrow_count_honors_empty_arrows() {
-        let document = crate::document::RenderDocument {
-            schema_version: crate::document::RenderDocument::SCHEMA_VERSION,
-            kind: CardKind::Yugioh,
-            canvas: crate::document::RenderCanvas {
-                width: 1,
-                height: 1,
-                background: None,
-            },
-            language: None,
-            output_scale: 1.0,
-            card: YgoCardMeta::from(CardDataEntry::default()),
-            options: RenderOptions::default(),
-            nodes: vec![crate::document::RenderNode::new(
-                "link-arrows",
-                0,
-                crate::document::RenderOp::LinkArrows { arrows: vec![] },
-            )],
-        };
-
-        assert_eq!(super::document_link_arrow_count(&document), Some(0));
     }
 
     #[test]
@@ -869,9 +805,9 @@ mod tests {
         };
 
         let bundle = get_bundle();
-        let art_rect = art_coverage_rect(&request, &bundle.layout.base);
-        let frame_rect =
-            art_frame_coverage_rect(bundle, &request, &bundle.layout.base).expect("frame rect");
+        let art_rect = art_coverage_rect(&request.card, &bundle.layout.base);
+        let frame_rect = art_frame_coverage_rect(bundle, &request.card, &bundle.layout.base)
+            .expect("frame rect");
 
         assert!(frame_rect.x <= art_rect.x);
         assert!(frame_rect.y <= art_rect.y);
@@ -907,8 +843,8 @@ mod tests {
         };
 
         let bundle = get_bundle();
-        let art_rect = art_coverage_rect(&request, &bundle.layout.base);
-        let areas = art_frame_effect_areas(bundle, &request, &bundle.layout.base, art_rect);
+        let art_rect = art_coverage_rect(&request.card, &bundle.layout.base);
+        let areas = art_frame_effect_areas(bundle, &request.card, &bundle.layout.base, art_rect);
 
         assert_eq!(areas.len(), 1);
         let EffectArea::MaskedRect { rect, mask } = &areas[0] else {

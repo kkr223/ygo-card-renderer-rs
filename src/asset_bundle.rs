@@ -424,14 +424,14 @@ impl AssetBundle {
             return Err("Invalid magic header".into());
         }
 
-        let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let version = read_u32_le(data, 4, "bundle version")?;
         if version != SUPPORTED_VERSION {
             return Err(format!(
                 "Unsupported bundle version {version}; expected {SUPPORTED_VERSION}"
             ));
         }
 
-        let json_len = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+        let json_len = read_u32_le(data, 8, "bundle index length")? as usize;
         if json_len > MAX_JSON_LEN {
             return Err(format!("Bundle index too large: {json_len} bytes"));
         }
@@ -656,8 +656,14 @@ pub fn init_global_bundle_from_file(path: impl AsRef<Path>) -> Result<(), String
     Ok(())
 }
 
+pub fn try_get_bundle() -> Result<&'static AssetBundle, String> {
+    BUNDLE
+        .get()
+        .ok_or_else(|| "AssetBundle not initialized".to_string())
+}
+
 pub fn get_bundle() -> &'static AssetBundle {
-    BUNDLE.get().expect("AssetBundle not initialized")
+    try_get_bundle().expect("AssetBundle not initialized")
 }
 
 pub fn decode_webp(bytes: &[u8]) -> Result<Pixmap, String> {
@@ -681,11 +687,10 @@ pub fn decode_webp(bytes: &[u8]) -> Result<Pixmap, String> {
     let height = rgba.height();
     validate_decode_size(width, height)?;
 
-    let mut pixmap = Pixmap::from_vec(
-        rgba.into_raw(),
-        tiny_skia::IntSize::from_wh(width, height).unwrap(),
-    )
-    .ok_or_else(|| "Failed to create Pixmap".to_string())?;
+    let size = tiny_skia::IntSize::from_wh(width, height)
+        .ok_or_else(|| format!("Invalid decoded image size: {width}x{height}"))?;
+    let mut pixmap = Pixmap::from_vec(rgba.into_raw(), size)
+        .ok_or_else(|| "Failed to create Pixmap".to_string())?;
 
     // `image` delivers straight-alpha RGBA; tiny_skia's Pixmap expects premultiplied alpha.
     // Opaque pixels (α = 255) are already correct and need no adjustment.
@@ -716,6 +721,14 @@ fn checked_end(start: usize, len: usize, total: usize, label: &str) -> Result<us
         return Err(format!("{label} buffer pointer out of bounds"));
     }
     Ok(end)
+}
+
+fn read_u32_le(data: &[u8], offset: usize, label: &str) -> Result<u32, String> {
+    let end = checked_end(offset, 4, data.len(), label)?;
+    let bytes: [u8; 4] = data[offset..end]
+        .try_into()
+        .map_err(|_| format!("Invalid {label}"))?;
+    Ok(u32::from_le_bytes(bytes))
 }
 
 fn validate_buffer(ptr: &BufferPointer, payload_len: usize, label: &str) -> Result<(), String> {

@@ -27,7 +27,6 @@ use super::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Parameters for drawing a single ruby-annotated line.
-#[allow(dead_code)] // `language` is part of the public API, reserved for future per-language shaping
 pub struct RubyLineParams<'a> {
     pub tokens: &'a [RubyToken],
     pub x: f32,

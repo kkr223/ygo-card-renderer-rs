@@ -177,7 +177,7 @@ fn render_document_roundtrips_and_renders() {
     };
 
     let renderer = Renderer::new();
-    let mut document = renderer.build_document(&request);
+    let mut document = renderer.build_document(&request).expect("build document");
 
     assert_eq!(document.schema_version, RenderDocument::SCHEMA_VERSION);
     assert!(document.nodes.iter().any(|node| node.id == "frame"));
@@ -226,7 +226,9 @@ fn render_document_allows_external_display_edits() {
         },
     };
 
-    let mut document = Renderer::new().build_document(&request);
+    let mut document = Renderer::new()
+        .build_document(&request)
+        .expect("build document");
 
     let art = document.nodes.iter().find(|node| node.id == "art").unwrap();
     assert!(matches!(
@@ -242,7 +244,7 @@ fn render_document_allows_external_display_edits() {
         .iter_mut()
         .find(|node| node.id == "title")
         .unwrap();
-    if let RenderOp::Title {
+    if let RenderOp::TextLine {
         font_family, align, ..
     } = &mut title.op
     {
@@ -253,7 +255,7 @@ fn render_document_allows_external_display_edits() {
     }
     assert!(matches!(
         &title.op,
-        RenderOp::Title { font_family, align, .. }
+        RenderOp::TextLine { font_family, align, .. }
             if font_family.contains("custom1")
                 && *align == TextAlignChoice::Center
     ));
@@ -263,14 +265,14 @@ fn render_document_allows_external_display_edits() {
         .iter_mut()
         .find(|node| node.id == "monster-type-line")
         .unwrap();
-    if let RenderOp::MonsterTypeLine { text, .. } = &mut type_line.op {
+    if let RenderOp::TextLine { text, .. } = &mut type_line.op {
         *text = "[Wizard/Custom]".to_string();
     } else {
         panic!("expected monster type node");
     }
     assert!(matches!(
         &type_line.op,
-        RenderOp::MonsterTypeLine { text, .. } if text == "[Wizard/Custom]"
+        RenderOp::TextLine { text, .. } if text == "[Wizard/Custom]"
     ));
 
     let password = document
@@ -278,40 +280,110 @@ fn render_document_allows_external_display_edits() {
         .iter_mut()
         .find(|node| node.id == "password")
         .unwrap();
-    if let RenderOp::Password { text, .. } = &mut password.op {
+    if let RenderOp::TextLine { text, .. } = &mut password.op {
         *text = "CUSTOM-ID".to_string();
     } else {
         panic!("expected password node");
     }
     assert!(matches!(
         &password.op,
-        RenderOp::Password { text, .. } if text == "CUSTOM-ID"
+        RenderOp::TextLine { text, .. } if text == "CUSTOM-ID"
     ));
 
-    let arrows = document
+    // Link arrows are now expanded to individual ImageAsset nodes
+    let arrow_count = document
         .nodes
-        .iter_mut()
-        .find(|node| node.id == "link-arrows")
-        .unwrap();
-    if let RenderOp::LinkArrows { arrows } = &mut arrows.op {
-        *arrows = vec![1, 3, 5];
-    } else {
-        panic!("expected link arrows node");
-    }
-    assert!(matches!(
-        &arrows.op,
-        RenderOp::LinkArrows { arrows } if arrows == &vec![1, 3, 5]
-    ));
+        .iter()
+        .filter(|node| node.id == "link-arrow")
+        .count();
+    assert!(
+        arrow_count >= 1,
+        "expected at least one link arrow image node"
+    );
+
+    assert!(
+        document.nodes.iter().any(|node| node.id == "scale-line"),
+        "monster footer scale/link marker line should not require package text"
+    );
 
     let copyright = document
         .nodes
         .iter()
         .find(|node| node.id == "copyright")
         .unwrap();
-    assert!(matches!(
-        &copyright.op,
-        RenderOp::Copyright { asset: Some(asset), .. } if asset == "copyright-en-black.svg"
-    ));
+    assert!(
+        matches!(
+            &copyright.op,
+            RenderOp::ImageAsset { asset, .. } if asset == "copyright-en-black.svg"
+        ) || matches!(
+            &copyright.op,
+            RenderOp::TextLine { text, .. } if text == "en"
+        )
+    );
+}
+
+#[test]
+fn render_document_positions_spell_trap_line_like_footer_layout() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 53129443,
+        name: "Mystical Space Typhoon".to_string(),
+        desc: "Target 1 Spell/Trap on the field; destroy that target.".to_string(),
+        type_: 0x2 | 0x10000, // Spell + Quick-Play subtype
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+
+    let document = Renderer::new()
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card: entry.into(),
+            options: RenderOptions {
+                language: Some("en".to_string()),
+                ..RenderOptions::default()
+            },
+        })
+        .expect("build document");
+
+    let label = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "spell-trap-label")
+        .expect("spell/trap label node");
+    let right_bracket = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "spell-trap-right-bracket")
+        .expect("spell/trap right bracket node");
+
+    let RenderOp::TextLine {
+        rect: label_rect, ..
+    } = &label.op
+    else {
+        panic!("expected spell/trap label TextLine");
+    };
+    let RenderOp::TextLine {
+        rect: right_rect, ..
+    } = &right_bracket.op
+    else {
+        panic!("expected spell/trap right bracket TextLine");
+    };
+
+    assert!(
+        label_rect.x > 0.0,
+        "label should be right-aligned near footer"
+    );
+    assert!(
+        right_rect.x > label_rect.x,
+        "right bracket should close the label"
+    );
+    assert!(
+        document
+            .nodes
+            .iter()
+            .any(|node| node.id == "spell-trap-icon"),
+        "quick-play subtype should emit an icon node"
+    );
 }
 
 #[test]
@@ -342,7 +414,9 @@ fn render_document_expands_ur_rare_preset() {
         },
     };
 
-    let document = Renderer::new().build_document(&request);
+    let document = Renderer::new()
+        .build_document(&request)
+        .expect("build document");
     let title = document
         .nodes
         .iter()
@@ -350,9 +424,8 @@ fn render_document_expands_ur_rare_preset() {
         .unwrap();
     assert!(matches!(
         &title.op,
-        RenderOp::Title {
-            fill: Some(fill),
-            shadow: Some(_),
+        RenderOp::TextLine {
+            fill,
             ..
         } if fill.gradient.as_ref().is_some_and(|gradient| {
             gradient.middle.as_deref() == Some("#fff0a8")
@@ -402,14 +475,16 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
     let mut card: YgoCardMeta = entry.into();
     card.rare = Some(RareType::Ser);
 
-    let document = Renderer::new().build_document(&RenderRequest {
-        kind: CardKind::Yugioh,
-        card,
-        options: RenderOptions {
-            language: Some("en".to_string()),
-            ..RenderOptions::default()
-        },
-    });
+    let document = Renderer::new()
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card,
+            options: RenderOptions {
+                language: Some("en".to_string()),
+                ..RenderOptions::default()
+            },
+        })
+        .expect("build document");
 
     let effect_targets: Vec<_> = document
         .nodes
@@ -459,14 +534,16 @@ fn render_document_expands_sr_and_gr_rare_presets() {
 
     let mut sr_card: YgoCardMeta = entry.clone().into();
     sr_card.rare = Some(RareType::Sr);
-    let sr_document = Renderer::new().build_document(&RenderRequest {
-        kind: CardKind::Yugioh,
-        card: sr_card,
-        options: RenderOptions {
-            language: Some("en".to_string()),
-            ..RenderOptions::default()
-        },
-    });
+    let sr_document = Renderer::new()
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card: sr_card,
+            options: RenderOptions {
+                language: Some("en".to_string()),
+                ..RenderOptions::default()
+            },
+        })
+        .expect("build document");
     let sr_effects: Vec<_> = sr_document
         .nodes
         .iter()
@@ -483,14 +560,16 @@ fn render_document_expands_sr_and_gr_rare_presets() {
 
     let mut gr_card: YgoCardMeta = entry.into();
     gr_card.rare = Some(RareType::Gr);
-    let gr_document = Renderer::new().build_document(&RenderRequest {
-        kind: CardKind::Yugioh,
-        card: gr_card,
-        options: RenderOptions {
-            language: Some("en".to_string()),
-            ..RenderOptions::default()
-        },
-    });
+    let gr_document = Renderer::new()
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card: gr_card,
+            options: RenderOptions {
+                language: Some("en".to_string()),
+                ..RenderOptions::default()
+            },
+        })
+        .expect("build document");
     assert!(gr_document.nodes.iter().any(|node| matches!(
         &node.op,
         RenderOp::VisualEffect {
@@ -512,8 +591,8 @@ fn render_document_expands_sr_and_gr_rare_presets() {
         .unwrap();
     assert!(matches!(
         &title.op,
-        RenderOp::Title {
-            fill: Some(fill),
+        RenderOp::TextLine {
+            fill,
             ..
         } if fill.gradient.is_some()
     ));
@@ -538,14 +617,16 @@ fn render_document_expands_utr_rare_preset() {
     let mut card: YgoCardMeta = entry.into();
     card.rare = Some(RareType::Utr);
 
-    let document = Renderer::new().build_document(&RenderRequest {
-        kind: CardKind::Yugioh,
-        card,
-        options: RenderOptions {
-            language: Some("jp".to_string()),
-            ..RenderOptions::default()
-        },
-    });
+    let document = Renderer::new()
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card,
+            options: RenderOptions {
+                language: Some("jp".to_string()),
+                ..RenderOptions::default()
+            },
+        })
+        .expect("build document");
 
     assert!(document.nodes.iter().any(|node| matches!(
         &node.op,

@@ -45,7 +45,7 @@ pub enum RareCoverage {
 /// [`RareType::Dt`] rely on image assets and per-region masking that are only
 /// available through the full document render pipeline
 /// (`RenderDocument` → `Renderer`).  Calling this function directly for those
-/// variants is a no-op — use `Renderer::render_request_png` instead.
+/// variants is a no-op — use `Renderer::render_document` instead.
 pub fn draw_rare_effect(
     target: &mut Pixmap,
     rare: RareType,
@@ -1465,7 +1465,7 @@ pub(crate) fn draw_bright_border(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Convert HSV (all 0.0–1.0) + alpha byte to a premultiplied [`Color`].
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn hsv_to_color(h: f32, s: f32, v: f32, alpha: f32) -> Color {
     let (r, g, b) = hsv_to_rgb(h, s, v);
     Color::from_rgba(r * alpha, g * alpha, b * alpha, alpha).unwrap_or(Color::TRANSPARENT)

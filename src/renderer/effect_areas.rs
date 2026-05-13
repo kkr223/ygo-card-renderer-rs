@@ -6,8 +6,8 @@ use crate::{
     asset_bundle::{AssetBundle, BaseLayout},
     card_logic::{attribute_asset_name, image_frame, uses_rank},
     constants::{CARD_HEIGHT, CARD_WIDTH},
-    document::{EffectStyle, EffectTarget},
-    model::{RenderError, RenderRequest},
+    document::{EffectStyle, EffectTarget, RenderDocument},
+    model::{RenderError, YgoCardMeta},
     rare_effect::CoverageRect,
 };
 
@@ -46,10 +46,10 @@ pub(super) struct EffectRectSnapshot {
 }
 
 pub(super) fn load_effect_protection_mask(
-    request: &RenderRequest,
+    document: &RenderDocument,
     base: &BaseLayout,
 ) -> Result<Option<EffectProtectionMask>, RenderError> {
-    let Some(mask) = request.options.effect_mask.as_ref() else {
+    let Some(mask) = document.options.effect_mask.as_ref() else {
         return Ok(None);
     };
     let Some(pixmap) = load_external_pixmap(&mask.path) else {
@@ -58,7 +58,7 @@ pub(super) fn load_effect_protection_mask(
             mask.path
         )));
     };
-    let art_rect = art_coverage_rect(request, base);
+    let art_rect = art_coverage_rect(&document.card, base);
     let full_card_sized = pixmap.width() == CARD_WIDTH && pixmap.height() == CARD_HEIGHT;
     let default_x = if full_card_sized {
         0
@@ -79,7 +79,7 @@ pub(super) fn load_effect_protection_mask(
 
 pub(super) fn effect_target_areas(
     bundle: &AssetBundle,
-    request: &RenderRequest,
+    document: &RenderDocument,
     base: &BaseLayout,
     language: Option<&str>,
     target: EffectTarget,
@@ -93,15 +93,15 @@ pub(super) fn effect_target_areas(
             .into_iter()
             .map(EffectArea::Rect)
             .collect(),
-        EffectTarget::ArtFrame => art_frame_effect_areas(bundle, request, base, art_rect),
+        EffectTarget::ArtFrame => art_frame_effect_areas(bundle, &document.card, base, art_rect),
         EffectTarget::CardBorder => card_border_areas()
             .into_iter()
             .map(EffectArea::Rect)
             .collect(),
-        EffectTarget::Attribute => attribute_effect_area(bundle, request, base, language)
+        EffectTarget::Attribute => attribute_effect_area(bundle, &document.card, base, language)
             .into_iter()
             .collect(),
-        EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, request, base),
+        EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, &document.card, base),
     }
 }
 
@@ -161,11 +161,11 @@ fn card_border_areas() -> Vec<CoverageRect> {
 
 pub(super) fn art_frame_effect_areas(
     bundle: &AssetBundle,
-    request: &RenderRequest,
+    card: &YgoCardMeta,
     base: &BaseLayout,
     art_rect: CoverageRect,
 ) -> Vec<EffectArea> {
-    let frame_mask = if request.card.is_pendulum() {
+    let frame_mask = if card.is_pendulum() {
         &base.mask.pendulum
     } else {
         &base.mask.normal
@@ -193,10 +193,10 @@ pub(super) fn art_frame_effect_areas(
 #[cfg(test)]
 pub(super) fn art_frame_coverage_rect(
     bundle: &AssetBundle,
-    request: &RenderRequest,
+    card: &YgoCardMeta,
     base: &BaseLayout,
 ) -> Option<CoverageRect> {
-    let mask = if request.card.is_pendulum() {
+    let mask = if card.is_pendulum() {
         &base.mask.pendulum
     } else {
         &base.mask.normal
@@ -244,18 +244,18 @@ fn frame_ring_areas(
     ]
 }
 
-pub(super) fn art_coverage_rect(request: &RenderRequest, base: &BaseLayout) -> CoverageRect {
-    let (x, y, w, h) = image_frame(&request.card, base);
+pub(super) fn art_coverage_rect(card: &YgoCardMeta, base: &BaseLayout) -> CoverageRect {
+    let (x, y, w, h) = image_frame(card, base);
     CoverageRect { x, y, w, h }
 }
 
 fn attribute_effect_area(
     bundle: &AssetBundle,
-    request: &RenderRequest,
+    card: &YgoCardMeta,
     base: &BaseLayout,
     language: Option<&str>,
 ) -> Option<EffectArea> {
-    let asset = attribute_asset_name(&request.card, language)?;
+    let asset = attribute_asset_name(card, language)?;
     let mask = Arc::new(decode_bundle_image(bundle, &asset)?);
     let rect = CoverageRect {
         x: base.attribute.x,
@@ -268,15 +268,15 @@ fn attribute_effect_area(
 
 fn level_or_rank_effect_areas(
     bundle: &AssetBundle,
-    request: &RenderRequest,
+    card: &YgoCardMeta,
     base: &BaseLayout,
 ) -> Vec<EffectArea> {
-    let count = request.card.level.min(13);
-    if count == 0 || request.card.is_link() {
+    let count = card.level.min(13);
+    if count == 0 || card.is_link() {
         return Vec::new();
     }
 
-    let (layout, left_to_right) = if uses_rank(&request.card) {
+    let (layout, left_to_right) = if uses_rank(card) {
         (&base.rank, true)
     } else {
         (&base.level, false)

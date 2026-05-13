@@ -35,7 +35,6 @@ pub(crate) struct LayoutStyle {
     pub(crate) name_x: u32,
     pub(crate) description_x: u32,
     pub(crate) effect_x: u32,
-    pub(crate) effect_text_indent: i32,
     pub(crate) stat_atk_x: u32,
     pub(crate) stat_def_x: u32,
     pub(crate) stat_link_x: u32,
@@ -52,9 +51,6 @@ pub(crate) struct LayoutStyle {
     pub(crate) type_rt_font_size: u32,
     pub(crate) type_rt_top: f32,
     pub(crate) type_rt_font_scale_x: f32,
-    pub(crate) effect_rt_font_size: u32,
-    pub(crate) effect_rt_top: f32,
-    pub(crate) effect_rt_font_scale_x: f32,
     pub(crate) description_rt_font_size: u32,
     pub(crate) description_rt_top: f32,
     pub(crate) description_rt_font_scale_x: f32,
@@ -107,7 +103,6 @@ fn apply_overrides(style: &mut LayoutStyle, ov: &LayoutOverrides) {
     apply!(effect_line_height);
     apply!(effect_x);
     apply!(effect_letter_spacing);
-    apply!(effect_text_indent);
     apply!(description_size);
     apply!(description_line_height);
     apply!(description_x);
@@ -186,7 +181,6 @@ pub(crate) fn layout_style(
 
     let (name_rt_font_size, name_rt_top, name_rt_font_scale_x) = text_block_rt(&style.name);
     let (type_rt_font_size, type_rt_top, type_rt_font_scale_x) = text_block_rt(&style.spell_trap);
-    let (effect_rt_font_size, effect_rt_top, effect_rt_font_scale_x) = text_block_rt(&style.effect);
     let (description_rt_font_size, description_rt_top, description_rt_font_scale_x) =
         text_block_rt(&style.description);
 
@@ -229,7 +223,6 @@ pub(crate) fn layout_style(
             effect_x: ((bundle_layout.base.effect.x as i32)
                 + text_indent_px(style.effect.text_indent))
             .max(0) as u32,
-            effect_text_indent: text_indent_px(style.effect.text_indent),
             stat_atk_x: atk_text.x,
             stat_def_x: def_text.x,
             stat_link_x: link_text.x,
@@ -244,9 +237,6 @@ pub(crate) fn layout_style(
             type_rt_font_size,
             type_rt_top,
             type_rt_font_scale_x,
-            effect_rt_font_size,
-            effect_rt_top,
-            effect_rt_font_scale_x,
             description_rt_font_size,
             description_rt_top,
             description_rt_font_scale_x,
@@ -284,7 +274,6 @@ pub(crate) fn layout_style(
             name_x: 116,
             description_x: 126,
             effect_x: 126,
-            effect_text_indent: 0,
             stat_atk_x: 1028,
             stat_def_x: 1306,
             stat_link_x: 1294,
@@ -299,9 +288,6 @@ pub(crate) fn layout_style(
             type_rt_font_size,
             type_rt_top,
             type_rt_font_scale_x,
-            effect_rt_font_size,
-            effect_rt_top,
-            effect_rt_font_scale_x,
             description_rt_font_size,
             description_rt_top,
             description_rt_font_scale_x,
