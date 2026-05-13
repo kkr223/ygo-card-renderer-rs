@@ -467,17 +467,14 @@ pub(super) fn draw_visual_effect_area(
 
 fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
     use crate::rare_effect::{
-        draw_dot_grid, draw_holographic, draw_optical_scr, draw_optical_scr_simple,
-        draw_optical_ser, draw_optical_ser_simple, draw_rainbow_foil, draw_secret_foil,
-        draw_secret_weave,
+        draw_dot_grid, draw_holographic, draw_optical_ser, draw_optical_ser_simple,
+        draw_rainbow_foil, draw_secret_foil, draw_secret_weave,
     };
     match effect {
         EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
         EffectStyle::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
         EffectStyle::OpticalSer { opacity } => draw_optical_ser(target, rect, opacity),
         EffectStyle::OpticalSerSimple { opacity } => draw_optical_ser_simple(target, rect, opacity),
-        EffectStyle::OpticalScr { opacity } => draw_optical_scr(target, rect, opacity),
-        EffectStyle::OpticalScrSimple { opacity } => draw_optical_scr_simple(target, rect, opacity),
         EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
         EffectStyle::SecretFoil { opacity } => draw_secret_foil(target, rect, opacity),
         EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),

@@ -400,32 +400,6 @@ fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectStyle::OpticalSerSimple { opacity: 0.90 },
             );
         }
-        RareType::Scr => {
-            push(
-                "rare-scr-art-optical",
-                30,
-                EffectTarget::Art,
-                EffectStyle::OpticalScr { opacity: 1.00 },
-            );
-            push(
-                "rare-scr-attribute-optical",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::OpticalScrSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-scr-level-rank-optical",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::OpticalScrSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-scr-link-arrows-optical",
-                91,
-                EffectTarget::LinkArrows,
-                EffectStyle::OpticalScrSimple { opacity: 0.90 },
-            );
-        }
         RareType::Gser => {
             // ── Ser crushed foil on art ─────────────────────────────────
             push(
@@ -1361,7 +1335,7 @@ fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextP
                 )),
             }),
         ),
-        Some(RareType::Ser | RareType::Pser | RareType::Scr) => (
+        Some(RareType::Ser | RareType::Pser) => (
             Some(TextPaint {
                 color: None,
                 gradient: Some(TextGradient::vertical_middle(
@@ -1761,8 +1735,6 @@ pub enum EffectStyle {
     FrostedFoil { opacity: f32 },
     ConcentricEngrave { opacity: f32 },
     ReliefEngrave { opacity: f32 },
-    OpticalScr { opacity: f32 },
-    OpticalScrSimple { opacity: f32 },
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────────

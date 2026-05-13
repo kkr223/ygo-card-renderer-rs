@@ -592,12 +592,6 @@ fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
         EffectStyle::ReliefEngrave { opacity } => EffectStyle::ReliefEngrave {
             opacity: sanitize_opacity(opacity),
         },
-        EffectStyle::OpticalScr { opacity } => EffectStyle::OpticalScr {
-            opacity: sanitize_opacity(opacity),
-        },
-        EffectStyle::OpticalScrSimple { opacity } => EffectStyle::OpticalScrSimple {
-            opacity: sanitize_opacity(opacity),
-        },
     }
 }
 
