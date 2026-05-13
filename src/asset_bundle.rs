@@ -222,6 +222,8 @@ pub struct ArrowState {
 pub struct ArrowPair {
     pub on: ArrowState,
     pub off: ArrowState,
+    #[serde(default)]
+    pub red_mask: Option<ArrowState>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

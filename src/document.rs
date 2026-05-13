@@ -291,6 +291,12 @@ fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectTarget::LevelOrRank,
                 EffectStyle::Holographic { opacity: 0.58 },
             );
+            push(
+                "rare-ur-link-arrows-foil",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::Holographic { opacity: 0.58 },
+            );
         }
         RareType::Gr => {
             push(
@@ -323,6 +329,12 @@ fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectTarget::LevelOrRank,
                 EffectStyle::Holographic { opacity: 0.58 },
             );
+            push(
+                "rare-gr-link-arrows-foil",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::Holographic { opacity: 0.58 },
+            );
         }
         RareType::Utr => {
             push(
@@ -349,10 +361,16 @@ fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectTarget::LevelOrRank,
                 EffectStyle::ConcentricEngrave { opacity: 0.68 },
             );
+            push(
+                "rare-utr-link-arrows-concentric-engrave",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::ConcentricEngrave { opacity: 0.68 },
+            );
         }
         RareType::Hr => push(
             "rare-hr-full-foil",
-            30,
+            95,
             EffectTarget::FullCard,
             EffectStyle::Holographic { opacity: 0.45 },
         ),
@@ -364,44 +382,116 @@ fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
                 EffectStyle::OpticalSer { opacity: 1.00 },
             );
             push(
-                "rare-ser-attribute-secret-foil",
+                "rare-ser-attribute-optical",
                 75,
                 EffectTarget::Attribute,
-                EffectStyle::SecretFoil { opacity: 0.90 },
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
             );
             push(
-                "rare-ser-level-rank-secret-foil",
+                "rare-ser-level-rank-optical",
                 85,
                 EffectTarget::LevelOrRank,
-                EffectStyle::SecretFoil { opacity: 0.90 },
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            );
+            push(
+                "rare-ser-link-arrows-optical",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            );
+        }
+        RareType::Scr => {
+            push(
+                "rare-scr-art-optical",
+                30,
+                EffectTarget::Art,
+                EffectStyle::OpticalScr { opacity: 1.00 },
+            );
+            push(
+                "rare-scr-attribute-optical",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::OpticalScrSimple { opacity: 0.90 },
+            );
+            push(
+                "rare-scr-level-rank-optical",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::OpticalScrSimple { opacity: 0.90 },
+            );
+            push(
+                "rare-scr-link-arrows-optical",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::OpticalScrSimple { opacity: 0.90 },
             );
         }
         RareType::Gser => {
+            // ── Ser crushed foil on art ─────────────────────────────────
             push(
-                "rare-gser-full-weave",
+                "rare-gser-art-optical",
                 30,
-                EffectTarget::FullCard,
-                EffectStyle::SecretWeave { opacity: 0.58 },
+                EffectTarget::Art,
+                EffectStyle::OpticalSer { opacity: 0.70 },
+            );
+            // ── Gold wash on card border + art frame (same as Gr) ───────
+            push(
+                "rare-gser-card-border-gold",
+                32,
+                EffectTarget::CardBorder,
+                EffectStyle::GoldWash { opacity: 0.42 },
             );
             push(
-                "rare-gser-art-foil",
-                31,
-                EffectTarget::Art,
-                EffectStyle::RainbowFoil { opacity: 0.18 },
+                "rare-gser-art-frame-gold",
+                33,
+                EffectTarget::ArtFrame,
+                EffectStyle::GoldWash { opacity: 0.56 },
+            );
+            // ── Ser crushed foil on gold borders ────────────────────────
+            push(
+                "rare-gser-card-border-optical",
+                34,
+                EffectTarget::CardBorder,
+                EffectStyle::OpticalSerSimple { opacity: 0.55 },
+            );
+            push(
+                "rare-gser-art-frame-optical",
+                35,
+                EffectTarget::ArtFrame,
+                EffectStyle::OpticalSerSimple { opacity: 0.55 },
+            );
+            push(
+                "rare-gser-effect-box-optical",
+                36,
+                EffectTarget::EffectBoxBorder,
+                EffectStyle::OpticalSerSimple { opacity: 0.55 },
+            );
+            // ── Ser crushed foil on icons (same as Ser) ──────────────────
+            push(
+                "rare-gser-attribute-optical",
+                75,
+                EffectTarget::Attribute,
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            );
+            push(
+                "rare-gser-level-rank-optical",
+                85,
+                EffectTarget::LevelOrRank,
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            );
+            push(
+                "rare-gser-link-arrows-optical",
+                91,
+                EffectTarget::LinkArrows,
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
             );
         }
         RareType::Pser => {
             push(
-                "rare-pser-art-foil",
-                30,
-                EffectTarget::Art,
-                EffectStyle::RainbowFoil { opacity: 0.50 },
-            );
-            push(
-                "rare-pser-art-dot-grid",
-                31,
-                EffectTarget::Art,
-                EffectStyle::DotGrid { opacity: 0.60 },
+                "rare-pser-full-optical",
+                95,
+                EffectTarget::FullCard,
+                EffectStyle::OpticalSer { opacity: 0.50 },
             );
         }
         RareType::PserPrint => push(
@@ -1257,7 +1347,7 @@ fn push_copyright_node(
 
 fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextPaint>) {
     match rare {
-        Some(RareType::Ur | RareType::Gr) => (
+        Some(RareType::Ur | RareType::Gr | RareType::Gser) => (
             Some(TextPaint {
                 color: None,
                 gradient: Some(TextGradient::vertical_middle(
@@ -1268,6 +1358,20 @@ fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextP
                 color: Some("#5a3708".to_string()),
                 gradient: Some(TextGradient::vertical_middle(
                     "#2d1903", "#a46a16", "#221103",
+                )),
+            }),
+        ),
+        Some(RareType::Ser | RareType::Pser | RareType::Scr) => (
+            Some(TextPaint {
+                color: None,
+                gradient: Some(TextGradient::vertical_middle(
+                    "#f8fafc", "#94a3b8", "#f1f5f9",
+                )),
+            }),
+            Some(TextPaint {
+                color: Some("#94a3b8".to_string()),
+                gradient: Some(TextGradient::vertical_middle(
+                    "#cbd5e1", "#64748b", "#cbd5e1",
                 )),
             }),
         ),
@@ -1638,6 +1742,8 @@ pub enum EffectTarget {
     FullCard,
     Attribute,
     LevelOrRank,
+    LinkArrows,
+    EffectBoxBorder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1646,6 +1752,7 @@ pub enum EffectStyle {
     RainbowFoil { opacity: f32 },
     DotGrid { opacity: f32 },
     OpticalSer { opacity: f32 },
+    OpticalSerSimple { opacity: f32 },
     SecretWeave { opacity: f32 },
     SecretFoil { opacity: f32 },
     Holographic { opacity: f32 },
@@ -1654,6 +1761,8 @@ pub enum EffectStyle {
     FrostedFoil { opacity: f32 },
     ConcentricEngrave { opacity: f32 },
     ReliefEngrave { opacity: f32 },
+    OpticalScr { opacity: f32 },
+    OpticalScrSimple { opacity: f32 },
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────────

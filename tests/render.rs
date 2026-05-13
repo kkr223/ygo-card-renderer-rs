@@ -495,18 +495,18 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
         })
         .collect();
 
-    assert_eq!(effect_targets.len(), 3);
+    assert_eq!(effect_targets.len(), 4);
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
         (EffectTarget::Art, EffectStyle::OpticalSer { .. })
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::Attribute, EffectStyle::SecretFoil { .. })
+        (EffectTarget::Attribute, EffectStyle::OpticalSerSimple { .. })
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::LevelOrRank, EffectStyle::SecretFoil { .. })
+        (EffectTarget::LevelOrRank, EffectStyle::OpticalSerSimple { .. })
     )));
     assert!(
         !effect_targets
@@ -829,25 +829,26 @@ fn render_rare_effects() {
         code: 2511,
         name: "ブラック・マジシャン".to_string(),
         desc: "このカードは決闘者の魂、「ブラック・マジシャン」である。".to_string(),
-        type_: 0x41,
+        type_: 0x4000041,
         attack: 2500,
-        defense: 2100,
+        defense: 0x128,
         level: 7,
         race: 0x1,
         attribute: 0x10,
+        link_marker:0x128,
         ..CardDataEntry::default()
     };
 
     let rare_variants: &[(&str, RareType)] = &[
-        // ("sr", RareType::Sr),
-        // ("ur", RareType::Ur),
-        // ("utr", RareType::Utr),
-        // ("gr", RareType::Gr),
-        // ("hr", RareType::Hr),
+        ("sr", RareType::Sr),
+        ("ur", RareType::Ur),
+        ("utr", RareType::Utr),
+        ("gr", RareType::Gr),
+        ("hr", RareType::Hr),
         ("ser", RareType::Ser),
-        // ("gser", RareType::Gser),
-        // ("pser", RareType::Pser),
-        // ("pser-print", RareType::PserPrint),
+        ("gser", RareType::Gser),
+        ("pser", RareType::Pser),
+        ("pser-print", RareType::PserPrint),
     ];
 
     let renderer = Renderer::new();

@@ -38,6 +38,8 @@ pub enum RareType {
     PserPrint,
     /// Duel Terminal parallel rare
     Dt,
+    /// Secret Collector's Rare
+    Scr,
 }
 
 /// Effect text box used by out-frame cards.
@@ -67,13 +69,14 @@ impl RareType {
             Self::Pser => "pser",
             Self::PserPrint => "pser-print",
             Self::Dt => "dt",
+            Self::Scr => "scr",
         }
     }
 
     /// Whether this rare type also shows the attribute-rare overlay
     /// (holographic border around the attribute icon).
     pub fn shows_attribute_rare(self) -> bool {
-        matches!(self, Self::Hr | Self::Ser | Self::Gser | Self::Pser)
+        matches!(self, Self::Hr | Self::Ser | Self::Gser | Self::Pser | Self::Scr)
     }
 }
 

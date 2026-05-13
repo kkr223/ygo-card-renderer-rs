@@ -177,9 +177,6 @@ fn build_bundle(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         atlas_meta["sprites"] = serde_json::to_value(sprites)?;
     }
 
-    let layout_bytes = layout_payload();
-    let layout_info = json!({"buffer": buffer_ptr(&mut payload, &layout_bytes)});
-
     for (name, _) in &sprite_entries {
         images.insert(
             name.clone(),
@@ -201,6 +198,13 @@ fn build_bundle(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         let (webp, w, h) = rasterize_svg(&p)?;
         images.insert(name, json!({"kind":"raster","storage":"buffer","size":{"w":w,"h":h},"buffer": buffer_ptr(&mut payload,&webp)}));
     }
+
+    // Pre-compute link arrow red-region masks so the renderer can load them
+    // directly instead of comparing on/off images at runtime.
+    let layout_bytes = build_layout_with_red_masks(&image_dir, &mut images, &mut payload)?;
+
+    let layout_info = json!({"buffer": buffer_ptr(&mut payload, &layout_bytes)});
+
     println!("Packing {} font files...", font_entries.len());
     let mut seen_font_names = HashSet::new();
     for (name, rel) in font_entries {
@@ -370,10 +374,59 @@ fn buffer_ptr(payload: &mut Vec<u8>, data: &[u8]) -> Value {
     json!({"offset": offset, "len": data.len() as u32})
 }
 
-fn layout_payload() -> Vec<u8> {
-    let mut layout = LAYOUT_JSON.to_string();
-    layout.push('}');
-    layout.into_bytes()
+fn build_layout_with_red_masks(
+    image_dir: &Path,
+    images: &mut serde_json::Map<String, Value>,
+    payload: &mut Vec<u8>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut json_str = LAYOUT_JSON.to_string();
+    json_str.push('}');
+    let mut layout: Value = serde_json::from_str(&json_str)?;
+    let Some(arrows) = layout["base"]["link_arrows"].as_object_mut() else {
+        return Ok(layout.to_string().into_bytes());
+    };
+    for (dir, arrow) in arrows.iter_mut() {
+        let on_asset = arrow["on"]["asset"].as_str().unwrap_or("");
+        let off_asset = arrow["off"]["asset"].as_str().unwrap_or("");
+        let on_path = image_dir.join(on_asset);
+        let off_path = image_dir.join(off_asset);
+        if !on_path.exists() || !off_path.exists() {
+            continue;
+        }
+        let Ok(on_rgba) = image::open(&on_path).map(|img| img.to_rgba8()) else {
+            continue;
+        };
+        let Ok(off_rgba) = image::open(&off_path).map(|img| img.to_rgba8()) else {
+            continue;
+        };
+        if on_rgba.dimensions() != off_rgba.dimensions() {
+            continue;
+        }
+        let (w, h) = on_rgba.dimensions();
+        let mut mask = ImageBuffer::<Rgba<u8>, _>::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let o = on_rgba.get_pixel(x, y);
+                let f = off_rgba.get_pixel(x, y);
+                let dr = o[0] as i32 - f[0] as i32;
+                let dg = o[1] as i32 - f[1] as i32;
+                let db = o[2] as i32 - f[2] as i32;
+                let diff = dr.abs() + dg.abs() + db.abs();
+                let a = if diff > 120 { 255u8 } else { 0u8 };
+                mask.put_pixel(x, y, Rgba([a, a, a, a]));
+            }
+        }
+        let mask_name = format!("arrow-{dir}-red.webp");
+        let mut webp_buf = Vec::new();
+        let encoder = WebPEncoder::new_lossless(&mut webp_buf);
+        encoder.encode(&mask, w, h, ColorType::Rgba8.into())?;
+        images.insert(
+            mask_name.clone(),
+            json!({"kind":"raster","storage":"buffer","size":{"w":w,"h":h},"buffer": buffer_ptr(payload, &webp_buf)}),
+        );
+        arrow["red_mask"] = json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
+    }
+    Ok(layout.to_string().into_bytes())
 }
 
 fn matches_ext(path: &Path, exts: &[&str]) -> bool {

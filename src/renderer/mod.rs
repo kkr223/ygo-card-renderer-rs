@@ -30,6 +30,16 @@ use effect_areas::{
 pub struct Renderer;
 
 const MAX_RENDER_PIXELS: u64 = 4096 * 4096;
+const TEXT_OUTLINE_OFFSETS: [(f32, f32); 8] = [
+    (-1.0, 0.0),
+    (1.0, 0.0),
+    (0.0, -1.0),
+    (0.0, 1.0),
+    (-1.0, -1.0),
+    (1.0, -1.0),
+    (-1.0, 1.0),
+    (1.0, 1.0),
+];
 
 impl Default for Renderer {
     fn default() -> Self {
@@ -367,26 +377,28 @@ fn draw_text_line_op(
             .max(0.3);
             let shadow_color = Color::TRANSPARENT;
             if shadow_brush.is_some() {
-                draw_ruby_text_line(
-                    target,
-                    RubyLineParams {
-                        tokens: &tokens,
-                        x: rect.x + 7.0,
-                        y: rect.y + 7.0,
-                        font_size: font_size as f32,
-                        rt_font_size: ruby.rt_font_size,
-                        rt_top: ruby.rt_top,
-                        rt_font_scale_x_override: ruby.rt_font_scale_x,
-                        color: shadow_color,
-                        shadow_color: Color::TRANSPARENT,
-                        brush: shadow_brush.clone(),
-                        shadow_brush: None,
-                        family: font_family,
-                        language,
-                        letter_spacing,
-                        scale_x,
-                    },
-                );
+                for (dx, dy) in TEXT_OUTLINE_OFFSETS {
+                    draw_ruby_text_line(
+                        target,
+                        RubyLineParams {
+                            tokens: &tokens,
+                            x: rect.x + dx,
+                            y: rect.y + dy,
+                            font_size: font_size as f32,
+                            rt_font_size: ruby.rt_font_size,
+                            rt_top: ruby.rt_top,
+                            rt_font_scale_x_override: ruby.rt_font_scale_x,
+                            color: shadow_color,
+                            shadow_color: Color::TRANSPARENT,
+                            brush: shadow_brush.clone(),
+                            shadow_brush: None,
+                            family: font_family,
+                            language,
+                            letter_spacing,
+                            scale_x,
+                        },
+                    );
+                }
             }
             draw_ruby_text_line(
                 target,
@@ -433,25 +445,27 @@ fn draw_text_line_op(
         )
     };
     if shadow_brush.is_some() {
-        draw_text_line(
-            target,
-            DrawTextLine {
-                text: &title_layout.text,
-                x: rect.x + 7.0,
-                y: rect.y + 7.0,
-                font_size: title_layout.font_size as f32,
-                max_width: title_layout.max_width as f32,
-                color: Color::TRANSPARENT,
-                shadow_color: Color::TRANSPARENT,
-                brush: shadow_brush.clone(),
-                shadow_brush: None,
-                family_name: font_family,
-                align: text_align,
-                language,
-                letter_spacing: title_layout.letter_spacing,
-                scale_x: title_layout.scale_x,
-            },
-        );
+        for (dx, dy) in TEXT_OUTLINE_OFFSETS {
+            draw_text_line(
+                target,
+                DrawTextLine {
+                    text: &title_layout.text,
+                    x: rect.x + dx,
+                    y: rect.y + dy,
+                    font_size: title_layout.font_size as f32,
+                    max_width: title_layout.max_width as f32,
+                    color: Color::TRANSPARENT,
+                    shadow_color: Color::TRANSPARENT,
+                    brush: shadow_brush.clone(),
+                    shadow_brush: None,
+                    family_name: font_family,
+                    align: text_align,
+                    language,
+                    letter_spacing: title_layout.letter_spacing,
+                    scale_x: title_layout.scale_x,
+                },
+            );
+        }
     }
     draw_text_line(
         target,
@@ -551,6 +565,9 @@ fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
         EffectStyle::OpticalSer { opacity } => EffectStyle::OpticalSer {
             opacity: sanitize_opacity(opacity),
         },
+        EffectStyle::OpticalSerSimple { opacity } => EffectStyle::OpticalSerSimple {
+            opacity: sanitize_opacity(opacity),
+        },
         EffectStyle::SecretWeave { opacity } => EffectStyle::SecretWeave {
             opacity: sanitize_opacity(opacity),
         },
@@ -573,6 +590,12 @@ fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
             opacity: sanitize_opacity(opacity),
         },
         EffectStyle::ReliefEngrave { opacity } => EffectStyle::ReliefEngrave {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::OpticalScr { opacity } => EffectStyle::OpticalScr {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::OpticalScrSimple { opacity } => EffectStyle::OpticalScrSimple {
             opacity: sanitize_opacity(opacity),
         },
     }

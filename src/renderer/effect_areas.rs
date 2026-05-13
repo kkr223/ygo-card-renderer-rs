@@ -7,7 +7,7 @@ use crate::{
     card_logic::{attribute_asset_name, image_frame, uses_rank},
     constants::{CARD_HEIGHT, CARD_WIDTH},
     document::{EffectStyle, EffectTarget, RenderDocument},
-    model::{RenderError, YgoCardMeta},
+    model::{OutFrameEffectBox, RenderError, YgoCardMeta},
     rare_effect::CoverageRect,
 };
 
@@ -102,6 +102,8 @@ pub(super) fn effect_target_areas(
             .into_iter()
             .collect(),
         EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, &document.card, base),
+        EffectTarget::LinkArrows => link_arrows_effect_areas(bundle, &document.card, base),
+        EffectTarget::EffectBoxBorder => effect_box_border_areas(bundle, &document.card, base),
     }
 }
 
@@ -319,6 +321,120 @@ fn level_or_rank_effect_areas(
         .collect()
 }
 
+fn link_arrows_effect_areas(
+    bundle: &AssetBundle,
+    card: &YgoCardMeta,
+    base: &BaseLayout,
+) -> Vec<EffectArea> {
+    const ARROW_KEYS: &[&str] = &[
+        "up",
+        "right_up",
+        "right",
+        "right_down",
+        "down",
+        "left_down",
+        "left",
+        "left_up",
+    ];
+    const ARROW_BITS: &[u32] = &[0x004, 0x080, 0x020, 0x100, 0x040, 0x008, 0x001, 0x002];
+
+    let mut areas = Vec::new();
+    for (key, bit) in ARROW_KEYS.iter().zip(ARROW_BITS.iter()) {
+        if (card.link_marker & bit) == 0 {
+            continue;
+        }
+        let Some(pair) = base.link_arrows.get(*key) else {
+            continue;
+        };
+        // Pre-computed red mask from build_bundle (preferred).
+        if let Some(ref red) = pair.red_mask {
+            if let Some(mask) = decode_bundle_image(bundle, &red.asset).map(Arc::new) {
+                areas.push(EffectArea::MaskedRect {
+                    rect: CoverageRect {
+                        x: red.x,
+                        y: red.y,
+                        w: mask.width(),
+                        h: mask.height(),
+                    },
+                    mask,
+                });
+                continue;
+            }
+        }
+        // Fallback: compute red mask at runtime by diffing on/off images.
+        let Some(on_img) = decode_bundle_image(bundle, &pair.on.asset) else {
+            continue;
+        };
+        let Some(off_img) = decode_bundle_image(bundle, &pair.off.asset) else {
+            continue;
+        };
+        let Some(red_mask) = arrow_red_region_mask(&on_img, &off_img) else {
+            continue;
+        };
+        areas.push(EffectArea::MaskedRect {
+            rect: CoverageRect {
+                x: pair.on.x,
+                y: pair.on.y,
+                w: red_mask.width(),
+                h: red_mask.height(),
+            },
+            mask: Arc::new(red_mask),
+        });
+    }
+    areas
+}
+
+/// Build a mask isolating the red fill region of a link arrow by comparing the
+/// active (`on`) and inactive (`off`) arrow images. Pixels where the two images
+/// differ substantially (the red centre) receive full alpha; the shared frame
+/// pixels are left transparent.
+fn arrow_red_region_mask(on: &Pixmap, off: &Pixmap) -> Option<Pixmap> {
+    if on.width() != off.width() || on.height() != off.height() {
+        return None;
+    }
+    let mut mask = Pixmap::new(on.width(), on.height())?;
+    let mask_pixels = mask.pixels_mut();
+    let on_pixels = on.pixels();
+    let off_pixels = off.pixels();
+
+    for i in 0..on_pixels.len() {
+        let o = on_pixels[i];
+        let f = off_pixels[i];
+        let dr = o.red() as i32 - f.red() as i32;
+        let dg = o.green() as i32 - f.green() as i32;
+        let db = o.blue() as i32 - f.blue() as i32;
+        let diff = dr.abs() + dg.abs() + db.abs();
+        let alpha = if diff > 120 { 255u8 } else { 0u8 };
+        mask_pixels[i] =
+            tiny_skia::PremultipliedColorU8::from_rgba(alpha, alpha, alpha, alpha)
+                .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    }
+    Some(mask)
+}
+
+fn effect_box_border_areas(
+    bundle: &AssetBundle,
+    card: &YgoCardMeta,
+    base: &BaseLayout,
+) -> Vec<EffectArea> {
+    let effect_box = match card.out_frame_effect_box {
+        OutFrameEffectBox::EblockBorder => &base.out_frame.effect_box,
+        OutFrameEffectBox::EblockBorderO => &base.out_frame.effect_box_colored,
+    };
+    let Some(mask) = decode_bundle_image(bundle, &effect_box.asset).map(Arc::new) else {
+        return Vec::new();
+    };
+    vec![EffectArea::MaskedRect {
+        rect: CoverageRect {
+            x: effect_box.x,
+            y: effect_box.y,
+            w: mask.width(),
+            h: mask.height(),
+        },
+        mask,
+    }]
+}
+
 pub(super) fn decode_bundle_image(bundle: &AssetBundle, asset: &str) -> Option<Pixmap> {
     let entry = bundle.image(asset).ok()?;
     match entry.kind.as_str() {
@@ -351,13 +467,17 @@ pub(super) fn draw_visual_effect_area(
 
 fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
     use crate::rare_effect::{
-        draw_dot_grid, draw_holographic, draw_optical_ser, draw_rainbow_foil, draw_secret_foil,
+        draw_dot_grid, draw_holographic, draw_optical_scr, draw_optical_scr_simple,
+        draw_optical_ser, draw_optical_ser_simple, draw_rainbow_foil, draw_secret_foil,
         draw_secret_weave,
     };
     match effect {
         EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
         EffectStyle::DotGrid { opacity } => draw_dot_grid(target, rect, opacity),
         EffectStyle::OpticalSer { opacity } => draw_optical_ser(target, rect, opacity),
+        EffectStyle::OpticalSerSimple { opacity } => draw_optical_ser_simple(target, rect, opacity),
+        EffectStyle::OpticalScr { opacity } => draw_optical_scr(target, rect, opacity),
+        EffectStyle::OpticalScrSimple { opacity } => draw_optical_scr_simple(target, rect, opacity),
         EffectStyle::SecretWeave { opacity } => draw_secret_weave(target, rect, opacity),
         EffectStyle::SecretFoil { opacity } => draw_secret_foil(target, rect, opacity),
         EffectStyle::Holographic { opacity } => draw_holographic(target, rect, opacity),
