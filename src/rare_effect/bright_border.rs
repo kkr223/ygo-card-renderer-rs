@@ -2,7 +2,10 @@
 
 use tiny_skia::Pixmap;
 
-use crate::{constants::{CARD_HEIGHT, CARD_WIDTH}, pixel_ops::pixel_hash};
+use crate::{
+    constants::{CARD_HEIGHT, CARD_WIDTH},
+    pixel_ops::pixel_hash,
+};
 
 use super::CoverageRect;
 

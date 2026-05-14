@@ -18,13 +18,9 @@ use crate::{
 };
 
 use super::{
-    bright_border::draw_bright_border,
-    dot_grid::draw_dot_grid,
-    holographic::draw_holographic,
-    optical::draw_optical_ser,
-    rainbow_foil::draw_rainbow_foil,
+    CoverageRect, bright_border::draw_bright_border, dot_grid::draw_dot_grid,
+    holographic::draw_holographic, optical::draw_optical_ser, rainbow_foil::draw_rainbow_foil,
     secret::draw_secret_weave,
-    CoverageRect,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,7 +145,7 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 
         RareType::PserPrint => vec![EffectLayer::full(LayerKind::BrightBorder { opacity: 0.72 })],
 
-        RareType::Gr | RareType::Ur | RareType::Utr | RareType::Dt => vec![],
+        RareType::Gr | RareType::Ur | RareType::Utr | RareType::Scr | RareType::Dt => vec![],
     }
 }
 

@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use tiny_skia::Pixmap;
 
-use super::{math::*, CoverageRect};
+use super::{CoverageRect, math::*};
 
 const OPTICAL_LUT_SIZE: usize = 1024;
 const OPTICAL_LAM_MIN: f32 = 380.0;
@@ -329,9 +329,10 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             // Local hue shimmer (hash-driven)
             let local_phase = avoid_magenta_phase(
-                ((col as u32).wrapping_mul(1_664_525).wrapping_add(
-                    (row as u32).wrapping_mul(1_013_904_223),
-                ) as f32
+                ((col as u32)
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add((row as u32).wrapping_mul(1_013_904_223))
+                    as f32
                     / u32::MAX as f32
                     + u * 0.30
                     - v * 0.18)
@@ -354,7 +355,11 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
             let pin_hash = ser_pixel_hash(local_x / 2, local_y / 2);
             let temp_hash = ((pin_hash >> 32) & 0xffff) as f32 / 65535.0;
             let temp_flip = smoothstep(0.64, 0.965, temp_hash) * foil_strength;
-            let warm_bias = smoothstep(0.58, 0.90, foil_rgb.0 + foil_rgb.1 * 0.35 - foil_rgb.2 * 0.25);
+            let warm_bias = smoothstep(
+                0.58,
+                0.90,
+                foil_rgb.0 + foil_rgb.1 * 0.35 - foil_rgb.2 * 0.25,
+            );
             let fine_hash = ((pin_hash >> 11) & 0xff) as f32 / 255.0;
             let opposite_hue = if warm_bias > 0.45 {
                 0.600 + fine_hash * 0.090
@@ -376,9 +381,15 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             let darken = 0.42;
             let strength = foil_strength * opacity;
-            let result_r = clamp01(base_r * darken + foil_rgb.0 * strength + spec * params.white_gain * opacity);
-            let result_g = clamp01(base_g * darken + foil_rgb.1 * strength + spec * params.white_gain * opacity);
-            let result_b = clamp01(base_b * darken + foil_rgb.2 * strength + spec * params.white_gain * opacity);
+            let result_r = clamp01(
+                base_r * darken + foil_rgb.0 * strength + spec * params.white_gain * opacity,
+            );
+            let result_g = clamp01(
+                base_g * darken + foil_rgb.1 * strength + spec * params.white_gain * opacity,
+            );
+            let result_b = clamp01(
+                base_b * darken + foil_rgb.2 * strength + spec * params.white_gain * opacity,
+            );
 
             let out_r = lerp_f32(base_r, result_r, opacity);
             let out_g = lerp_f32(base_g, result_g, opacity);
@@ -544,4 +555,385 @@ fn gauss_line(x: f32, centre: f32, sigma: f32) -> f32 {
 fn vec_norm3(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let inv = 1.0 / (x * x + y * y + z * z).sqrt().max(1e-8);
     (x * inv, y * inv, z * inv)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCR (Secret Collector's Rare) - diagonal dotted micro-facet diffraction
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Parameters for the SCR optical foil.
+#[derive(Debug, Clone, Copy)]
+struct OpticalScrParams {
+    seed: u32,
+    /// Dot lattice pitch in screen-space x/y coordinates (pixels).
+    dot_pitch: f32,
+    dot_radius: f32,
+    dot_softness: f32,
+    dot_jitter: f32,
+    tilt_strength: f32,
+    dome_depth: f32,
+    /// Grating period in nm (determines spectral spread).
+    grating_d_nm: f32,
+    /// Diffraction order.
+    diffraction_order: u32,
+    /// Base blaze angle offset (determines centre wavelength).
+    blaze_offset: f32,
+    /// How much the local dot normal shifts the grating phase.
+    tilt_factor: f32,
+    angle_spread: f32,
+    /// Spacing of bright diagonal dot rows.
+    line_pitch: f32,
+    line_base: f32,
+    line_gain: f32,
+    line_sharpness: f32,
+    /// Light direction.
+    light_x: f32,
+    light_y: f32,
+    light_z: f32,
+    /// Specular shininess.
+    shininess: f32,
+    white_gain: f32,
+    darken: f32,
+    foil_gain: f32,
+    sparkle_gain: f32,
+    /// FBM energy field parameters.
+    macro_cell: f32,
+    cluster_cell: f32,
+    energy_floor: f32,
+    macro_low: f32,
+    macro_high: f32,
+    cluster_low: f32,
+    cluster_high: f32,
+}
+
+const OPTICAL_SCR_PARAMS: OpticalScrParams = OpticalScrParams {
+    seed: 77,
+    dot_pitch: 5.0,
+    dot_radius: 2.1,
+    dot_softness: 0.47,
+    dot_jitter: 0.10,
+    tilt_strength: 0.50,
+    dome_depth: 0.38,
+    grating_d_nm: 760.0,
+    diffraction_order: 1,
+    blaze_offset: 0.62,
+    tilt_factor: 0.12,
+    angle_spread: 0.58,
+    line_pitch: 14.0,
+    line_base: 0.32,
+    line_gain: 1.68,
+    line_sharpness: 8.6,
+    light_x: 0.42,
+    light_y: -0.34,
+    light_z: 1.00,
+    shininess: 54.0,
+    white_gain: 1.04,
+    darken: 0.40,
+    foil_gain: 4.20,
+    sparkle_gain: 1.34,
+    macro_cell: 145.0,
+    cluster_cell: 18.0,
+    energy_floor: 0.26,
+    macro_low: 0.12,
+    macro_high: 0.86,
+    cluster_low: 0.24,
+    cluster_high: 0.82,
+};
+
+/// SCR foil for the illustration area.
+///
+/// Physical model: only small dots are printed. They live on a dense
+/// orthogonal lattice, and each dot is a tiny domed grating with the same
+/// lower-left to upper-right orientation. The visible diagonal streaks are
+/// bright diagonal groups of dots reflecting together, not continuous stroke
+/// geometry.
+pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity <= f32::EPSILON {
+        return;
+    }
+
+    let params = OPTICAL_SCR_PARAMS;
+    let width = target.width();
+    let height = target.height();
+    let x_start = rect.x.min(width);
+    let y_start = rect.y.min(height);
+    let x_end = rect.x.saturating_add(rect.w).min(width);
+    let y_end = rect.y.saturating_add(rect.h).min(height);
+    if x_start >= x_end || y_start >= y_end {
+        return;
+    }
+
+    let rect_w = rect.w.max(1) as f32;
+    let rect_h = rect.h.max(1) as f32;
+    let norm_w = (rect_w - 1.0).max(1.0);
+    let norm_h = (rect_h - 1.0).max(1.0);
+    let light = vec_norm3(params.light_x, params.light_y, params.light_z);
+    let half_vec = vec_norm3(light.0, light.1, light.2 + 1.0);
+    let pixels = target.pixels_mut();
+
+    // Grating direction: dots are arranged along ↗ rows, so the grating normal
+    // is the perpendicular ↘ axis. Colour is therefore coherent along each
+    // diagonal row.
+    let inv_sqrt2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let grating_nx = inv_sqrt2;
+    let grating_ny = inv_sqrt2;
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let local_x = x.saturating_sub(rect.x);
+            let local_y = y.saturating_sub(rect.y);
+            let xf = local_x as f32;
+            let yf = local_y as f32;
+            let u = xf / norm_w;
+            let v = yf / norm_h;
+
+            let (inside, dome_bright, nx, ny, nz, col, row, line_gate, dot_hash) =
+                scr_dot_facet(local_x, local_y, params);
+
+            let u_centered = u - 0.5;
+            let v_centered = v - 0.5;
+            let n_dot_l = clamp01(nx * light.0 + ny * light.1 + nz * light.2);
+            let n_dot_h = clamp01(nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2);
+            let normal_phase = (nx * grating_nx + ny * grating_ny) * params.tilt_factor;
+            let sin_theta = (u_centered * grating_nx + v_centered * grating_ny)
+                * params.angle_spread
+                + params.blaze_offset
+                + normal_phase;
+            let order = params.diffraction_order.max(1) as f32;
+            let lam = params.grating_d_nm * sin_theta.abs() / order;
+            let diff_rgb = optical_lut_lookup(lam);
+            let warm_near_light =
+                smoothstep(575.0, 635.0, lam) * (1.0 - smoothstep(665.0, 725.0, lam));
+
+            let lam2 = params.grating_d_nm * (sin_theta * 0.56 + 0.14).abs() / order;
+            let diff_rgb2 = optical_lut_lookup(lam2);
+
+            let local_phase = avoid_magenta_phase(
+                (dot_hash * 0.18 + u * 0.11 - v * 0.08).rem_euclid(1.0),
+                line_gate * 0.20,
+            );
+            let local_rgb = spectral_phase_rgb(local_phase, 0.95, 1.0);
+            let raw_combined_r = diff_rgb.0 * 0.72 + diff_rgb2.0 * 0.20 + local_rgb.0 * 0.08;
+            let raw_combined_g = diff_rgb.1 * 0.72 + diff_rgb2.1 * 0.20 + local_rgb.1 * 0.08;
+            let raw_combined_b = diff_rgb.2 * 0.72 + diff_rgb2.2 * 0.20 + local_rgb.2 * 0.08;
+            let red_dominance = smoothstep(
+                0.10,
+                0.54,
+                raw_combined_r - raw_combined_g.max(raw_combined_b),
+            );
+            let orange_lift = red_dominance * warm_near_light * 0.22;
+            let combined_r = raw_combined_r * (1.0 - red_dominance * warm_near_light * 0.18);
+            let combined_g = (raw_combined_g + orange_lift).min(1.0);
+            let combined_b = raw_combined_b * (1.0 - red_dominance * warm_near_light * 0.10);
+
+            let energy = scr_energy(xf, yf, params);
+            let row_hash = optical_cell_hash(col, row, params.seed + 90_017);
+            let row_gate = 0.62 + 0.38 * smoothstep(0.10, 0.92, row_hash);
+            let source_dx = u - 0.78;
+            let source_dy = v - 0.18;
+            let near_source = (1.0
+                - ((source_dx * source_dx + source_dy * source_dy).sqrt() / 0.68))
+                .clamp(0.0, 1.0)
+                .powf(1.85);
+            let warm_energy = smoothstep(0.22, 0.92, warm_near_light * 0.78 + near_source * 0.46);
+            let cool_near_light =
+                smoothstep(420.0, 485.0, lam) * (1.0 - smoothstep(540.0, 610.0, lam));
+            let cool_band_hint = (prism_peak((u * 0.74 + v * 0.92 + 0.18) * 2.4, 3.2) * 0.62
+                + prism_peak((u * 1.18 - v * 0.36 + 0.41) * 2.0, 2.4) * 0.38)
+                .min(1.0);
+            let cool_energy =
+                smoothstep(0.16, 0.82, cool_near_light * 0.72 + cool_band_hint * 0.36);
+            let cold_far = (1.0 - warm_near_light) * (1.0 - near_source * 0.45);
+            let diag_perp = (xf + yf) * inv_sqrt2;
+            let diag_along = (xf - yf) * inv_sqrt2;
+            let sheet_band = (prism_peak(diag_perp / 38.0 + diag_along * 0.008, 4.4) * 0.78
+                + prism_peak(diag_perp / 76.0 + 0.31, 3.1) * 0.22)
+                .min(1.0);
+            let light_energy = 0.28 + 0.72 * n_dot_l;
+            let connected_rows = (params.line_base
+                + params.line_gain * line_gate * (0.72 + warm_energy * 0.58))
+                .min(2.08);
+            let chroma_energy = (warm_energy * 0.72 + cool_energy * 0.56).min(1.0);
+            let combined_energy = energy
+                * inside
+                * dome_bright
+                * light_energy
+                * connected_rows
+                * row_gate
+                * (0.82 + warm_energy * 0.70 + cool_energy * 0.52)
+                * (1.0 - cold_far * 0.08);
+
+            let scale = combined_energy
+                * params.foil_gain
+                * (0.88 + warm_energy * 0.52 + cool_energy * 0.40);
+            let foil_r = 1.0 - (-combined_r * scale).exp();
+            let foil_g = 1.0 - (-combined_g * scale).exp();
+            let foil_b = 1.0 - (-combined_b * scale).exp();
+
+            let mut spec = n_dot_h.powf(params.shininess)
+                * combined_energy
+                * (0.28 + warm_energy * 0.38 + cool_energy * 0.24);
+            let sparkle_hash = ser_pixel_hash(local_x / 2 + 13, local_y / 2 + 29);
+            let sparkle = smoothstep(0.91, 0.999, (sparkle_hash & 0xFFFF) as f32 / 65535.0);
+            spec += sparkle
+                * inside
+                * params.sparkle_gain
+                * (0.26 + line_gate * 0.58 + warm_energy * 0.46 + cool_energy * 0.34)
+                * row_gate;
+
+            // ── Composite onto base image ────────────────────────────────────
+            let idx = (y * width + x) as usize;
+            let dst = pixels[idx];
+            let base_r = dst.red() as f32 / 255.0;
+            let base_g = dst.green() as f32 / 255.0;
+            let base_b = dst.blue() as f32 / 255.0;
+            let sheet_energy = (0.095 + energy * 0.24)
+                * (0.44 + sheet_band * 0.72)
+                * (0.64 + near_source * 0.52 + warm_energy * 0.38 + cool_energy * 0.44)
+                * (1.0 - cold_far * 0.10);
+            let sheet_alpha = (sheet_energy * opacity).min(0.52);
+            let sheet_rgb = lerp_rgb(
+                (diff_rgb.0, diff_rgb.1, diff_rgb.2),
+                (combined_r, combined_g, combined_b),
+                0.38 + chroma_energy * 0.20,
+            );
+            let metal_keep = 1.0 - sheet_alpha * (0.18 + chroma_energy * 0.08);
+            let metal_r = screen_channel_float(base_r * metal_keep, sheet_rgb.0, sheet_alpha);
+            let metal_g = screen_channel_float(base_g * metal_keep, sheet_rgb.1, sheet_alpha);
+            let metal_b = screen_channel_float(base_b * metal_keep, sheet_rgb.2, sheet_alpha);
+
+            let dot_density = (inside * (0.42 + line_gate * 0.70 + chroma_energy * 0.44)).min(1.0);
+            let darken = lerp_f32(0.88, params.darken, dot_density);
+            let dark_r = metal_r * darken;
+            let dark_g = metal_g * darken;
+            let dark_b = metal_b * darken;
+            let result_r =
+                clamp01(1.0 - (1.0 - dark_r) * (1.0 - foil_r) + spec * params.white_gain);
+            let result_g =
+                clamp01(1.0 - (1.0 - dark_g) * (1.0 - foil_g) + spec * params.white_gain);
+            let result_b =
+                clamp01(1.0 - (1.0 - dark_b) * (1.0 - foil_b) + spec * params.white_gain);
+
+            let dot_alpha =
+                opacity * (inside * (0.64 + line_gate * 0.40 + chroma_energy * 0.34)).min(1.0);
+            let out_r = lerp_f32(metal_r, result_r, dot_alpha);
+            let out_g = lerp_f32(metal_g, result_g, dot_alpha);
+            let out_b = lerp_f32(metal_b, result_b, dot_alpha);
+            pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
+                (out_r * 255.0).round() as u8,
+                (out_g * 255.0).round() as u8,
+                (out_b * 255.0).round() as u8,
+                dst.alpha(),
+            )
+            .unwrap_or(dst);
+        }
+    }
+}
+
+/// SCR foil for small masked regions (attribute icons, level/rank stars, link
+/// arrows). It intentionally uses the same dotted optical model as the
+/// illustration area; the renderer applies the asset mask after drawing, so the
+/// only difference is the covered shape.
+pub(crate) fn draw_optical_scr_simple(target: &mut Pixmap, rect: CoverageRect, opacity: f32) {
+    draw_optical_scr(target, rect, opacity);
+}
+
+/// SCR dot facet: a small circular dot in an orthogonal lattice. The function
+/// returns only dot coverage; any diagonal streak must come from lighting
+/// diagonal groups of dots, not from stretched geometry.
+fn scr_dot_facet(
+    local_x: u32,
+    local_y: u32,
+    params: OpticalScrParams,
+) -> (f32, f32, f32, f32, f32, i32, i32, f32, f32) {
+    let xf = local_x as f32;
+    let yf = local_y as f32;
+    let pitch = params.dot_pitch.max(1.0);
+    let base_col = (xf / pitch).floor() as i32;
+    let base_row = (yf / pitch).floor() as i32;
+
+    let mut best_inside = 0.0_f32;
+    let mut best_dx = 0.0_f32;
+    let mut best_dy = 0.0_f32;
+    let mut best_radius = params.dot_radius;
+    let mut best_col = base_col;
+    let mut best_row = base_row;
+    let mut best_hash = 0.0_f32;
+    let mut best_center_x = 0.0_f32;
+    let mut best_center_y = 0.0_f32;
+
+    for row in (base_row - 1)..=(base_row + 1) {
+        for col in (base_col - 1)..=(base_col + 1) {
+            let hash_a = optical_cell_hash(col, row, params.seed + 10_003);
+            let hash_b = optical_cell_hash(col, row, params.seed + 20_011);
+            let hash_c = optical_cell_hash(col, row, params.seed + 30_019);
+            let jitter_x = (hash_a - 0.5) * params.dot_jitter;
+            let jitter_y = (hash_b - 0.5) * params.dot_jitter;
+            let center_x = (col as f32 + 0.5 + jitter_x) * pitch;
+            let center_y = (row as f32 + 0.5 + jitter_y) * pitch;
+            let dx = xf - center_x;
+            let dy = yf - center_y;
+            let radius = params.dot_radius * (0.86 + hash_c * 0.26);
+            let dist = (dx * dx + dy * dy).sqrt();
+            let inside = 1.0 - smoothstep(radius, radius + params.dot_softness, dist);
+            if inside > best_inside {
+                best_inside = inside;
+                best_dx = dx;
+                best_dy = dy;
+                best_radius = radius;
+                best_col = col;
+                best_row = row;
+                best_hash = hash_c;
+                best_center_x = center_x;
+                best_center_y = center_y;
+            }
+        }
+    }
+
+    if best_inside <= 0.0 {
+        return (0.0, 0.0, 0.0, 0.0, 1.0, best_col, best_row, 0.0, best_hash);
+    }
+
+    let r = (best_dx * best_dx + best_dy * best_dy).sqrt() / best_radius.max(1e-3);
+    let dome_bright = 0.62 + 0.38 * (1.0 - r.min(1.0)).powf(0.72);
+
+    let slope_x = best_dx / best_radius.max(1e-3) * params.dome_depth;
+    let slope_y = best_dy / best_radius.max(1e-3) * params.dome_depth;
+    let tilt_x =
+        (optical_cell_hash(best_col, best_row, params.seed + 40_031) - 0.5) * params.tilt_strength;
+    let tilt_y =
+        (optical_cell_hash(best_col, best_row, params.seed + 50_047) - 0.5) * params.tilt_strength;
+    let (nx, ny, nz) = vec_norm3(-(slope_x + tilt_x), -(slope_y + tilt_y), 1.0);
+
+    let row_phase_hash = optical_cell_hash(best_col, best_row, params.seed + 60_059);
+    let inv_sqrt2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let diag_perp = (best_center_x + best_center_y) * inv_sqrt2;
+    let diag_along = (best_center_x - best_center_y) * inv_sqrt2;
+    let line_phase =
+        diag_perp / params.line_pitch.max(1.0) + diag_along * 0.004 + row_phase_hash * 0.055;
+    let primary = prism_peak(line_phase, params.line_sharpness);
+    let secondary = prism_peak(line_phase * 0.53 + 0.37, params.line_sharpness * 0.78);
+    let line_gate = (primary * 0.92 + secondary * 0.36).min(1.0);
+
+    (
+        best_inside,
+        dome_bright,
+        nx,
+        ny,
+        nz,
+        best_col,
+        best_row,
+        line_gate,
+        best_hash,
+    )
+}
+
+/// FBM energy field for SCR (same structure as Ser but different seed).
+fn scr_energy(x: f32, y: f32, params: OpticalScrParams) -> f32 {
+    let macro_noise = optical_fbm(x, y, params.macro_cell, params.seed + 30_001, 5);
+    let macro_energy = smoothstep(params.macro_low, params.macro_high, macro_noise);
+    let cluster_noise = optical_fbm(x, y, params.cluster_cell, params.seed + 40_003, 4);
+    let cluster_energy = smoothstep(params.cluster_low, params.cluster_high, cluster_noise);
+    params.energy_floor.max(macro_energy * cluster_energy)
 }

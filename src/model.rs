@@ -36,6 +36,8 @@ pub enum RareType {
     Pser,
     /// Prismatic Secret Rare (print)
     PserPrint,
+    /// Secret Collector's Rare
+    Scr,
     /// Duel Terminal parallel rare
     Dt,
 }
@@ -66,6 +68,7 @@ impl RareType {
             Self::Gser => "gser",
             Self::Pser => "pser",
             Self::PserPrint => "pser-print",
+            Self::Scr => "scr",
             Self::Dt => "dt",
         }
     }
@@ -73,7 +76,10 @@ impl RareType {
     /// Whether this rare type also shows the attribute-rare overlay
     /// (holographic border around the attribute icon).
     pub fn shows_attribute_rare(self) -> bool {
-        matches!(self, Self::Hr | Self::Ser | Self::Gser | Self::Pser)
+        matches!(
+            self,
+            Self::Hr | Self::Ser | Self::Scr | Self::Gser | Self::Pser
+        )
     }
 }
 

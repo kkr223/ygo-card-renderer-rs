@@ -1,6 +1,9 @@
 //! Diagonal rainbow foil gradient.
 
-use tiny_skia::{BlendMode, Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode, Transform};
+use tiny_skia::{
+    BlendMode, Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point,
+    SpreadMode, Transform,
+};
 
 use super::CoverageRect;
 

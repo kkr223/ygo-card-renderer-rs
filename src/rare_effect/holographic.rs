@@ -2,11 +2,13 @@
 
 use std::sync::OnceLock;
 
-use tiny_skia::{BlendMode, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Transform};
+use tiny_skia::{
+    BlendMode, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Transform,
+};
 
 use crate::pixel_ops::pixel_hash;
 
-use super::{rainbow_foil::draw_rainbow_foil, CoverageRect};
+use super::{CoverageRect, rainbow_foil::draw_rainbow_foil};
 
 /// Noise tile size for the holographic shimmer.
 const NOISE_TILE: u32 = 64;

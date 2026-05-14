@@ -2,7 +2,9 @@
 
 use std::sync::OnceLock;
 
-use tiny_skia::{BlendMode, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Transform};
+use tiny_skia::{
+    BlendMode, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Transform,
+};
 
 use super::CoverageRect;
 

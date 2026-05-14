@@ -568,6 +568,12 @@ fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
         EffectStyle::OpticalSerSimple { opacity } => EffectStyle::OpticalSerSimple {
             opacity: sanitize_opacity(opacity),
         },
+        EffectStyle::OpticalScr { opacity } => EffectStyle::OpticalScr {
+            opacity: sanitize_opacity(opacity),
+        },
+        EffectStyle::OpticalScrSimple { opacity } => EffectStyle::OpticalScrSimple {
+            opacity: sanitize_opacity(opacity),
+        },
         EffectStyle::SecretWeave { opacity } => EffectStyle::SecretWeave {
             opacity: sanitize_opacity(opacity),
         },

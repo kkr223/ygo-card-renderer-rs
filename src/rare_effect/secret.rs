@@ -5,7 +5,7 @@
 
 use tiny_skia::Pixmap;
 
-use super::{math::*, CoverageRect};
+use super::{CoverageRect, math::*};
 
 const SECRET_CELL: u32 = 6;
 
@@ -368,7 +368,8 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 );
                 let band_sat = 0.98 + (0.92 - 0.98) * width_t;
                 let band_val_cap = 1.0 + (0.88 - 1.0) * width_t;
-                let (tex_r, tex_g, tex_b) = crate::pixel_ops::hsv_to_rgb(texture_hue, band_sat, 1.0);
+                let (tex_r, tex_g, tex_b) =
+                    crate::pixel_ops::hsv_to_rgb(texture_hue, band_sat, 1.0);
                 let band_val = (strength * 1.16 * (1.10 - width_t * 0.08))
                     .max(0.36 * (0.22 + line_core.max(core).max(halo) * 0.78))
                     .min(band_val_cap)

@@ -27,12 +27,14 @@ pub(crate) struct CoverageRect {
 pub(crate) use bright_border::draw_bright_border;
 pub(crate) use dot_grid::draw_dot_grid;
 pub(crate) use holographic::draw_holographic;
-pub(crate) use optical::{draw_optical_ser, draw_optical_ser_simple};
+pub(crate) use optical::{
+    draw_optical_scr, draw_optical_scr_simple, draw_optical_ser, draw_optical_ser_simple,
+};
 pub(crate) use rainbow_foil::draw_rainbow_foil;
 pub(crate) use secret::{draw_secret_foil, draw_secret_weave};
 
 // Legacy (not called by active code paths)
-pub use legacy::{draw_rare_effect, RareCoverage};
+pub use legacy::{RareCoverage, draw_rare_effect};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

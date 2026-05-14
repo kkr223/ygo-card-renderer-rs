@@ -424,7 +424,8 @@ fn build_layout_with_red_masks(
             mask_name.clone(),
             json!({"kind":"raster","storage":"buffer","size":{"w":w,"h":h},"buffer": buffer_ptr(payload, &webp_buf)}),
         );
-        arrow["red_mask"] = json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
+        arrow["red_mask"] =
+            json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
     }
     Ok(layout.to_string().into_bytes())
 }

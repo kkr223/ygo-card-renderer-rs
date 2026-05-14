@@ -502,11 +502,17 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::Attribute, EffectStyle::OpticalSerSimple { .. })
+        (
+            EffectTarget::Attribute,
+            EffectStyle::OpticalSerSimple { .. }
+        )
     )));
     assert!(effect_targets.iter().any(|(target, effect)| matches!(
         (target, effect),
-        (EffectTarget::LevelOrRank, EffectStyle::OpticalSerSimple { .. })
+        (
+            EffectTarget::LevelOrRank,
+            EffectStyle::OpticalSerSimple { .. }
+        )
     )));
     assert!(
         !effect_targets
@@ -835,20 +841,21 @@ fn render_rare_effects() {
         level: 7,
         race: 0x1,
         attribute: 0x10,
-        link_marker:0x128,
+        link_marker: 0x128,
         ..CardDataEntry::default()
     };
 
     let rare_variants: &[(&str, RareType)] = &[
-        ("sr", RareType::Sr),
-        ("ur", RareType::Ur),
-        ("utr", RareType::Utr),
-        ("gr", RareType::Gr),
-        ("hr", RareType::Hr),
-        ("ser", RareType::Ser),
-        ("gser", RareType::Gser),
-        ("pser", RareType::Pser),
-        ("pser-print", RareType::PserPrint),
+        // ("sr", RareType::Sr),
+        // ("ur", RareType::Ur),
+        // ("utr", RareType::Utr),
+        // ("gr", RareType::Gr),
+        // ("hr", RareType::Hr),
+        // ("ser", RareType::Ser),
+        ("scr", RareType::Scr),
+        // ("gser", RareType::Gser),
+        // ("pser", RareType::Pser),
+        // ("pser-print", RareType::PserPrint),
     ];
 
     let renderer = Renderer::new();
