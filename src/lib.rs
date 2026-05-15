@@ -3,6 +3,8 @@ mod card_logic;
 mod constants;
 pub mod document;
 mod layout;
+#[cfg(feature = "onnx-mask")]
+pub mod mask_generator;
 pub mod model;
 pub(crate) mod pixel_ops;
 pub mod rare_effect;

@@ -165,6 +165,10 @@ pub struct ImageFrames {
 pub struct MaskFrames {
     pub normal: PositionedAsset,
     pub pendulum: PositionedAsset,
+    #[serde(default)]
+    pub pendulum_art: Option<PositionedAsset>,
+    #[serde(default)]
+    pub pendulum_border: Option<PositionedAsset>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

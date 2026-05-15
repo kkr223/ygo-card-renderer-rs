@@ -3,6 +3,7 @@
 //! No external noise crates are used; all procedural math is inline.
 
 mod bright_border;
+mod diamond_foil;
 mod dot_grid;
 mod holographic;
 mod legacy;
@@ -25,6 +26,7 @@ pub(crate) struct CoverageRect {
 // ── Public API re-exports ─────────────────────────────────────────────────────
 
 pub(crate) use bright_border::draw_bright_border;
+pub(crate) use diamond_foil::draw_diamond_foil;
 pub(crate) use dot_grid::draw_dot_grid;
 pub(crate) use holographic::draw_holographic;
 pub(crate) use optical::{

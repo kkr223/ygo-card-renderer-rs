@@ -9,7 +9,7 @@ use crate::{
         frame_asset_name, image_frame, localized_brackets, localized_spell_trap_name,
         spell_trap_subtype_icon_asset, split_pendulum_description, uses_rank,
     },
-    constants::{BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, PASSWORD_COLOR, TEXT_COLOR_DARK},
+    constants::{BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH, TEXT_COLOR_DARK},
     layout::layout_style,
     model::{
         CardKind, NameColor, OutFrameEffectBox, PositionedRenderImage, RareType, RenderOptions,
@@ -36,7 +36,7 @@ pub struct RenderDocument {
 }
 
 impl RenderDocument {
-    pub const SCHEMA_VERSION: u32 = 3;
+    pub const SCHEMA_VERSION: u32 = 4;
 
     pub fn from_request(request: &RenderRequest, bundle: &AssetBundle) -> Self {
         let language = request.options.language.as_deref();
@@ -253,254 +253,643 @@ impl RenderDocument {
 // ── RenderDocument helpers ─────────────────────────────────────────────────────
 
 fn push_rare_effect_nodes(nodes: &mut Vec<RenderNode>, rare: Option<RareType>) {
-    let Some(rare) = rare else {
-        return;
-    };
+    nodes.extend(rare_effect_nodes(rare));
+}
 
-    let mut push = |id: &str, z: i32, target: EffectTarget, effect: EffectStyle| {
-        nodes.push(RenderNode::new(
-            id,
-            z,
-            RenderOp::VisualEffect { target, effect },
-        ));
+fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
+    let mut nodes = Vec::new();
+    let Some(rare) = rare else {
+        return nodes;
     };
 
     match rare {
-        RareType::Sr => push(
+        RareType::Sr => push_composite_rare_effect(
+            &mut nodes,
             "rare-sr-art-foil",
             30,
-            EffectTarget::Art,
             EffectStyle::RainbowFoil { opacity: 0.46 },
+            vec![tw(EffectTarget::Art, 0.46)],
         ),
         RareType::Ur => {
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-ur-art-foil",
                 30,
-                EffectTarget::Art,
                 EffectStyle::RainbowFoil { opacity: 0.46 },
+                vec![tw(EffectTarget::Art, 0.46)],
             );
-            push(
-                "rare-ur-attribute-foil",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::Holographic { opacity: 0.62 },
-            );
-            push(
-                "rare-ur-level-rank-foil",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::Holographic { opacity: 0.58 },
-            );
-            push(
-                "rare-ur-link-arrows-foil",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ur-icon-foil",
                 91,
-                EffectTarget::LinkArrows,
-                EffectStyle::Holographic { opacity: 0.58 },
+                EffectStyle::Holographic { opacity: 0.62 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.62),
+                    tw(EffectTarget::LevelOrRank, 0.58),
+                    tw(EffectTarget::LinkArrows, 0.58),
+                ],
             );
         }
         RareType::Gr => {
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-gr-art-foil",
                 30,
-                EffectTarget::Art,
                 EffectStyle::RainbowFoil { opacity: 0.46 },
+                vec![tw(EffectTarget::Art, 0.46)],
             );
-            push(
-                "rare-gr-card-border-gold",
-                32,
-                EffectTarget::CardBorder,
-                EffectStyle::GoldWash { opacity: 0.42 },
-            );
-            push(
-                "rare-gr-art-frame-gold",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-gr-border-gold",
                 33,
-                EffectTarget::ArtFrame,
                 EffectStyle::GoldWash { opacity: 0.56 },
+                vec![
+                    tw(EffectTarget::CardBorder, 0.42),
+                    tw(EffectTarget::ArtFrame, 0.56),
+                ],
             );
-            push(
-                "rare-gr-attribute-foil",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::Holographic { opacity: 0.62 },
-            );
-            push(
-                "rare-gr-level-rank-foil",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::Holographic { opacity: 0.58 },
-            );
-            push(
-                "rare-gr-link-arrows-foil",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-gr-icon-foil",
                 91,
-                EffectTarget::LinkArrows,
-                EffectStyle::Holographic { opacity: 0.58 },
+                EffectStyle::Holographic { opacity: 0.62 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.62),
+                    tw(EffectTarget::LevelOrRank, 0.58),
+                    tw(EffectTarget::LinkArrows, 0.58),
+                ],
             );
         }
         RareType::Utr => {
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-utr-frosted-card-base",
                 30,
-                EffectTarget::CardBase,
                 EffectStyle::FrostedFoil { opacity: 0.50 },
+                vec![tw(EffectTarget::CardBase, 0.50)],
             );
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-utr-art-relief",
                 31,
-                EffectTarget::Art,
                 EffectStyle::ReliefEngrave { opacity: 1.00 },
+                vec![tw(EffectTarget::Art, 1.00)],
             );
-            push(
-                "rare-utr-attribute-concentric-engrave",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::ConcentricEngrave { opacity: 0.72 },
-            );
-            push(
-                "rare-utr-level-rank-concentric-engrave",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::ConcentricEngrave { opacity: 0.68 },
-            );
-            push(
-                "rare-utr-link-arrows-concentric-engrave",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-utr-icon-concentric-engrave",
                 91,
-                EffectTarget::LinkArrows,
-                EffectStyle::ConcentricEngrave { opacity: 0.68 },
+                EffectStyle::ConcentricEngrave { opacity: 0.72 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.72),
+                    tw(EffectTarget::LevelOrRank, 0.68),
+                    tw(EffectTarget::LinkArrows, 0.68),
+                ],
             );
         }
-        RareType::Hr => push(
+        RareType::Hr => push_visual_effect(
+            &mut nodes,
             "rare-hr-full-foil",
             95,
             EffectTarget::FullCard,
             EffectStyle::Holographic { opacity: 0.45 },
         ),
         RareType::Ser => {
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-ser-art-optical",
                 30,
-                EffectTarget::Art,
                 EffectStyle::OpticalSer { opacity: 1.00 },
+                vec![tw(EffectTarget::Art, 1.00)],
             );
-            push(
-                "rare-ser-attribute-optical",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-ser-level-rank-optical",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-ser-link-arrows-optical",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ser-icon-optical",
                 91,
-                EffectTarget::LinkArrows,
                 EffectStyle::OpticalSerSimple { opacity: 0.90 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.90),
+                    tw(EffectTarget::LevelOrRank, 0.90),
+                    tw(EffectTarget::LinkArrows, 0.90),
+                ],
             );
         }
         RareType::Gser => {
             // ── Ser crushed foil on art ─────────────────────────────────
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-gser-art-optical",
                 30,
-                EffectTarget::Art,
                 EffectStyle::OpticalSer { opacity: 0.70 },
+                vec![tw(EffectTarget::Art, 0.70)],
             );
             // ── Gold wash on card border + art frame (same as Gr) ───────
-            push(
-                "rare-gser-card-border-gold",
-                32,
-                EffectTarget::CardBorder,
-                EffectStyle::GoldWash { opacity: 0.42 },
-            );
-            push(
-                "rare-gser-art-frame-gold",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-gser-border-gold",
                 33,
-                EffectTarget::ArtFrame,
                 EffectStyle::GoldWash { opacity: 0.56 },
+                vec![
+                    tw(EffectTarget::CardBorder, 0.42),
+                    tw(EffectTarget::ArtFrame, 0.56),
+                ],
             );
             // ── Ser crushed foil on gold borders ────────────────────────
-            push(
-                "rare-gser-card-border-optical",
-                34,
-                EffectTarget::CardBorder,
-                EffectStyle::OpticalSerSimple { opacity: 0.55 },
-            );
-            push(
-                "rare-gser-art-frame-optical",
-                35,
-                EffectTarget::ArtFrame,
-                EffectStyle::OpticalSerSimple { opacity: 0.55 },
-            );
-            push(
-                "rare-gser-effect-box-optical",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-gser-border-optical",
                 36,
-                EffectTarget::EffectBoxBorder,
                 EffectStyle::OpticalSerSimple { opacity: 0.55 },
+                vec![
+                    tw(EffectTarget::CardBorder, 0.55),
+                    tw(EffectTarget::ArtFrame, 0.55),
+                    tw(EffectTarget::EffectBoxBorder, 0.55),
+                ],
             );
             // ── Ser crushed foil on icons (same as Ser) ──────────────────
-            push(
-                "rare-gser-attribute-optical",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-gser-level-rank-optical",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-gser-link-arrows-optical",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-gser-icon-optical",
                 91,
-                EffectTarget::LinkArrows,
                 EffectStyle::OpticalSerSimple { opacity: 0.90 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.90),
+                    tw(EffectTarget::LevelOrRank, 0.90),
+                    tw(EffectTarget::LinkArrows, 0.90),
+                ],
             );
         }
-        RareType::Pser => {
-            push(
-                "rare-pser-full-optical",
-                95,
-                EffectTarget::FullCard,
-                EffectStyle::OpticalSer { opacity: 0.50 },
-            );
-        }
+        RareType::Pser => push_visual_effect(
+            &mut nodes,
+            "rare-pser-full-optical",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::OpticalSer { opacity: 0.50 },
+        ),
         RareType::Scr => {
-            push(
+            push_composite_rare_effect(
+                &mut nodes,
                 "rare-scr-art-optical",
                 30,
-                EffectTarget::Art,
                 EffectStyle::OpticalScr { opacity: 1.00 },
+                vec![tw(EffectTarget::Art, 1.00)],
             );
-            push(
-                "rare-scr-attribute-optical",
-                75,
-                EffectTarget::Attribute,
-                EffectStyle::OpticalScrSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-scr-level-rank-optical",
-                85,
-                EffectTarget::LevelOrRank,
-                EffectStyle::OpticalScrSimple { opacity: 0.90 },
-            );
-            push(
-                "rare-scr-link-arrows-optical",
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-scr-icon-optical",
                 91,
-                EffectTarget::LinkArrows,
                 EffectStyle::OpticalScrSimple { opacity: 0.90 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.90),
+                    tw(EffectTarget::LevelOrRank, 0.90),
+                    tw(EffectTarget::LinkArrows, 0.90),
+                ],
             );
         }
-        RareType::PserPrint => push(
+        RareType::Esr => push_visual_effect(
+            &mut nodes,
+            "rare-esr-full-optical",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::OpticalScr { opacity: 0.50 },
+        ),
+        RareType::Npr => push_visual_effect(
+            &mut nodes,
+            "rare-npr-diamond-foil",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::DiamondFoil { opacity: 0.68 },
+        ),
+        RareType::Upr => {
+            // UR base effects
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ur-art-foil",
+                30,
+                EffectStyle::RainbowFoil { opacity: 0.46 },
+                vec![tw(EffectTarget::Art, 0.46)],
+            );
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ur-icon-foil",
+                91,
+                EffectStyle::Holographic { opacity: 0.62 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.62),
+                    tw(EffectTarget::LevelOrRank, 0.58),
+                    tw(EffectTarget::LinkArrows, 0.58),
+                ],
+            );
+            // Diamond foil overlay on top
+            push_visual_effect(
+                &mut nodes,
+                "rare-upr-diamond-foil",
+                96,
+                EffectTarget::FullCard,
+                EffectStyle::DiamondFoil { opacity: 0.68 },
+            );
+        }
+        RareType::Sepr => {
+            // SER base effects
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ser-art-optical",
+                30,
+                EffectStyle::OpticalSer { opacity: 1.00 },
+                vec![tw(EffectTarget::Art, 1.00)],
+            );
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ser-icon-optical",
+                91,
+                EffectStyle::OpticalSerSimple { opacity: 0.90 },
+                vec![
+                    tw(EffectTarget::Attribute, 0.90),
+                    tw(EffectTarget::LevelOrRank, 0.90),
+                    tw(EffectTarget::LinkArrows, 0.90),
+                ],
+            );
+            // Diamond foil overlay on top
+            push_visual_effect(
+                &mut nodes,
+                "rare-sepr-diamond-foil",
+                96,
+                EffectTarget::FullCard,
+                EffectStyle::DiamondFoil { opacity: 0.68 },
+            );
+        }
+        RareType::PserPrint => push_visual_effect(
+            &mut nodes,
             "rare-pser-print-border",
             30,
             EffectTarget::FullCard,
             EffectStyle::BrightBorder { opacity: 0.72 },
         ),
         RareType::Dt => {}
+    }
+
+    nodes
+}
+
+fn push_visual_effect(
+    nodes: &mut Vec<RenderNode>,
+    id: &str,
+    z: i32,
+    target: EffectTarget,
+    effect: EffectStyle,
+) {
+    nodes.push(RenderNode::new(
+        id,
+        z,
+        RenderOp::VisualEffect { target, effect },
+    ));
+}
+
+fn push_composite_rare_effect(
+    nodes: &mut Vec<RenderNode>,
+    id: &str,
+    z: i32,
+    effect: EffectStyle,
+    targets: Vec<EffectTargetWeight>,
+) {
+    nodes.push(RenderNode::new(
+        id,
+        z,
+        RenderOp::CompositeVisualEffect { effect, targets },
+    ));
+}
+
+fn tw(target: EffectTarget, opacity: f32) -> EffectTargetWeight {
+    EffectTargetWeight { target, opacity }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_composite(
+        node: &RenderNode,
+        id: &str,
+        z: i32,
+        expected_effect: EffectStyle,
+        expected_targets: &[EffectTargetWeight],
+    ) {
+        assert_eq!(node.id, id);
+        assert_eq!(node.z, z);
+        match &node.op {
+            RenderOp::CompositeVisualEffect { effect, targets } => {
+                assert_eq!(*effect, expected_effect);
+                assert_eq!(targets, expected_targets);
+            }
+            _ => panic!("expected composite visual effect"),
+        }
+    }
+
+    fn assert_visual(
+        node: &RenderNode,
+        id: &str,
+        z: i32,
+        target: EffectTarget,
+        expected_effect: EffectStyle,
+    ) {
+        assert_eq!(node.id, id);
+        assert_eq!(node.z, z);
+        match &node.op {
+            RenderOp::VisualEffect {
+                target: actual,
+                effect,
+            } => {
+                assert_eq!(*actual, target);
+                assert_eq!(*effect, expected_effect);
+            }
+            _ => panic!("expected visual effect"),
+        }
+    }
+
+    #[test]
+    fn rare_effect_nodes_lock_contracts() {
+        assert!(rare_effect_nodes(None).is_empty());
+        assert!(rare_effect_nodes(Some(RareType::Dt)).is_empty());
+
+        let nodes = rare_effect_nodes(Some(RareType::Sr));
+        assert_eq!(nodes.len(), 1);
+        assert_composite(
+            &nodes[0],
+            "rare-sr-art-foil",
+            30,
+            EffectStyle::RainbowFoil { opacity: 0.46 },
+            &[tw(EffectTarget::Art, 0.46)],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Ur));
+        assert_eq!(nodes.len(), 2);
+        assert_composite(
+            &nodes[0],
+            "rare-ur-art-foil",
+            30,
+            EffectStyle::RainbowFoil { opacity: 0.46 },
+            &[tw(EffectTarget::Art, 0.46)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-ur-icon-foil",
+            91,
+            EffectStyle::Holographic { opacity: 0.62 },
+            &[
+                tw(EffectTarget::Attribute, 0.62),
+                tw(EffectTarget::LevelOrRank, 0.58),
+                tw(EffectTarget::LinkArrows, 0.58),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Gr));
+        assert_eq!(nodes.len(), 3);
+        assert_composite(
+            &nodes[0],
+            "rare-gr-art-foil",
+            30,
+            EffectStyle::RainbowFoil { opacity: 0.46 },
+            &[tw(EffectTarget::Art, 0.46)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-gr-border-gold",
+            33,
+            EffectStyle::GoldWash { opacity: 0.56 },
+            &[
+                tw(EffectTarget::CardBorder, 0.42),
+                tw(EffectTarget::ArtFrame, 0.56),
+            ],
+        );
+        assert_composite(
+            &nodes[2],
+            "rare-gr-icon-foil",
+            91,
+            EffectStyle::Holographic { opacity: 0.62 },
+            &[
+                tw(EffectTarget::Attribute, 0.62),
+                tw(EffectTarget::LevelOrRank, 0.58),
+                tw(EffectTarget::LinkArrows, 0.58),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Utr));
+        assert_eq!(nodes.len(), 3);
+        assert_composite(
+            &nodes[0],
+            "rare-utr-frosted-card-base",
+            30,
+            EffectStyle::FrostedFoil { opacity: 0.50 },
+            &[tw(EffectTarget::CardBase, 0.50)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-utr-art-relief",
+            31,
+            EffectStyle::ReliefEngrave { opacity: 1.00 },
+            &[tw(EffectTarget::Art, 1.00)],
+        );
+        assert_composite(
+            &nodes[2],
+            "rare-utr-icon-concentric-engrave",
+            91,
+            EffectStyle::ConcentricEngrave { opacity: 0.72 },
+            &[
+                tw(EffectTarget::Attribute, 0.72),
+                tw(EffectTarget::LevelOrRank, 0.68),
+                tw(EffectTarget::LinkArrows, 0.68),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Hr));
+        assert_eq!(nodes.len(), 1);
+        assert_visual(
+            &nodes[0],
+            "rare-hr-full-foil",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::Holographic { opacity: 0.45 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Ser));
+        assert_eq!(nodes.len(), 2);
+        assert_composite(
+            &nodes[0],
+            "rare-ser-art-optical",
+            30,
+            EffectStyle::OpticalSer { opacity: 1.00 },
+            &[tw(EffectTarget::Art, 1.00)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-ser-icon-optical",
+            91,
+            EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            &[
+                tw(EffectTarget::Attribute, 0.90),
+                tw(EffectTarget::LevelOrRank, 0.90),
+                tw(EffectTarget::LinkArrows, 0.90),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Gser));
+        assert_eq!(nodes.len(), 4);
+        assert_composite(
+            &nodes[0],
+            "rare-gser-art-optical",
+            30,
+            EffectStyle::OpticalSer { opacity: 0.70 },
+            &[tw(EffectTarget::Art, 0.70)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-gser-border-gold",
+            33,
+            EffectStyle::GoldWash { opacity: 0.56 },
+            &[
+                tw(EffectTarget::CardBorder, 0.42),
+                tw(EffectTarget::ArtFrame, 0.56),
+            ],
+        );
+        assert_composite(
+            &nodes[2],
+            "rare-gser-border-optical",
+            36,
+            EffectStyle::OpticalSerSimple { opacity: 0.55 },
+            &[
+                tw(EffectTarget::CardBorder, 0.55),
+                tw(EffectTarget::ArtFrame, 0.55),
+                tw(EffectTarget::EffectBoxBorder, 0.55),
+            ],
+        );
+        assert_composite(
+            &nodes[3],
+            "rare-gser-icon-optical",
+            91,
+            EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            &[
+                tw(EffectTarget::Attribute, 0.90),
+                tw(EffectTarget::LevelOrRank, 0.90),
+                tw(EffectTarget::LinkArrows, 0.90),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Pser));
+        assert_eq!(nodes.len(), 1);
+        assert_visual(
+            &nodes[0],
+            "rare-pser-full-optical",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::OpticalSer { opacity: 0.50 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Scr));
+        assert_eq!(nodes.len(), 2);
+        assert_composite(
+            &nodes[0],
+            "rare-scr-art-optical",
+            30,
+            EffectStyle::OpticalScr { opacity: 1.00 },
+            &[tw(EffectTarget::Art, 1.00)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-scr-icon-optical",
+            91,
+            EffectStyle::OpticalScrSimple { opacity: 0.90 },
+            &[
+                tw(EffectTarget::Attribute, 0.90),
+                tw(EffectTarget::LevelOrRank, 0.90),
+                tw(EffectTarget::LinkArrows, 0.90),
+            ],
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Esr));
+        assert_eq!(nodes.len(), 1);
+        assert_visual(
+            &nodes[0],
+            "rare-esr-full-optical",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::OpticalScr { opacity: 0.50 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Npr));
+        assert_eq!(nodes.len(), 1);
+        assert_visual(
+            &nodes[0],
+            "rare-npr-diamond-foil",
+            95,
+            EffectTarget::FullCard,
+            EffectStyle::DiamondFoil { opacity: 0.68 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Upr));
+        assert_eq!(nodes.len(), 3);
+        assert_composite(
+            &nodes[0],
+            "rare-ur-art-foil",
+            30,
+            EffectStyle::RainbowFoil { opacity: 0.46 },
+            &[tw(EffectTarget::Art, 0.46)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-ur-icon-foil",
+            91,
+            EffectStyle::Holographic { opacity: 0.62 },
+            &[
+                tw(EffectTarget::Attribute, 0.62),
+                tw(EffectTarget::LevelOrRank, 0.58),
+                tw(EffectTarget::LinkArrows, 0.58),
+            ],
+        );
+        assert_visual(
+            &nodes[2],
+            "rare-upr-diamond-foil",
+            96,
+            EffectTarget::FullCard,
+            EffectStyle::DiamondFoil { opacity: 0.68 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::Sepr));
+        assert_eq!(nodes.len(), 3);
+        assert_composite(
+            &nodes[0],
+            "rare-ser-art-optical",
+            30,
+            EffectStyle::OpticalSer { opacity: 1.00 },
+            &[tw(EffectTarget::Art, 1.00)],
+        );
+        assert_composite(
+            &nodes[1],
+            "rare-ser-icon-optical",
+            91,
+            EffectStyle::OpticalSerSimple { opacity: 0.90 },
+            &[
+                tw(EffectTarget::Attribute, 0.90),
+                tw(EffectTarget::LevelOrRank, 0.90),
+                tw(EffectTarget::LinkArrows, 0.90),
+            ],
+        );
+        assert_visual(
+            &nodes[2],
+            "rare-sepr-diamond-foil",
+            96,
+            EffectTarget::FullCard,
+            EffectStyle::DiamondFoil { opacity: 0.68 },
+        );
+
+        let nodes = rare_effect_nodes(Some(RareType::PserPrint));
+        assert_eq!(nodes.len(), 1);
+        assert_visual(
+            &nodes[0],
+            "rare-pser-print-border",
+            30,
+            EffectTarget::FullCard,
+            EffectStyle::BrightBorder { opacity: 0.72 },
+        );
     }
 }
 
@@ -1018,10 +1407,27 @@ fn push_stats_nodes(
         let stats_shadow = resolve_optional_fill(&request.options.text_colors.stats_shadow, None);
 
         if card.is_link() {
+            // ATK
+            nodes.push(RenderNode::new(
+                "stats-atk",
+                141,
+                RenderOp::TextLine {
+                    text: display_stat(card.attack),
+                    rect: RenderRect::new(style.stat_atk_x, style.stat_top, 220, style.stat_size),
+                    font_family: style.stat_font_family.clone(),
+                    font_size: style.stat_size,
+                    letter_spacing: style.stat_letter_spacing,
+                    align: TextAlignChoice::Right,
+                    fill: stats_fill.clone(),
+                    shadow: stats_shadow.clone(),
+                    ruby: None,
+                    width_compress: false,
+                },
+            ));
             // Link value
             nodes.push(RenderNode::new(
                 "stats-link",
-                141,
+                142,
                 RenderOp::TextLine {
                     text: card.level.to_string(),
                     rect: RenderRect::new(style.stat_link_x, style.link_top, 120, style.link_size),
@@ -1149,7 +1555,7 @@ fn push_password_node(
     let fill = resolve_text_fill(
         &request.options.text_colors.password,
         None,
-        solid_color_text_paint(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2),
+        footer_text_paint(&request.card),
     );
     let shadow = resolve_optional_fill(&request.options.text_colors.password_shadow, None);
 
@@ -1185,7 +1591,7 @@ fn push_scale_line_node(
     let scale_fill = resolve_text_fill(
         &request.options.text_colors.copyright,
         None,
-        solid_color_text_paint(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2),
+        footer_text_paint(&request.card),
     );
     let scale_shadow = resolve_optional_fill(&request.options.text_colors.copyright_shadow, None);
     let scale_text = build_scale_line(&request.card);
@@ -1321,7 +1727,7 @@ fn push_copyright_node(
     let fill = resolve_text_fill(
         &options.text_colors.copyright,
         None,
-        solid_color_text_paint(PASSWORD_COLOR.0, PASSWORD_COLOR.1, PASSWORD_COLOR.2),
+        footer_text_paint(card),
     );
     let shadow = resolve_optional_fill(&options.text_colors.copyright_shadow, None);
 
@@ -1490,6 +1896,18 @@ fn solid_color_text_paint(r: u8, g: u8, b: u8) -> TextPaint {
     TextPaint::solid(format!("#{r:02x}{g:02x}{b:02x}"))
 }
 
+fn footer_text_paint(card: &YgoCardMeta) -> TextPaint {
+    if footer_uses_light_text(card) {
+        solid_color_text_paint(255, 255, 255)
+    } else {
+        solid_color_text_paint(0, 0, 0)
+    }
+}
+
+fn footer_uses_light_text(card: &YgoCardMeta) -> bool {
+    card.is_monster() && (card.type_ & ygopro_cdb_encode_rs::TYPE_XYZ) != 0
+}
+
 fn description_ruby_style(style: &crate::layout::LayoutStyle) -> Option<RubyStyle> {
     if style.description_rt_font_size > 0 {
         Some(RubyStyle {
@@ -1540,7 +1958,7 @@ fn copyright_asset_name(card: &YgoCardMeta, value: &str) -> Option<String> {
         return None;
     }
     let value = value.strip_suffix(".svg").unwrap_or(value);
-    let color = if card.is_monster() && (card.type_ & ygopro_cdb_encode_rs::TYPE_XYZ) != 0 {
+    let color = if footer_uses_light_text(card) {
         "white"
     } else {
         "black"
@@ -1670,6 +2088,17 @@ pub enum RenderOp {
         target: EffectTarget,
         effect: EffectStyle,
     },
+    CompositeVisualEffect {
+        effect: EffectStyle,
+        targets: Vec<EffectTargetWeight>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectTargetWeight {
+    pub target: EffectTarget,
+    pub opacity: f32,
 }
 
 // ── RubyStyle ────────────────────────────────────────────────────────────────
@@ -1763,6 +2192,7 @@ pub enum EffectStyle {
     FrostedFoil { opacity: f32 },
     ConcentricEngrave { opacity: f32 },
     ReliefEngrave { opacity: f32 },
+    DiamondFoil { opacity: f32 },
 }
 
 // ── Internal ─────────────────────────────────────────────────────────────────

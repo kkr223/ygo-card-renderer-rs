@@ -61,10 +61,10 @@ pub fn estimate_text_width_scaled(
 // Single-line fitting
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fit `text` into `max_width` by reducing font size if necessary.
+/// Fit `text` into `max_width` by truncating characters that exceed the width.
 ///
-/// The font size is scaled by the ratio `max_width / estimated_width` and
-/// clamped to `[min_font_size, base_font_size]`.
+/// Font size stays at `base_font_size`. If the text does not fit, it is
+/// truncated — no ellipsis is added.
 pub fn fit_single_line(
     text: &str,
     language: Option<&str>,
@@ -72,7 +72,7 @@ pub fn fit_single_line(
     family_name: &str,
     max_width: u32,
     letter_spacing: f32,
-    min_font_size: u32,
+    _min_font_size: u32,
 ) -> SingleLineLayout {
     if text.trim().is_empty() {
         return SingleLineLayout {
@@ -91,12 +91,23 @@ pub fn fit_single_line(
         base_font_size as f32,
         letter_spacing,
     );
-    let ratio = (max_width as f32 / estimated).min(1.0);
-    let scaled_font = ((base_font_size as f32) * ratio).floor() as u32;
+
+    let max_width_f = max_width as f32;
+    let fitted_text = if estimated > max_width_f {
+        truncate_text_to_width(
+            text,
+            family_name,
+            base_font_size as f32,
+            letter_spacing,
+            max_width_f,
+        )
+    } else {
+        text.to_string()
+    };
 
     SingleLineLayout {
-        text: text.to_string(),
-        font_size: scaled_font.max(min_font_size).min(base_font_size),
+        text: fitted_text,
+        font_size: base_font_size,
         max_width,
         letter_spacing,
         scale_x: 1.0,

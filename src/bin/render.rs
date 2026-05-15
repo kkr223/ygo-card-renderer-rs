@@ -31,6 +31,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(feature = "onnx-mask")]
+use ygo_card_renderer_rs::mask_generator::{MaskGenerationOptions, MaskGenerator};
 use ygo_card_renderer_rs::{
     CardKind, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle_from_file,
@@ -38,9 +40,14 @@ use ygo_card_renderer_rs::{
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
 
+#[cfg(feature = "onnx-mask")]
+type SharedMaskGenerator = Arc<Mutex<MaskGenerator>>;
+#[cfg(not(feature = "onnx-mask"))]
+type SharedMaskGenerator = ();
+
 // ── CLI argument parsing (no external crate needed) ──────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Args {
     bundle: PathBuf,
     cdb: PathBuf,
@@ -54,6 +61,13 @@ struct Args {
     lang: String,
     scale: f32,
     effect_mask: Option<PathBuf>,
+    effect_mask_dir: Option<PathBuf>,
+    auto_mask_model: Option<PathBuf>,
+    auto_mask_metadata: Option<PathBuf>,
+    mask_cache_dir: Option<PathBuf>,
+    mask_threshold: Option<f32>,
+    mask_dilate: Option<u32>,
+    overwrite_mask: bool,
     jobs: usize,
 }
 
@@ -68,6 +82,13 @@ fn parse_args() -> Result<Args, String> {
     let mut lang = "sc".to_string();
     let mut scale = 1.0f32;
     let mut effect_mask: Option<PathBuf> = None;
+    let mut effect_mask_dir: Option<PathBuf> = None;
+    let mut auto_mask_model: Option<PathBuf> = None;
+    let mut auto_mask_metadata: Option<PathBuf> = None;
+    let mut mask_cache_dir: Option<PathBuf> = None;
+    let mut mask_threshold: Option<f32> = None;
+    let mut mask_dilate: Option<u32> = None;
+    let mut overwrite_mask = false;
     let mut jobs: usize = num_cpus();
 
     let mut i = 0usize;
@@ -116,6 +137,39 @@ fn parse_args() -> Result<Args, String> {
                 i += 1;
                 effect_mask = Some(PathBuf::from(next(&raw, i, "--effect-mask")?));
             }
+            "--effect-mask-dir" => {
+                i += 1;
+                effect_mask_dir = Some(PathBuf::from(next(&raw, i, "--effect-mask-dir")?));
+            }
+            "--auto-mask-model" => {
+                i += 1;
+                auto_mask_model = Some(PathBuf::from(next(&raw, i, "--auto-mask-model")?));
+            }
+            "--auto-mask-metadata" => {
+                i += 1;
+                auto_mask_metadata = Some(PathBuf::from(next(&raw, i, "--auto-mask-metadata")?));
+            }
+            "--mask-cache-dir" => {
+                i += 1;
+                mask_cache_dir = Some(PathBuf::from(next(&raw, i, "--mask-cache-dir")?));
+            }
+            "--mask-threshold" => {
+                i += 1;
+                let v = next(&raw, i, "--mask-threshold")?;
+                mask_threshold = Some(
+                    v.parse::<f32>()
+                        .map_err(|e| format!("--mask-threshold: invalid float: {e}"))?,
+                );
+            }
+            "--mask-dilate" => {
+                i += 1;
+                let v = next(&raw, i, "--mask-dilate")?;
+                mask_dilate = Some(
+                    v.parse::<u32>()
+                        .map_err(|e| format!("--mask-dilate: invalid integer: {e}"))?,
+                );
+            }
+            "--overwrite-mask" => overwrite_mask = true,
             "--jobs" => {
                 i += 1;
                 let v = next(&raw, i, "--jobs")?;
@@ -145,6 +199,13 @@ fn parse_args() -> Result<Args, String> {
         lang,
         scale,
         effect_mask,
+        effect_mask_dir,
+        auto_mask_model,
+        auto_mask_metadata,
+        mask_cache_dir,
+        mask_threshold,
+        mask_dilate,
+        overwrite_mask,
         jobs,
     })
 }
@@ -181,6 +242,20 @@ OPTIONS
   --scale  <F>      output scale factor    [default: 1.0]
   --effect-mask <PATH>
                    black protects pixels from visual/rare effects; white allows them
+  --effect-mask-dir <DIR>
+                   lookup per-card masks as <DIR>/<code>.png
+  --auto-mask-model <ONNX>
+                   generate missing masks with TinyMaskNet; requires onnx-mask feature
+  --auto-mask-metadata <JSON>
+                   optional metadata JSON; defaults to model path with .json extension
+  --mask-cache-dir <DIR>
+                   where auto-generated masks are written; defaults to --effect-mask-dir
+  --mask-threshold <F>
+                   override model subject threshold
+  --mask-dilate <PX>
+                   override subject dilation in model pixels
+  --overwrite-mask
+                   regenerate masks even when the cache file already exists
   --jobs   <N>      parallel workers       [default: CPU count]
   --help            show this message
 "#
@@ -197,6 +272,122 @@ fn find_art(art_dir: &Path, code: u32) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn find_effect_mask(mask_dir: &Path, code: u32) -> Option<PathBuf> {
+    let path = mask_dir.join(format!("{code}.png"));
+    path.exists().then_some(path)
+}
+
+fn auto_mask_output_dir(args: &Args) -> Option<&Path> {
+    args.mask_cache_dir
+        .as_deref()
+        .or(args.effect_mask_dir.as_deref())
+}
+
+fn auto_mask_is_enabled(args: &Args) -> bool {
+    args.auto_mask_model.is_some() && args.effect_mask.is_none()
+}
+
+fn create_mask_generator(args: &Args) -> Result<Option<SharedMaskGenerator>, String> {
+    #[cfg(not(feature = "onnx-mask"))]
+    let _ = (
+        &args.auto_mask_metadata,
+        args.mask_threshold,
+        args.mask_dilate,
+        args.overwrite_mask,
+    );
+    if !auto_mask_is_enabled(args) {
+        return Ok(None);
+    }
+    if auto_mask_output_dir(args).is_none() {
+        return Err(
+            "--auto-mask-model requires --effect-mask-dir or --mask-cache-dir for generated masks"
+                .to_string(),
+        );
+    }
+    create_mask_generator_impl(args).map(Some)
+}
+
+#[cfg(feature = "onnx-mask")]
+fn create_mask_generator_impl(args: &Args) -> Result<SharedMaskGenerator, String> {
+    let model = args
+        .auto_mask_model
+        .as_deref()
+        .ok_or("--auto-mask-model is required")?;
+    let generator = MaskGenerator::from_model_path(model, args.auto_mask_metadata.as_deref())
+        .map_err(|e| format!("load auto mask model {:?}: {e}", model))?;
+    Ok(Arc::new(Mutex::new(generator)))
+}
+
+#[cfg(not(feature = "onnx-mask"))]
+fn create_mask_generator_impl(_args: &Args) -> Result<SharedMaskGenerator, String> {
+    Err("--auto-mask-model requires rebuilding with --features onnx-mask".to_string())
+}
+
+fn resolve_effect_mask_for_card(
+    card_code: u32,
+    art_image: Option<&Path>,
+    args: &Args,
+    auto_mask_generator: Option<&SharedMaskGenerator>,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(mask) = &args.effect_mask {
+        return Ok(Some(mask.clone()));
+    }
+
+    if let Some(mask_dir) = &args.effect_mask_dir {
+        if let Some(mask) = find_effect_mask(mask_dir, card_code) {
+            return Ok(Some(mask));
+        }
+    }
+
+    if !auto_mask_is_enabled(args) {
+        return Ok(None);
+    }
+
+    generate_auto_mask_for_card(card_code, art_image, args, auto_mask_generator)
+}
+
+#[cfg(feature = "onnx-mask")]
+fn generate_auto_mask_for_card(
+    card_code: u32,
+    art_image: Option<&Path>,
+    args: &Args,
+    auto_mask_generator: Option<&SharedMaskGenerator>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(art_image) = art_image else {
+        eprintln!("warning: auto mask skipped for {card_code}: no art image found");
+        return Ok(None);
+    };
+    let mask_dir = auto_mask_output_dir(args).ok_or(
+        "--auto-mask-model requires --effect-mask-dir or --mask-cache-dir for generated masks",
+    )?;
+    let out_path = mask_dir.join(format!("{card_code}.png"));
+    if out_path.exists() && !args.overwrite_mask {
+        return Ok(Some(out_path));
+    }
+    let generator = auto_mask_generator.ok_or("auto mask generator is not initialized")?;
+    let options = MaskGenerationOptions {
+        threshold: args.mask_threshold,
+        subject_dilation: args.mask_dilate,
+    };
+    let mut generator = generator
+        .lock()
+        .map_err(|_| "auto mask generator mutex poisoned".to_string())?;
+    generator
+        .generate_mask_file(art_image, &out_path, &options)
+        .map_err(|e| format!("generate auto mask for {card_code}: {e}"))?;
+    Ok(Some(out_path))
+}
+
+#[cfg(not(feature = "onnx-mask"))]
+fn generate_auto_mask_for_card(
+    _card_code: u32,
+    _art_image: Option<&Path>,
+    _args: &Args,
+    _auto_mask_generator: Option<&SharedMaskGenerator>,
+) -> Result<Option<PathBuf>, String> {
+    Err("--auto-mask-model requires rebuilding with --features onnx-mask".to_string())
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -267,6 +458,14 @@ fn main() {
         .unwrap_or_else(|e| fatal(&format!("cannot read cards from cdb: {e}")));
 
     let renderer = Renderer::new();
+    let auto_mask_generator = create_mask_generator(&args).unwrap_or_else(|e| fatal(&e));
+    if auto_mask_is_enabled(&args) {
+        if let Some(mask_dir) = auto_mask_output_dir(&args) {
+            fs::create_dir_all(mask_dir).unwrap_or_else(|e| {
+                fatal(&format!("cannot create mask cache dir {:?}: {e}", mask_dir))
+            });
+        }
+    }
 
     if let Some(code) = args.id {
         // ── Single mode ──────────────────────────────────────────────────────
@@ -277,16 +476,25 @@ fn main() {
 
         let out_path = args
             .out
+            .clone()
             .unwrap_or_else(|| PathBuf::from(format!("{code}.png")));
 
         let card: YgoCardMeta = entry.into();
+        let art_image = find_art(&args.art_dir, code);
+        let effect_mask = resolve_effect_mask_for_card(
+            code,
+            art_image.as_deref(),
+            &args,
+            auto_mask_generator.as_ref(),
+        )
+        .unwrap_or_else(|e| fatal(&e));
         render_one(
             &renderer,
             &card,
             &args.lang,
             args.scale,
             &args.art_dir,
-            args.effect_mask.as_deref(),
+            effect_mask.as_deref(),
             &out_path,
         )
         .unwrap_or_else(|e| fatal(&e));
@@ -296,6 +504,7 @@ fn main() {
         // ── Batch mode ───────────────────────────────────────────────────────
         let out_dir = args
             .out_dir
+            .clone()
             .unwrap_or_else(|| fatal("either --out-dir (batch) or --id + --out (single) required"));
 
         fs::create_dir_all(&out_dir)
@@ -321,8 +530,8 @@ fn main() {
         );
         let lang = Arc::new(args.lang.clone());
         let art_dir = Arc::new(args.art_dir.clone());
-        let effect_mask = Arc::new(args.effect_mask.clone());
         let out_dir = Arc::new(out_dir.clone());
+        let shared_args = Arc::new(args.clone());
 
         let chunk_size = (total + args.jobs - 1) / args.jobs;
 
@@ -333,8 +542,9 @@ fn main() {
                 let done = Arc::clone(&done);
                 let lang = Arc::clone(&lang);
                 let art_dir = Arc::clone(&art_dir);
-                let effect_mask = Arc::clone(&effect_mask);
                 let out_dir = Arc::clone(&out_dir);
+                let args = Arc::clone(&shared_args);
+                let auto_mask_generator = auto_mask_generator.clone();
                 // SAFETY: chunk lives for 'scope which is shorter than cards
                 let chunk: &[YgoCardMeta] = chunk;
 
@@ -342,13 +552,30 @@ fn main() {
                     for card in chunk {
                         let code = card.entry.code;
                         let out_path = out_dir.join(format!("{code}.png"));
+                        let art_image = find_art(&art_dir, code);
+                        let effect_mask = match resolve_effect_mask_for_card(
+                            code,
+                            art_image.as_deref(),
+                            &args,
+                            auto_mask_generator.as_ref(),
+                        ) {
+                            Ok(mask) => mask,
+                            Err(e) => {
+                                errors.lock().unwrap().push(e);
+                                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                if n % 100 == 0 || n == total {
+                                    eprintln!("  {n}/{total}");
+                                }
+                                continue;
+                            }
+                        };
                         if let Err(e) = render_one(
                             renderer,
                             card,
                             &lang,
                             args.scale,
                             &art_dir,
-                            effect_mask.as_ref().as_deref(),
+                            effect_mask.as_deref(),
                             &out_path,
                         ) {
                             errors.lock().unwrap().push(e);

@@ -37,7 +37,7 @@ pub(crate) fn frame_asset_name(card: &CardDataEntry) -> &'static str {
             "card-fusion-pendulum.webp"
         } else if (card.type_ & TYPE_RITUAL) != 0 {
             "card-ritual-pendulum.webp"
-        } else if (card.type_ & 0x20) != 0 {
+        } else if (card.type_ & TYPE_EFFECT) != 0 {
             "card-effect-pendulum.webp"
         } else {
             "card-normal-pendulum.webp"
@@ -52,7 +52,7 @@ pub(crate) fn frame_asset_name(card: &CardDataEntry) -> &'static str {
         "card-fusion.webp"
     } else if (card.type_ & TYPE_RITUAL) != 0 {
         "card-ritual.webp"
-    } else if (card.type_ & 0x20) != 0 {
+    } else if (card.type_ & TYPE_EFFECT) != 0 {
         "card-effect.webp"
     } else {
         "card-normal.webp"

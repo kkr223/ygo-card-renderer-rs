@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use tiny_skia::Pixmap;
+use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout},
     card_logic::{attribute_asset_name, image_frame, uses_rank},
     constants::{CARD_HEIGHT, CARD_WIDTH},
-    document::{EffectStyle, EffectTarget, RenderDocument},
+    document::{EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument},
     model::{OutFrameEffectBox, RenderError, YgoCardMeta},
     rare_effect::CoverageRect,
 };
@@ -60,6 +60,12 @@ pub(super) fn load_effect_protection_mask(
     };
     let art_rect = art_coverage_rect(&document.card, base);
     let full_card_sized = pixmap.width() == CARD_WIDTH && pixmap.height() == CARD_HEIGHT;
+    let should_fit_art = !full_card_sized && mask.x.is_none() && mask.y.is_none();
+    let pixmap = if should_fit_art {
+        scale_effect_mask_to_art(pixmap, art_rect)?
+    } else {
+        pixmap
+    };
     let default_x = if full_card_sized {
         0
     } else {
@@ -77,6 +83,33 @@ pub(super) fn load_effect_protection_mask(
     }))
 }
 
+fn scale_effect_mask_to_art(pixmap: Pixmap, art_rect: CoverageRect) -> Result<Pixmap, RenderError> {
+    if pixmap.width() == art_rect.w && pixmap.height() == art_rect.h {
+        return Ok(pixmap);
+    }
+
+    let target_w = art_rect.w.max(1);
+    let target_h = art_rect.h.max(1);
+    let mut target = Pixmap::new(target_w, target_h).ok_or_else(|| {
+        RenderError::Backend(format!(
+            "Failed to allocate scaled effect mask {target_w}x{target_h}"
+        ))
+    })?;
+
+    let scale_x = target_w as f32 / pixmap.width() as f32;
+    let scale_y = target_h as f32 / pixmap.height() as f32;
+    target.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &PixmapPaint::default(),
+        Transform::from_scale(scale_x, scale_y),
+        None,
+    );
+
+    Ok(target)
+}
+
 pub(super) fn effect_target_areas(
     bundle: &AssetBundle,
     document: &RenderDocument,
@@ -88,12 +121,18 @@ pub(super) fn effect_target_areas(
 ) -> Vec<EffectArea> {
     match target {
         EffectTarget::FullCard => vec![EffectArea::Rect(full_rect)],
-        EffectTarget::Art => vec![EffectArea::Rect(art_rect)],
+        EffectTarget::Art => art_effect_areas(bundle, &document.card, base, art_rect),
         EffectTarget::CardBase => card_base_areas_excluding_art(full_rect, art_rect)
             .into_iter()
             .map(EffectArea::Rect)
             .collect(),
+        EffectTarget::ArtFrame if document.card.is_pendulum() => {
+            pendulum_border_effect_areas(bundle, base)
+        }
         EffectTarget::ArtFrame => art_frame_effect_areas(bundle, &document.card, base, art_rect),
+        EffectTarget::CardBorder if document.card.is_pendulum() => {
+            pendulum_border_effect_areas(bundle, base)
+        }
         EffectTarget::CardBorder => card_border_areas()
             .into_iter()
             .map(EffectArea::Rect)
@@ -103,8 +142,128 @@ pub(super) fn effect_target_areas(
             .collect(),
         EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, &document.card, base),
         EffectTarget::LinkArrows => link_arrows_effect_areas(bundle, &document.card, base),
+        EffectTarget::EffectBoxBorder if document.card.is_pendulum() => {
+            pendulum_border_effect_areas(bundle, base)
+        }
         EffectTarget::EffectBoxBorder => effect_box_border_areas(bundle, &document.card, base),
     }
+}
+
+pub(super) fn build_composite_mask(
+    bundle: &AssetBundle,
+    document: &RenderDocument,
+    base: &BaseLayout,
+    language: Option<&str>,
+    full_rect: CoverageRect,
+    art_rect: CoverageRect,
+    effect_opacity: f32,
+    targets: &[EffectTargetWeight],
+) -> Option<Pixmap> {
+    if targets.is_empty() || effect_opacity <= 0.0 || !effect_opacity.is_finite() {
+        return None;
+    }
+
+    let mut mask = Pixmap::new(CARD_WIDTH, CARD_HEIGHT)?;
+    let base_opacity = effect_opacity.clamp(0.0, 1.0);
+    let mut painted = false;
+    for target_weight in targets {
+        if target_weight.opacity <= 0.0 || !target_weight.opacity.is_finite() {
+            continue;
+        }
+        let alpha_scale = (target_weight.opacity.clamp(0.0, 1.0) / base_opacity).clamp(0.0, 1.0);
+        let areas = effect_target_areas(
+            bundle,
+            document,
+            base,
+            language,
+            target_weight.target,
+            full_rect,
+            art_rect,
+        );
+        for area in areas {
+            painted |= paint_effect_area_into_mask(&mut mask, area, alpha_scale);
+        }
+    }
+
+    painted.then_some(mask)
+}
+
+fn paint_effect_area_into_mask(mask: &mut Pixmap, area: EffectArea, alpha_scale: f32) -> bool {
+    match area {
+        EffectArea::Rect(rect) => paint_rect_into_mask(mask, rect, alpha_scale),
+        EffectArea::MaskedRect {
+            rect,
+            mask: area_mask,
+        } => paint_masked_rect_into_mask(mask, rect, area_mask.as_ref(), alpha_scale),
+    }
+}
+
+fn paint_rect_into_mask(mask: &mut Pixmap, rect: CoverageRect, alpha_scale: f32) -> bool {
+    let x_start = rect.x.min(CARD_WIDTH);
+    let y_start = rect.y.min(CARD_HEIGHT);
+    let x_end = rect.x.saturating_add(rect.w).min(CARD_WIDTH);
+    let y_end = rect.y.saturating_add(rect.h).min(CARD_HEIGHT);
+    let alpha = scaled_alpha(255, alpha_scale);
+    if alpha == 0 {
+        return false;
+    }
+
+    let mut painted = false;
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            painted |= write_mask_alpha(mask, x, y, alpha);
+        }
+    }
+    painted
+}
+
+fn paint_masked_rect_into_mask(
+    composite_mask: &mut Pixmap,
+    rect: CoverageRect,
+    area_mask: &Pixmap,
+    alpha_scale: f32,
+) -> bool {
+    let local_w = rect.w.min(area_mask.width());
+    let local_h = rect.h.min(area_mask.height());
+    if local_w == 0 || local_h == 0 {
+        return false;
+    }
+
+    let mut painted = false;
+    let area_pixels = area_mask.pixels();
+    for local_y in 0..local_h {
+        let y = rect.y.saturating_add(local_y);
+        if y >= CARD_HEIGHT {
+            continue;
+        }
+        for local_x in 0..local_w {
+            let x = rect.x.saturating_add(local_x);
+            if x >= CARD_WIDTH {
+                continue;
+            }
+            let area_idx = (local_y * area_mask.width() + local_x) as usize;
+            let alpha = scaled_alpha(area_pixels[area_idx].alpha(), alpha_scale);
+            if alpha > 0 {
+                painted |= write_mask_alpha(composite_mask, x, y, alpha);
+            }
+        }
+    }
+    painted
+}
+
+fn scaled_alpha(alpha: u8, scale: f32) -> u8 {
+    ((alpha as f32 * scale.clamp(0.0, 1.0)).round()).clamp(0.0, 255.0) as u8
+}
+
+fn write_mask_alpha(mask: &mut Pixmap, x: u32, y: u32, alpha: u8) -> bool {
+    let idx = (y * mask.width() + x) as usize;
+    let pixels = mask.pixels_mut();
+    if alpha <= pixels[idx].alpha() {
+        return false;
+    }
+    pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(alpha, alpha, alpha, alpha)
+        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+    true
 }
 
 fn card_base_areas_excluding_art(
@@ -161,6 +320,129 @@ fn card_border_areas() -> Vec<CoverageRect> {
     frame_ring_areas(outer, 54, 0, 0)
 }
 
+fn pendulum_border_effect_areas(bundle: &AssetBundle, base: &BaseLayout) -> Vec<EffectArea> {
+    if let Some(border) = &base.mask.pendulum_border {
+        if let Some(mask) = decode_bundle_image(bundle, &border.asset).map(Arc::new) {
+            return vec![EffectArea::MaskedRect {
+                rect: CoverageRect {
+                    x: border.x,
+                    y: border.y,
+                    w: mask.width(),
+                    h: mask.height(),
+                },
+                mask,
+            }];
+        }
+    }
+
+    // Back-compat for bundles built before `base.mask.pendulum_border` existed.
+    const FALLBACK_ASSET: &str = "rare-pser-print-pendulum.webp";
+    decode_bundle_image(bundle, FALLBACK_ASSET)
+        .map(Arc::new)
+        .map(|mask| {
+            vec![EffectArea::MaskedRect {
+                rect: CoverageRect {
+                    x: 0,
+                    y: 0,
+                    w: mask.width(),
+                    h: mask.height(),
+                },
+                mask,
+            }]
+        })
+        .unwrap_or_default()
+}
+
+fn art_effect_areas(
+    bundle: &AssetBundle,
+    card: &YgoCardMeta,
+    base: &BaseLayout,
+    art_rect: CoverageRect,
+) -> Vec<EffectArea> {
+    if !card.is_pendulum() {
+        return vec![EffectArea::Rect(art_rect)];
+    }
+
+    if let Some(art_mask) = &base.mask.pendulum_art {
+        if let Some(mask) = decode_bundle_image(bundle, &art_mask.asset).map(Arc::new) {
+            return vec![EffectArea::MaskedRect {
+                rect: CoverageRect {
+                    x: art_mask.x,
+                    y: art_mask.y,
+                    w: mask.width(),
+                    h: mask.height(),
+                },
+                mask,
+            }];
+        }
+    }
+
+    let frame_mask = &base.mask.pendulum;
+    let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) else {
+        return vec![EffectArea::Rect(art_rect)];
+    };
+
+    let mask_rect = CoverageRect {
+        x: frame_mask.x,
+        y: frame_mask.y,
+        w: mask.width(),
+        h: mask.height(),
+    };
+    let Some((rect, mask)) = visible_pendulum_art_mask(art_rect, mask_rect, &mask) else {
+        return Vec::new();
+    };
+
+    vec![EffectArea::MaskedRect {
+        rect,
+        mask: Arc::new(mask),
+    }]
+}
+
+fn visible_pendulum_art_mask(
+    art_rect: CoverageRect,
+    frame_mask_rect: CoverageRect,
+    frame_mask: &Pixmap,
+) -> Option<(CoverageRect, Pixmap)> {
+    let x0 = art_rect.x.max(frame_mask_rect.x);
+    let y0 = art_rect.y.max(frame_mask_rect.y);
+    let x1 = art_rect
+        .x
+        .saturating_add(art_rect.w)
+        .min(frame_mask_rect.x.saturating_add(frame_mask_rect.w));
+    let y1 = art_rect
+        .y
+        .saturating_add(art_rect.h)
+        .min(frame_mask_rect.y.saturating_add(frame_mask_rect.h));
+    if x0 >= x1 || y0 >= y1 {
+        return None;
+    }
+
+    let w = x1 - x0;
+    let h = y1 - y0;
+    let mut mask = Pixmap::new(w, h)?;
+    let src_pixels = frame_mask.pixels();
+    let dst_pixels = mask.pixels_mut();
+
+    for local_y in 0..h {
+        let src_y = y0 + local_y - frame_mask_rect.y;
+        for local_x in 0..w {
+            let src_x = x0 + local_x - frame_mask_rect.x;
+            let src_idx = (src_y * frame_mask.width() + src_x) as usize;
+            let dst_idx = (local_y * w + local_x) as usize;
+            let frame_alpha = src_pixels[src_idx].alpha();
+            // Only the transparent hole of card-mask-pendulum is real art.
+            // Semi-transparent pendulum scale/effect panels are visual frame
+            // pixels, so they must not receive Art-target rare effects.
+            let allow = if frame_alpha <= 8 { 255 } else { 0 };
+            dst_pixels[dst_idx] =
+                tiny_skia::PremultipliedColorU8::from_rgba(allow, allow, allow, allow)
+                    .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+        }
+    }
+
+    Some((CoverageRect { x: x0, y: y0, w, h }, mask))
+}
+
 pub(super) fn art_frame_effect_areas(
     bundle: &AssetBundle,
     card: &YgoCardMeta,
@@ -168,6 +450,8 @@ pub(super) fn art_frame_effect_areas(
     art_rect: CoverageRect,
 ) -> Vec<EffectArea> {
     let frame_mask = if card.is_pendulum() {
+        // Pendulum cards use a single authored frame mask that combines the
+        // illustration frame, pendulum effect box, and lower text box border.
         &base.mask.pendulum
     } else {
         &base.mask.normal
@@ -466,9 +750,9 @@ pub(super) fn draw_visual_effect_area(
 
 fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: EffectStyle) {
     use crate::rare_effect::{
-        draw_dot_grid, draw_holographic, draw_optical_scr, draw_optical_scr_simple,
-        draw_optical_ser, draw_optical_ser_simple, draw_rainbow_foil, draw_secret_foil,
-        draw_secret_weave,
+        draw_diamond_foil, draw_dot_grid, draw_holographic, draw_optical_scr,
+        draw_optical_scr_simple, draw_optical_ser, draw_optical_ser_simple, draw_rainbow_foil,
+        draw_secret_foil, draw_secret_weave,
     };
     match effect {
         EffectStyle::RainbowFoil { opacity } => draw_rainbow_foil(target, rect, opacity),
@@ -486,6 +770,7 @@ fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: Effe
             draw_concentric_engrave(target, rect, opacity)
         }
         EffectStyle::ReliefEngrave { opacity } => draw_relief_engrave(target, rect, opacity),
+        EffectStyle::DiamondFoil { opacity } => draw_diamond_foil(target, rect, opacity),
         EffectStyle::BrightBorder { .. } => {}
     }
 }
@@ -538,6 +823,15 @@ pub(super) fn restore_protected_effect_pixels(
     protection_mask: Option<&EffectProtectionMask>,
 ) {
     restore_effect_pixels(target, before, None, protection_mask);
+}
+
+pub(super) fn restore_masked_effect_pixels(
+    target: &mut Pixmap,
+    before: &EffectRectSnapshot,
+    mask: &Pixmap,
+    protection_mask: Option<&EffectProtectionMask>,
+) {
+    restore_effect_pixels(target, before, Some(mask), protection_mask);
 }
 
 fn restore_effect_pixels(
@@ -675,5 +969,34 @@ mod tests {
 
         assert_eq!(target.pixels()[0], px(10, 20, 30, 255));
         assert_eq!(target.pixels()[1], px(0, 200, 0, 255));
+    }
+
+    #[test]
+    fn pendulum_art_mask_only_allows_transparent_hole() {
+        let mut frame_mask = Pixmap::new(3, 1).unwrap();
+        frame_mask.pixels_mut()[0] = px(0, 0, 0, 0);
+        frame_mask.pixels_mut()[1] = px(0, 0, 0, 9);
+        frame_mask.pixels_mut()[2] = px(0, 0, 0, 255);
+
+        let (_, art_mask) = visible_pendulum_art_mask(
+            CoverageRect {
+                x: 10,
+                y: 20,
+                w: 3,
+                h: 1,
+            },
+            CoverageRect {
+                x: 10,
+                y: 20,
+                w: 3,
+                h: 1,
+            },
+            &frame_mask,
+        )
+        .expect("build pendulum art mask");
+
+        assert_eq!(art_mask.pixels()[0].alpha(), 255);
+        assert_eq!(art_mask.pixels()[1].alpha(), 0);
+        assert_eq!(art_mask.pixels()[2].alpha(), 0);
     }
 }

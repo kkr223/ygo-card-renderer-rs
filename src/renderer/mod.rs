@@ -8,7 +8,10 @@ use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout, try_get_bundle},
     constants::{BACKGROUND_CREAM, CARD_WIDTH},
-    document::{EffectStyle, EffectTarget, RenderDocument, RenderOp, RenderRect, RubyStyle},
+    document::{
+        EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument, RenderOp, RenderRect,
+        RubyStyle,
+    },
     model::{RenderError, RenderRequest},
     rare_effect::{CoverageRect, draw_bright_border},
     text::{
@@ -23,8 +26,9 @@ use draw_card::{
     draw_external_image, draw_positioned_render_image, sanitize_render_rect, text_align_choice,
 };
 use effect_areas::{
-    art_coverage_rect, draw_visual_effect_area, effect_target_areas, load_effect_protection_mask,
-    restore_protected_effect_pixels, snapshot_effect_rect,
+    art_coverage_rect, build_composite_mask, draw_visual_effect_area, effect_target_areas,
+    load_effect_protection_mask, restore_masked_effect_pixels, restore_protected_effect_pixels,
+    snapshot_effect_rect,
 };
 
 pub struct Renderer;
@@ -63,9 +67,9 @@ impl Renderer {
     }
 
     pub fn render_document(&self, document: &RenderDocument) -> Result<Vec<u8>, RenderError> {
-        if document.schema_version != RenderDocument::SCHEMA_VERSION {
+        if !matches!(document.schema_version, 3 | RenderDocument::SCHEMA_VERSION) {
             return Err(RenderError::Backend(format!(
-                "unsupported schema version {} (expected {})",
+                "unsupported schema version {} (expected 3 or {})",
                 document.schema_version,
                 RenderDocument::SCHEMA_VERSION,
             )));
@@ -82,15 +86,7 @@ impl Renderer {
             let language = document.language.as_deref();
             let effect_protection_mask = load_effect_protection_mask(document, base)?;
 
-            let mut nodes: Vec<_> = document
-                .nodes
-                .iter()
-                .enumerate()
-                .filter(|(_, node)| node.visible)
-                .collect();
-            nodes.sort_by_key(|(index, node)| (node.z, *index));
-
-            for (_, node) in nodes {
+            for node in sorted_visible_nodes(document) {
                 match &node.op {
                     RenderOp::ImageAsset { asset, x, y } => {
                         if bundle.has_image(asset) {
@@ -176,6 +172,18 @@ impl Renderer {
                         *effect,
                         effect_protection_mask.as_ref(),
                     ),
+                    RenderOp::CompositeVisualEffect { effect, targets } => {
+                        draw_document_composite_visual_effect(
+                            bundle,
+                            &mut target,
+                            document,
+                            base,
+                            language,
+                            *effect,
+                            targets,
+                            effect_protection_mask.as_ref(),
+                        )
+                    }
                 }
             }
         }
@@ -293,6 +301,68 @@ fn draw_document_visual_effect(
     ) {
         draw_visual_effect_area(target, area, effect, protection_mask);
     }
+}
+
+fn sorted_visible_nodes(document: &RenderDocument) -> Vec<&crate::document::RenderNode> {
+    let mut nodes: Vec<_> = document
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.visible)
+        .collect();
+    nodes.sort_by_key(|(index, node)| (node.z, *index));
+    nodes.into_iter().map(|(_, node)| node).collect()
+}
+
+fn draw_document_composite_visual_effect(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    document: &RenderDocument,
+    base: &BaseLayout,
+    language: Option<&str>,
+    effect: EffectStyle,
+    targets: &[EffectTargetWeight],
+    protection_mask: Option<&effect_areas::EffectProtectionMask>,
+) {
+    let effect = sanitize_effect_style(effect);
+    let base_opacity = composite_base_opacity(effect, targets);
+    if base_opacity <= 0.0 || targets.is_empty() {
+        return;
+    }
+    let effect = effect_with_opacity(effect, base_opacity);
+
+    let full_rect = CoverageRect {
+        x: 0,
+        y: 0,
+        w: CARD_WIDTH,
+        h: crate::constants::CARD_HEIGHT,
+    };
+    let art_rect = art_coverage_rect(&document.card, base);
+    let Some(mask) = build_composite_mask(
+        bundle,
+        document,
+        base,
+        language,
+        full_rect,
+        art_rect,
+        base_opacity,
+        targets,
+    ) else {
+        return;
+    };
+
+    let before = snapshot_effect_rect(target, full_rect);
+    draw_document_visual_effect(
+        bundle,
+        target,
+        document,
+        base,
+        language,
+        EffectTarget::FullCard,
+        effect,
+        None,
+    );
+    restore_masked_effect_pixels(target, &before, &mask, protection_mask);
 }
 
 fn draw_fill_rect(target: &mut Pixmap, rect: &RenderRect, color: &str, opacity: f32) {
@@ -431,7 +501,7 @@ fn draw_text_line_op(
             font_family,
             rect.width.round() as u32,
             letter_spacing,
-            0.3,
+            0.2,
         )
     } else {
         fit_single_line(
@@ -548,7 +618,7 @@ fn draw_text_block_op(
             rt_font_scale_x,
             line_height,
             letter_spacing,
-            min_font_size: font_size.saturating_sub(8),
+            min_font_size: font_size.saturating_sub(10),
             first_line_compress,
         },
     );
@@ -598,6 +668,57 @@ fn sanitize_effect_style(effect: EffectStyle) -> EffectStyle {
         EffectStyle::ReliefEngrave { opacity } => EffectStyle::ReliefEngrave {
             opacity: sanitize_opacity(opacity),
         },
+        EffectStyle::DiamondFoil { opacity } => EffectStyle::DiamondFoil {
+            opacity: sanitize_opacity(opacity),
+        },
+    }
+}
+
+fn effect_opacity(effect: EffectStyle) -> f32 {
+    match effect {
+        EffectStyle::RainbowFoil { opacity }
+        | EffectStyle::DotGrid { opacity }
+        | EffectStyle::OpticalSer { opacity }
+        | EffectStyle::OpticalSerSimple { opacity }
+        | EffectStyle::OpticalScr { opacity }
+        | EffectStyle::OpticalScrSimple { opacity }
+        | EffectStyle::SecretWeave { opacity }
+        | EffectStyle::SecretFoil { opacity }
+        | EffectStyle::Holographic { opacity }
+        | EffectStyle::BrightBorder { opacity }
+        | EffectStyle::GoldWash { opacity }
+        | EffectStyle::FrostedFoil { opacity }
+        | EffectStyle::ConcentricEngrave { opacity }
+        | EffectStyle::ReliefEngrave { opacity }
+        | EffectStyle::DiamondFoil { opacity } => opacity,
+    }
+}
+
+fn composite_base_opacity(effect: EffectStyle, targets: &[EffectTargetWeight]) -> f32 {
+    targets
+        .iter()
+        .map(|target| sanitize_opacity(target.opacity))
+        .fold(effect_opacity(effect), f32::max)
+}
+
+fn effect_with_opacity(effect: EffectStyle, opacity: f32) -> EffectStyle {
+    let opacity = sanitize_opacity(opacity);
+    match effect {
+        EffectStyle::RainbowFoil { .. } => EffectStyle::RainbowFoil { opacity },
+        EffectStyle::DotGrid { .. } => EffectStyle::DotGrid { opacity },
+        EffectStyle::OpticalSer { .. } => EffectStyle::OpticalSer { opacity },
+        EffectStyle::OpticalSerSimple { .. } => EffectStyle::OpticalSerSimple { opacity },
+        EffectStyle::OpticalScr { .. } => EffectStyle::OpticalScr { opacity },
+        EffectStyle::OpticalScrSimple { .. } => EffectStyle::OpticalScrSimple { opacity },
+        EffectStyle::SecretWeave { .. } => EffectStyle::SecretWeave { opacity },
+        EffectStyle::SecretFoil { .. } => EffectStyle::SecretFoil { opacity },
+        EffectStyle::Holographic { .. } => EffectStyle::Holographic { opacity },
+        EffectStyle::BrightBorder { .. } => EffectStyle::BrightBorder { opacity },
+        EffectStyle::GoldWash { .. } => EffectStyle::GoldWash { opacity },
+        EffectStyle::FrostedFoil { .. } => EffectStyle::FrostedFoil { opacity },
+        EffectStyle::ConcentricEngrave { .. } => EffectStyle::ConcentricEngrave { opacity },
+        EffectStyle::ReliefEngrave { .. } => EffectStyle::ReliefEngrave { opacity },
+        EffectStyle::DiamondFoil { .. } => EffectStyle::DiamondFoil { opacity },
     }
 }
 
@@ -638,6 +759,71 @@ mod tests {
             let bytes = fs::read(&bin_path).expect("read yugioh bundle");
             init_global_bundle(&bytes).expect("initialize yugioh bundle");
         });
+    }
+
+    #[test]
+    fn sorted_visible_nodes_filters_invisible_and_keeps_order_for_equal_z() {
+        let fill = |color: &str| crate::document::RenderOp::FillRect {
+            rect: crate::document::RenderRect::new(0, 0, 1, 1),
+            color: color.to_string(),
+            opacity: 1.0,
+        };
+        let document = crate::document::RenderDocument {
+            schema_version: crate::document::RenderDocument::SCHEMA_VERSION,
+            kind: CardKind::Yugioh,
+            canvas: crate::document::RenderCanvas {
+                width: 1,
+                height: 1,
+                background: None,
+            },
+            language: None,
+            output_scale: 1.0,
+            card: YgoCardMeta::from(CardDataEntry::default()),
+            options: RenderOptions::default(),
+            nodes: vec![
+                crate::document::RenderNode::new("visible-a", 10, fill("#000000")),
+                crate::document::RenderNode {
+                    id: "hidden".to_string(),
+                    z: 5,
+                    visible: false,
+                    op: fill("#111111"),
+                },
+                crate::document::RenderNode::new("visible-b", 10, fill("#222222")),
+                crate::document::RenderNode::new("visible-before", 0, fill("#333333")),
+            ],
+        };
+
+        let nodes = super::sorted_visible_nodes(&document);
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["visible-before", "visible-a", "visible-b"]
+        );
+    }
+
+    #[test]
+    fn render_document_accepts_schema_version_3_for_compatibility() {
+        let document = crate::document::RenderDocument {
+            schema_version: 3,
+            kind: CardKind::Yugioh,
+            canvas: crate::document::RenderCanvas {
+                width: 1,
+                height: 1,
+                background: None,
+            },
+            language: None,
+            output_scale: 1.0,
+            card: YgoCardMeta::from(CardDataEntry::default()),
+            options: RenderOptions::default(),
+            nodes: Vec::new(),
+        };
+
+        let png = super::Renderer::new()
+            .render_document(&document)
+            .expect("schema v3 document should remain renderable");
+        assert!(!png.is_empty());
     }
 
     #[test]

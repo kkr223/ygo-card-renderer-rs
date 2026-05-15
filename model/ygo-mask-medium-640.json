@@ -1,0 +1,35 @@
+{
+  "model": "TinyMaskNet",
+  "variant": "medium",
+  "input_size": 640,
+  "parameters": 254097,
+  "input": {
+    "layout": "NCHW",
+    "color": "RGB",
+    "resize": "letterbox_longest_side_pad_black",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "output": {
+    "name": "subject_logits",
+    "semantic": "sigmoid(logits)=protected_subject_probability",
+    "renderer_foil_mask": "255*(1-subject_mask)",
+    "recommended_threshold": 0.42,
+    "recommended_subject_dilation_px_at_model_size": 1
+  },
+  "onnx_ops_expected": [
+    "Conv",
+    "BatchNormalization",
+    "Relu",
+    "Resize",
+    "Concat"
+  ]
+}

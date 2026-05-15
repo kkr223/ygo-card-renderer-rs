@@ -1,0 +1,64 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "last_run": "2026-05-15T03:34:38.745Z",
+    "root": "D:\\workspace\\ygo\\ygoworkspace\\ygo-card-renderer-rs",
+    "include_patterns": [
+      "src/**/*.rs",
+      "Cargo.toml"
+    ],
+    "exclude_patterns": [
+      "tests/**",
+      "benches/**",
+      "target/**",
+      "docs/**",
+      "**/*.md"
+    ],
+    "exceptions": []
+  },
+  "file_hashes": {
+    "Cargo.toml": "f54c62f98ed1a56e264f8b5e9983f52a",
+    "src/asset_bundle.rs": "abbfb14f989976ac671f1f8324c6f9b5",
+    "src/bin/build_bundle.rs": "7de0ded7e9d146e14b43f768c8d87ee2",
+    "src/bin/generate_mask.rs": "a6c112a216646b833a3497e6bca6b78b",
+    "src/bin/render.rs": "1e200aee09c58351356fac91c397253f",
+    "src/card_logic.rs": "7bfbd2677d4e11e488c683e59e6cd4d9",
+    "src/constants.rs": "f0ec4cb962af4879a138f4a687dbf5aa",
+    "src/document.rs": "d77404f2c24d2504815a371daa4a5264",
+    "src/layout.rs": "bd5522dd5ccdd6f00cdc42d4e11338d2",
+    "src/lib.rs": "0a560a3f9ccdbf284ce86a5a018e9139",
+    "src/mask_generator.rs": "f8802496e4b3ea789e4f4ce40abfcd83",
+    "src/model.rs": "c99f3f95d548beba2ce3b92e320b1446",
+    "src/pixel_ops.rs": "04da64664d76fa746284e19f909cc9c4",
+    "src/rare_effect/bright_border.rs": "ff4c7748996cc29779f381073c88bb44",
+    "src/rare_effect/diamond_foil.rs": "5369c201415799a74db8594514ffe45d",
+    "src/rare_effect/dot_grid.rs": "c2c6c42e8b90cc838c60494e4de687c4",
+    "src/rare_effect/holographic.rs": "092427cbccff72fd7689aa3e5fbe92b7",
+    "src/rare_effect/legacy.rs": "c5b5159e9198dbe4d6ac9e473c61a82f",
+    "src/rare_effect/math.rs": "c1e7d672a203a5d805cef257aecef4fc",
+    "src/rare_effect/mod.rs": "1e6134fd4b670e09b92e6ded3ccd322f",
+    "src/rare_effect/optical.rs": "d3a76bfceb8a1fe76d8d4ea5b6a972ac",
+    "src/rare_effect/rainbow_foil.rs": "d1184160e587a9044bc2ccb566f7ac22",
+    "src/rare_effect/secret.rs": "b0b06fabdfaef085fb17f724b377a09d",
+    "src/renderer/color.rs": "310bcd3f4e40304f3ea383119df31fa4",
+    "src/renderer/draw_card.rs": "dfbe9e58480809f7ad7552dc1391cfc2",
+    "src/renderer/effect_areas.rs": "72b343076bc08e6240e719ddfb0350a2",
+    "src/renderer/mod.rs": "11eac8407e8454326564f2b649ad3859",
+    "src/renderer/visual_effects.rs": "44504610497c600ede11486358eff503",
+    "src/ruby.rs": "1eb619ffdd6ee21b696b7e062fffd52f",
+    "src/text/draw.rs": "86c21d134951922b26b7680eeab16c5e",
+    "src/text/engine.rs": "49a18869234b0a341d6fa9a511f976a6",
+    "src/text/measure.rs": "523fcb9dd63db9e90dcc15a52a709b95",
+    "src/text/mod.rs": "55e473d768fc4fe1c073afe8554df9c0",
+    "src/text/ruby.rs": "0b4db73919bc15635b60ec2a849b70d5",
+    "src/text/util.rs": "84ade5b116a6fe922b734f34bea94d6c"
+  },
+  "folder_hashes": {
+    ".": "15fa240420727c5afdd0ca9b169bab1d",
+    "src": "c410d25e81f64632421e0829e04840c1",
+    "src/bin": "8a3409816e36cf14fedd490107d96cc2",
+    "src/rare_effect": "d3de3a609288741cf0237e9eddcd7565",
+    "src/renderer": "84672e647cc5a7941484687c0a4fba1c",
+    "src/text": "69ec0fb5309e4d8b68a0a07953337ebe"
+  }
+}

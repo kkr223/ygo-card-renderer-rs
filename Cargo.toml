@@ -12,6 +12,7 @@ cosmic-text = "0.14"
 fontdb = "0.16"
 image = { version = "0.25", features = ["webp"] }
 memmap2 = "0.9"
+ort = { version = "=2.0.0-rc.12", optional = true }
 resvg = "0.45.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -19,6 +20,10 @@ thiserror = "2.0.17"
 tiny-skia = "0.11"
 ygo-woff2 = { path = "../ygo-woff2" }
 ygopro-cdb-encode-rs = { path = "../ygopro-cdb-encode-rs" }
+
+[features]
+default = []
+onnx-mask = ["dep:ort"]
 
 [dev-dependencies]
 brotli = "8.0.2"

@@ -5,10 +5,10 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderDocument, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    document::{EffectStyle, EffectTarget, ImageFit, RenderOp},
+    document::{EffectStyle, EffectTarget, EffectTargetWeight, ImageFit, RenderOp},
     model::{
-        LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType, TextAlignChoice,
-        YgoCardMeta,
+        EffectMask, LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType,
+        TextAlignChoice, YgoCardMeta,
     },
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
@@ -43,6 +43,17 @@ fn test_cdb_path() -> Option<PathBuf> {
         }
     }
 
+    None
+}
+
+fn gser_cdb_path() -> Option<PathBuf> {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for filename in ["card2.cdb", "cards2.cdb", "cards3.cdb", "cards.cdb"] {
+        let path = repo_root.join(filename);
+        if path.exists() {
+            return Some(path);
+        }
+    }
     None
 }
 
@@ -84,13 +95,22 @@ fn env_opt_string(key: &str) -> Option<String> {
 /// the env var is unset or no matching file exists.
 fn find_art(card_code: u32) -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("YGO_ART_DIR")?);
-    for ext in &["jpg", "png"] {
-        let path = dir.join(format!("{card_code}.{ext}"));
+    find_file(&dir, card_code, &["jpg", "png"])
+}
+
+fn find_file(dir: &PathBuf, code: u32, extensions: &[&str]) -> Option<PathBuf> {
+    for ext in extensions {
+        let path = dir.join(format!("{code}.{ext}"));
         if path.exists() {
             return Some(path);
         }
     }
     None
+}
+
+fn find_mask(card_code: u32) -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("YGO_MASK_DIR")?);
+    find_file(&dir, card_code, &["png"])
 }
 
 fn foreground_image_from_env() -> Option<PositionedRenderImage> {
@@ -300,6 +320,20 @@ fn render_document_allows_external_display_edits() {
         arrow_count >= 1,
         "expected at least one link arrow image node"
     );
+    assert!(
+        document.nodes.iter().any(|node| matches!(
+            &node.op,
+            RenderOp::TextLine { text, .. } if node.id == "stats-atk" && text == "2500"
+        )),
+        "link monsters should render ATK"
+    );
+    assert!(
+        document.nodes.iter().any(|node| matches!(
+            &node.op,
+            RenderOp::TextLine { text, .. } if node.id == "stats-link" && text == "3"
+        )),
+        "link monsters should render LINK value"
+    );
 
     assert!(
         document.nodes.iter().any(|node| node.id == "scale-line"),
@@ -320,6 +354,68 @@ fn render_document_allows_external_display_edits() {
             RenderOp::TextLine { text, .. } if text == "en"
         )
     );
+}
+
+#[test]
+fn footer_password_and_copyright_default_to_black_except_xyz() {
+    init_bundle();
+
+    fn footer_color(document: &RenderDocument, id: &str) -> String {
+        let node = document
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap_or_else(|| panic!("missing node {id}"));
+        match &node.op {
+            RenderOp::TextLine { fill, .. } => fill.color.clone().expect("solid footer color"),
+            _ => panic!("expected text line node {id}"),
+        }
+    }
+
+    let renderer = Renderer::new();
+    let mut normal_card: YgoCardMeta = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 1000,
+        name: "Normal Footer".to_string(),
+        desc: "Footer colour test.".to_string(),
+        type_: ygopro_cdb_encode_rs::TYPE_MONSTER,
+        attack: 1000,
+        defense: 1000,
+        level: 4,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    }
+    .into();
+    normal_card.copyright = Some("missing-footer-test-asset".to_string());
+    let normal_doc = renderer
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card: normal_card,
+            options: RenderOptions::default(),
+        })
+        .expect("build normal footer document");
+    assert_eq!(footer_color(&normal_doc, "password"), "#000000");
+    assert_eq!(footer_color(&normal_doc, "copyright"), "#000000");
+
+    let mut xyz_card: YgoCardMeta = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 2000,
+        name: "Xyz Footer".to_string(),
+        desc: "Footer colour test.".to_string(),
+        type_: ygopro_cdb_encode_rs::TYPE_MONSTER | ygopro_cdb_encode_rs::TYPE_XYZ,
+        attack: 2000,
+        defense: 2000,
+        level: 4,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    }
+    .into();
+    xyz_card.copyright = Some("missing-footer-test-asset".to_string());
+    let xyz_doc = renderer
+        .build_document(&RenderRequest {
+            kind: CardKind::Yugioh,
+            card: xyz_card,
+            options: RenderOptions::default(),
+        })
+        .expect("build xyz footer document");
+    assert_eq!(footer_color(&xyz_doc, "password"), "#ffffff");
+    assert_eq!(footer_color(&xyz_doc, "copyright"), "#ffffff");
 }
 
 #[test]
@@ -386,6 +482,27 @@ fn render_document_positions_spell_trap_line_like_footer_layout() {
     );
 }
 
+fn composite_effect<'a>(
+    document: &'a RenderDocument,
+    id: &str,
+) -> (&'a EffectStyle, &'a [EffectTargetWeight]) {
+    let node = document
+        .nodes
+        .iter()
+        .find(|node| node.id == id)
+        .unwrap_or_else(|| panic!("missing composite effect node {id}"));
+    match &node.op {
+        RenderOp::CompositeVisualEffect { effect, targets } => (effect, targets),
+        _ => panic!("expected CompositeVisualEffect node {id}"),
+    }
+}
+
+fn has_target_weight(targets: &[EffectTargetWeight], target: EffectTarget, opacity: f32) -> bool {
+    targets
+        .iter()
+        .any(|weight| weight.target == target && (weight.opacity - opacity).abs() < f32::EPSILON)
+}
+
 #[test]
 fn render_document_expands_ur_rare_preset() {
     init_bundle();
@@ -433,27 +550,33 @@ fn render_document_expands_ur_rare_preset() {
                     == ygo_card_renderer_rs::model::GradientDirection::Vertical
         })
     ));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::Art,
-            effect: EffectStyle::RainbowFoil { .. },
-        }
-    )));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::Attribute,
-            effect: EffectStyle::Holographic { .. },
-        }
-    )));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::LevelOrRank,
-            effect: EffectStyle::Holographic { .. },
-        }
-    )));
+    let (art_effect, art_targets) = composite_effect(&document, "rare-ur-art-foil");
+    assert!(matches!(
+        art_effect,
+        EffectStyle::RainbowFoil { opacity } if (*opacity - 0.46).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(art_targets, EffectTarget::Art, 0.46));
+
+    let (icon_effect, icon_targets) = composite_effect(&document, "rare-ur-icon-foil");
+    assert!(matches!(
+        icon_effect,
+        EffectStyle::Holographic { opacity } if (*opacity - 0.62).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::Attribute,
+        0.62
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LevelOrRank,
+        0.58
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LinkArrows,
+        0.58
+    ));
 }
 
 #[test]
@@ -490,34 +613,48 @@ fn render_document_expands_ser_rare_preset_to_art_attribute_and_stars() {
         .nodes
         .iter()
         .filter_map(|node| match &node.op {
-            RenderOp::VisualEffect { target, effect } => Some((*target, *effect)),
+            RenderOp::CompositeVisualEffect { effect, targets } => Some((*effect, targets)),
             _ => None,
         })
         .collect();
 
-    assert_eq!(effect_targets.len(), 4);
-    assert!(effect_targets.iter().any(|(target, effect)| matches!(
-        (target, effect),
-        (EffectTarget::Art, EffectStyle::OpticalSer { .. })
-    )));
-    assert!(effect_targets.iter().any(|(target, effect)| matches!(
-        (target, effect),
-        (
-            EffectTarget::Attribute,
-            EffectStyle::OpticalSerSimple { .. }
-        )
-    )));
-    assert!(effect_targets.iter().any(|(target, effect)| matches!(
-        (target, effect),
-        (
-            EffectTarget::LevelOrRank,
-            EffectStyle::OpticalSerSimple { .. }
-        )
-    )));
+    assert_eq!(effect_targets.len(), 2);
+    let (art_effect, art_targets) = composite_effect(&document, "rare-ser-art-optical");
+    assert!(matches!(
+        art_effect,
+        EffectStyle::OpticalSer { opacity } if (*opacity - 1.00).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(art_targets, EffectTarget::Art, 1.00));
+
+    let (icon_effect, icon_targets) = composite_effect(&document, "rare-ser-icon-optical");
+    assert!(matches!(
+        icon_effect,
+        EffectStyle::OpticalSerSimple { opacity } if (*opacity - 0.90).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::Attribute,
+        0.90
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LevelOrRank,
+        0.90
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LinkArrows,
+        0.90
+    ));
     assert!(
-        !effect_targets
-            .iter()
-            .any(|(target, _)| *target == EffectTarget::FullCard)
+        !document.nodes.iter().any(|node| matches!(
+            &node.op,
+            RenderOp::VisualEffect {
+                target: EffectTarget::FullCard,
+                ..
+            }
+        )),
+        "SER should not emit a full-card visual effect"
     );
 }
 
@@ -553,15 +690,19 @@ fn render_document_expands_sr_and_gr_rare_presets() {
     let sr_effects: Vec<_> = sr_document
         .nodes
         .iter()
-        .filter(|node| matches!(node.op, RenderOp::VisualEffect { .. }))
+        .filter(|node| matches!(node.op, RenderOp::CompositeVisualEffect { .. }))
         .collect();
     assert_eq!(sr_effects.len(), 1);
     assert!(matches!(
         &sr_effects[0].op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::Art,
-            effect: EffectStyle::RainbowFoil { .. },
-        }
+        RenderOp::CompositeVisualEffect {
+            effect: EffectStyle::RainbowFoil { opacity },
+            targets,
+        } if (*opacity - 0.46).abs() < f32::EPSILON
+            && targets == &[EffectTargetWeight {
+                target: EffectTarget::Art,
+                opacity: 0.46,
+            }]
     ));
 
     let mut gr_card: YgoCardMeta = entry.into();
@@ -576,20 +717,21 @@ fn render_document_expands_sr_and_gr_rare_presets() {
             },
         })
         .expect("build document");
-    assert!(gr_document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::CardBorder,
-            effect: EffectStyle::GoldWash { .. },
-        }
-    )));
-    assert!(gr_document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::ArtFrame,
-            effect: EffectStyle::GoldWash { .. },
-        }
-    )));
+    let (border_effect, border_targets) = composite_effect(&gr_document, "rare-gr-border-gold");
+    assert!(matches!(
+        border_effect,
+        EffectStyle::GoldWash { opacity } if (*opacity - 0.56).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(
+        border_targets,
+        EffectTarget::CardBorder,
+        0.42
+    ));
+    assert!(has_target_weight(
+        border_targets,
+        EffectTarget::ArtFrame,
+        0.56
+    ));
     let title = gr_document
         .nodes
         .iter()
@@ -634,34 +776,45 @@ fn render_document_expands_utr_rare_preset() {
         })
         .expect("build document");
 
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::CardBase,
-            effect: EffectStyle::FrostedFoil { .. },
-        }
-    )));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::Art,
-            effect: EffectStyle::ReliefEngrave { .. },
-        }
-    )));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::Attribute,
-            effect: EffectStyle::ConcentricEngrave { .. },
-        }
-    )));
-    assert!(document.nodes.iter().any(|node| matches!(
-        &node.op,
-        RenderOp::VisualEffect {
-            target: EffectTarget::LevelOrRank,
-            effect: EffectStyle::ConcentricEngrave { .. },
-        }
-    )));
+    let (card_effect, card_targets) = composite_effect(&document, "rare-utr-frosted-card-base");
+    assert!(matches!(
+        card_effect,
+        EffectStyle::FrostedFoil { opacity } if (*opacity - 0.50).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(
+        card_targets,
+        EffectTarget::CardBase,
+        0.50
+    ));
+
+    let (art_effect, art_targets) = composite_effect(&document, "rare-utr-art-relief");
+    assert!(matches!(
+        art_effect,
+        EffectStyle::ReliefEngrave { opacity } if (*opacity - 1.00).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(art_targets, EffectTarget::Art, 1.00));
+
+    let (icon_effect, icon_targets) =
+        composite_effect(&document, "rare-utr-icon-concentric-engrave");
+    assert!(matches!(
+        icon_effect,
+        EffectStyle::ConcentricEngrave { opacity } if (*opacity - 0.72).abs() < f32::EPSILON
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::Attribute,
+        0.72
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LevelOrRank,
+        0.68
+    ));
+    assert!(has_target_weight(
+        icon_targets,
+        EffectTarget::LinkArrows,
+        0.68
+    ));
 }
 
 fn layout_overrides_from_env() -> LayoutOverrides {
@@ -852,7 +1005,7 @@ fn render_rare_effects() {
         // ("gr", RareType::Gr),
         // ("hr", RareType::Hr),
         // ("ser", RareType::Ser),
-        ("scr", RareType::Scr),
+        ("npr", RareType::Npr),
         // ("gser", RareType::Gser),
         // ("pser", RareType::Pser),
         // ("pser-print", RareType::PserPrint),
@@ -892,6 +1045,119 @@ fn render_rare_effects() {
     }
 
     println!("All rare effect renders written to {:?}", out_dir);
+}
+
+/// 以 GSER 罕贵度批量渲染 CDB 中的全部卡片，包含所有可渲染部件。
+///
+/// 在每张卡上渲染完整的版权信息、卡包编号、防伪标识（laser）、密码等。
+/// 支持通过 `YGO_MASK_DIR` 指定特效保护 mask 目录，用法与 `YGO_ART_DIR`
+/// 类似（`{code}.png`）。mask 不会被绘制到成品上，只用于遮盖/保护对应区域，
+/// 避免 GSER 特效覆盖这些像素。
+///
+/// 环境变量：
+/// - `YGO_ART_DIR`：卡图目录，`{code}.jpg/.png`
+/// - `YGO_MASK_DIR`：特效保护 mask 目录，`{code}.png`
+/// - `YGO_LANGUAGE`：语言，默认 sc
+/// - `YGO_GSER_LIMIT`：最多渲染张数，默认无限制
+///
+/// 运行方式：
+/// ```pwsh
+/// $env:YGO_ART_DIR="E:\game\MDPro3\Picture\Art"
+/// $env:YGO_MASK_DIR="E:\game\masks"
+/// cargo test render_all_cards_gser -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "批量渲染全部卡片，需设置 YGO_ART_DIR"]
+fn render_all_cards_gser() {
+    init_bundle();
+
+    let cdb_path = gser_cdb_path();
+    let Some(cdb_path) = cdb_path else {
+        eprintln!(
+            "Skipping GSER test: no CDB found \
+             (card2.cdb, cards2.cdb, cards3.cdb, cards.cdb)"
+        );
+        return;
+    };
+
+    let cdb = YgoProCdb::from_path(&cdb_path).expect("open cdb");
+    let cards = cdb.find_all().expect("read all cards from cdb");
+
+    let renderer = Renderer::new();
+    let out_dir = artifact_dir().join("gser-all");
+    fs::create_dir_all(&out_dir).expect("create output dir");
+
+    let language = env_string("YGO_LANGUAGE", "sc");
+    let limit = env_opt_u32("YGO_GSER_LIMIT");
+
+    let total = cards.len();
+    println!("CDB: {:?}, {total} cards", cdb_path);
+    println!("language={language}, limit={limit:?}");
+
+    let mut rendered = 0u32;
+    let mut failed = 0u32;
+
+    for card in cards {
+        if let Some(limit) = limit {
+            if rendered + failed >= limit {
+                println!("Reached limit ({limit}), stopping.");
+                break;
+            }
+        }
+
+        let card_code = card.code;
+        let card_name = card.name.clone();
+
+        let mut card_meta: YgoCardMeta = card.clone().into();
+        card_meta.rare = Some(RareType::Gser);
+        // 卡包编号
+        card_meta.package = Some(format!("PACK-{:08}", card_code));
+        // 版权信息
+        card_meta.copyright = Some("©2024 Studio Dice/SHUEISHA, TV TOKYO, KONAMI".to_string());
+        // 防伪标识（laser hologram）
+        card_meta.laser = Some("laser1".to_string());
+
+        let art_image = find_art(card_code);
+        let effect_mask = find_mask(card_code).map(|path| EffectMask {
+            path,
+            x: None,
+            y: None,
+        });
+
+        let request = RenderRequest {
+            kind: CardKind::Yugioh,
+            card: card_meta,
+            options: RenderOptions {
+                language: Some(language.clone()),
+                scale: 1.0,
+                art_image,
+                effect_mask,
+                ..RenderOptions::default()
+            },
+        };
+
+        match renderer.render_png(&request) {
+            Ok(png) => {
+                let png_path = out_dir.join(format!("gser-{card_code}.png"));
+                fs::write(&png_path, &png).expect("write png");
+                println!(
+                    "[{card_code}] {card_name}  ({size} bytes)",
+                    size = png.len()
+                );
+                rendered += 1;
+            }
+            Err(e) => {
+                eprintln!("[{card_code}] {card_name} FAILED: {e:?}");
+                failed += 1;
+            }
+        }
+    }
+
+    println!(
+        "\nGSER batch complete: {rendered} rendered, {failed} failed ({total} total)",
+        total = rendered + failed
+    );
+    assert!(rendered > 0, "Should have rendered at least one card");
 }
 
 /// 从 CDB 中读取几张经典卡，覆盖各种类型。

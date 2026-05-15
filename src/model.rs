@@ -38,6 +38,14 @@ pub enum RareType {
     PserPrint,
     /// Secret Collector's Rare
     Scr,
+    /// Extra Secret Rare
+    Esr,
+    /// Normal Parallel Rare (full-card diamond foil on flat card)
+    Npr,
+    /// Ultimate Parallel Rare (full-card diamond foil on UR base)
+    Upr,
+    /// Secret Extra Parallel Rare (full-card diamond foil on SER base)
+    Sepr,
     /// Duel Terminal parallel rare
     Dt,
 }
@@ -69,6 +77,10 @@ impl RareType {
             Self::Pser => "pser",
             Self::PserPrint => "pser-print",
             Self::Scr => "scr",
+            Self::Esr => "esr",
+            Self::Npr => "npr",
+            Self::Upr => "upr",
+            Self::Sepr => "sepr",
             Self::Dt => "dt",
         }
     }
@@ -78,7 +90,7 @@ impl RareType {
     pub fn shows_attribute_rare(self) -> bool {
         matches!(
             self,
-            Self::Hr | Self::Ser | Self::Scr | Self::Gser | Self::Pser
+            Self::Hr | Self::Ser | Self::Scr | Self::Gser | Self::Pser | Self::Esr | Self::Sepr
         )
     }
 }
@@ -232,7 +244,8 @@ pub struct PositionedRenderImage {
 /// Mask pixels are interpreted like print white ink: opaque black protects the
 /// underlying card from effects, opaque white allows effects, and gray/alpha
 /// values create a soft transition.  When `x`/`y` are omitted the renderer
-/// places full-card masks at `(0, 0)` and art-sized masks on the illustration.
+/// places full-card masks at `(0, 0)`. Non-full-card masks are scaled to the
+/// illustration area and placed there unless `x`/`y` are set explicitly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectMask {

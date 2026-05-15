@@ -145,7 +145,15 @@ fn layers_for(rare: RareType) -> Vec<EffectLayer> {
 
         RareType::PserPrint => vec![EffectLayer::full(LayerKind::BrightBorder { opacity: 0.72 })],
 
-        RareType::Gr | RareType::Ur | RareType::Utr | RareType::Scr | RareType::Dt => vec![],
+        RareType::Gr
+        | RareType::Ur
+        | RareType::Utr
+        | RareType::Scr
+        | RareType::Esr
+        | RareType::Npr
+        | RareType::Upr
+        | RareType::Sepr
+        | RareType::Dt => vec![],
     }
 }
 

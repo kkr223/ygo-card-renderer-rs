@@ -8,6 +8,7 @@ Rust 游戏王（Yu-Gi-Oh!）卡片渲染核心库与 CLI。项目可以从 YGOP
 
 - 完整卡片渲染：普通/效果/融合/同调/超量/连接/摆钟怪兽，魔法/陷阱卡。
 - 罕贵效果：SR、UR、UTR、GR、HR、SeR、GSeR、PSeR、PSeR Print、DT。
+- 神经网络 mask：可用 TinyMaskNet ONNX 模型为卡图生成特效保护 mask（需 `onnx-mask` feature）。
 - 多语言排版：`sc`、`tc`、`jp`、`kr`、`en`、`astral`、`custom1`、`custom2`。
 - 文本自适应：标题/类型/效果/描述自动测量、缩放、压缩和换行；日文支持振假名。
 - Out-frame 与扩展显示：支持卡图外溢、前景图层、周年标记、激光标识、卡包编号等显示元数据。
@@ -50,7 +51,7 @@ ygo-card-renderer-rs/
 - 渲染 CLI 需要：`resources/yugioh_bundle.bin`、YGOPro `.cdb`、卡图目录。
 - 卡图目录按 `<code>.jpg`、`<code>.png`、`<code>.webp` 查找。
 
-主要依赖：`tiny-skia`、`image`、`resvg/usvg`、`cosmic-text/fontdb`、`memmap2`、`serde/serde_json`、`ygo-woff2`、`ygopro-cdb-encode-rs`。
+主要依赖：`tiny-skia`、`image`、`resvg/usvg`、`cosmic-text/fontdb`、`memmap2`、`serde/serde_json`、`ygo-woff2`、`ygopro-cdb-encode-rs`。可选 `onnx-mask` feature 会启用 `ort` 运行 ONNX mask 模型。
 
 ---
 
@@ -116,6 +117,37 @@ cargo run --bin render -- \
 ```
 
 输出文件名为 `<code>.png`。
+
+### 5. 生成特效保护 mask（可选）
+
+仓库内置 TinyMaskNet 模型：
+
+```text
+model/ygo-mask-medium-640.onnx
+model/ygo-mask-medium-640.json
+```
+
+单张生成：
+
+```bash
+cargo run --features onnx-mask --bin generate_mask -- \
+  --model model/ygo-mask-medium-640.onnx \
+  --art /path/to/art/65741786.jpg \
+  --out export/masks/65741786.png
+```
+
+批量生成：
+
+```bash
+cargo run --features onnx-mask --bin generate_mask -- \
+  --model model/ygo-mask-medium-640.onnx \
+  --art-dir /path/to/art \
+  --out-dir export/masks
+```
+
+mask 语义：黑色保护主体不覆特效，白色允许特效。默认阈值和主体膨胀来自同名 `.json` 元数据，可用 `--threshold` / `--dilate` 覆盖。
+
+`onnx-mask` feature 会通过 `ort` 使用 ONNX Runtime；首次构建/部署时需确保对应运行时库可用（默认 feature 会在开发构建中下载/复制运行时动态库）。
 
 ---
 
@@ -185,10 +217,31 @@ render --bundle <PATH> --cdb <PATH> --art-dir <DIR> --id <CODE> --out <FILE> [OP
 | `--lang <LANG>` | `sc`、`tc`、`jp`、`kr`、`en` 等 | `sc` |
 | `--scale <F>` | 输出缩放倍率 | `1.0` |
 | `--effect-mask <PATH>` | 黑白特效遮罩：黑色保护不覆特效，白色允许特效 | 无 |
+| `--effect-mask-dir <DIR>` | 按 `<dir>/<code>.png` 查找每张卡的特效遮罩 | 无 |
+| `--auto-mask-model <ONNX>` | 缺失 mask 时自动生成；需 `--features onnx-mask` | 无 |
+| `--auto-mask-metadata <JSON>` | 自动 mask 元数据；默认使用模型同名 `.json` | 无 |
+| `--mask-cache-dir <DIR>` | 自动生成 mask 的写入目录；默认使用 `--effect-mask-dir` | 无 |
+| `--mask-threshold <F>` | 覆盖自动 mask 主体阈值 | 元数据推荐值 |
+| `--mask-dilate <PX>` | 覆盖自动 mask 主体膨胀像素 | 元数据推荐值 |
+| `--overwrite-mask` | 自动 mask cache 已存在时也重新生成；不会覆盖 `--effect-mask-dir` 已命中的 mask | false |
 | `--jobs <N>` | 批量渲染线程数 | 逻辑 CPU 数 |
 
 如果 `art-dir` 中找不到对应卡图，卡图区域会留空，不会中断渲染。
 `--effect-mask` 可使用完整卡片尺寸遮罩，或与卡图区域同尺寸的遮罩；未指定坐标时后者会自动贴到卡图区域。
+
+mask 优先级：`--effect-mask` 最高，指定后不会自动生成；批量渲染时 `--effect-mask-dir` 先查已有 `{code}.png`，若同时指定 `--auto-mask-model`，只有缺失的卡才会自动生成并写入 cache。若某张卡没有 art，自动 mask 会输出 warning 并跳过该卡的 mask，渲染继续。
+
+示例：批量渲染时自动补齐缺失 mask：
+
+```bash
+cargo run --features onnx-mask --bin render -- \
+  --bundle resources/yugioh_bundle.bin \
+  --cdb cards.cdb \
+  --art-dir /path/to/art \
+  --out-dir ./export \
+  --effect-mask-dir export/masks \
+  --auto-mask-model model/ygo-mask-medium-640.onnx
+```
 
 ---
 
