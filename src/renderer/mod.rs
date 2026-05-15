@@ -3,6 +3,8 @@ mod draw_card;
 mod effect_areas;
 mod visual_effects;
 
+use std::sync::Arc;
+
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 
 use crate::{
@@ -31,7 +33,10 @@ use effect_areas::{
     snapshot_effect_rect,
 };
 
-pub struct Renderer;
+#[derive(Clone)]
+pub struct Renderer {
+    bundle: Option<Arc<AssetBundle>>,
+}
 
 const MAX_RENDER_PIXELS: u64 = 4096 * 4096;
 const TEXT_OUTLINE_OFFSETS: [(f32, f32); 8] = [
@@ -53,7 +58,13 @@ impl Default for Renderer {
 
 impl Renderer {
     pub fn new() -> Self {
-        Self
+        Self { bundle: None }
+    }
+
+    pub fn with_bundle(bundle: Arc<AssetBundle>) -> Self {
+        Self {
+            bundle: Some(bundle),
+        }
     }
 
     pub fn render_png(&self, request: &RenderRequest) -> Result<Vec<u8>, RenderError> {
@@ -62,7 +73,7 @@ impl Renderer {
     }
 
     pub fn build_document(&self, request: &RenderRequest) -> Result<RenderDocument, RenderError> {
-        let bundle = renderer_bundle()?;
+        let bundle = self.bundle()?;
         Ok(RenderDocument::from_request(request, bundle))
     }
 
@@ -81,7 +92,7 @@ impl Renderer {
         target.fill(canvas_background_color(document));
 
         if !document.nodes.is_empty() {
-            let bundle = renderer_bundle()?;
+            let bundle = self.bundle()?;
             let base = &bundle.layout.base;
             let language = document.language.as_deref();
             let effect_protection_mask = load_effect_protection_mask(document, base)?;
@@ -198,6 +209,13 @@ impl Renderer {
         output
             .encode_png()
             .map_err(|e| RenderError::PngEncode(e.to_string()))
+    }
+
+    fn bundle(&self) -> Result<&AssetBundle, RenderError> {
+        match &self.bundle {
+            Some(bundle) => Ok(bundle.as_ref()),
+            None => renderer_bundle(),
+        }
     }
 }
 
@@ -741,11 +759,15 @@ mod tests {
     };
     use crate::{
         CardKind, RenderOptions, RenderRequest,
-        asset_bundle::{get_bundle, init_global_bundle},
-        document::laser_asset_name,
+        asset_bundle::{AssetBundle, get_bundle, init_global_bundle},
+        document::{RenderDocument, RenderNode, RenderOp, RenderRect, laser_asset_name},
         model::YgoCardMeta,
     };
-    use std::{fs, path::PathBuf, sync::Once};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{Arc, Once},
+    };
     use tiny_skia::PremultipliedColorU8;
     use ygopro_cdb_encode_rs::CardDataEntry;
 
@@ -759,6 +781,14 @@ mod tests {
             let bytes = fs::read(&bin_path).expect("read yugioh bundle");
             init_global_bundle(&bytes).expect("initialize yugioh bundle");
         });
+    }
+
+    fn load_test_bundle() -> Arc<AssetBundle> {
+        let bin_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("yugioh_bundle.bin");
+        let bytes = fs::read(&bin_path).expect("read yugioh bundle");
+        Arc::new(AssetBundle::load_from_bytes(&bytes).expect("load explicit bundle"))
     }
 
     #[test]
@@ -823,6 +853,99 @@ mod tests {
         let png = super::Renderer::new()
             .render_document(&document)
             .expect("schema v3 document should remain renderable");
+        assert!(!png.is_empty());
+    }
+
+    #[test]
+    fn explicit_bundle_renderer_builds_document() {
+        let renderer = super::Renderer::with_bundle(load_test_bundle());
+        let request = RenderRequest {
+            kind: CardKind::Yugioh,
+            card: YgoCardMeta::from(CardDataEntry {
+                code: 46986414,
+                name: "Dark Magician".to_string(),
+                desc: "The ultimate wizard in terms of attack and defense.".to_string(),
+                type_: 0x41,
+                attack: 2500,
+                defense: 2100,
+                level: 7,
+                race: 0x1,
+                attribute: 0x10,
+                ..CardDataEntry::default()
+            }),
+            options: RenderOptions::default(),
+        };
+
+        let document = renderer
+            .build_document(&request)
+            .expect("build document with explicit bundle");
+        assert!(document.nodes.iter().any(|node| node.id == "frame"));
+        assert!(document.nodes.iter().any(|node| node.id == "title"));
+    }
+
+    #[test]
+    fn explicit_bundle_renderer_renders_non_empty_document() {
+        let renderer = super::Renderer::with_bundle(load_test_bundle());
+        let document = RenderDocument {
+            schema_version: RenderDocument::SCHEMA_VERSION,
+            kind: CardKind::Yugioh,
+            canvas: crate::document::RenderCanvas {
+                width: 4,
+                height: 4,
+                background: None,
+            },
+            language: None,
+            output_scale: 1.0,
+            card: YgoCardMeta::from(CardDataEntry::default()),
+            options: RenderOptions::default(),
+            nodes: vec![RenderNode::new(
+                "test-fill",
+                0,
+                RenderOp::FillRect {
+                    rect: RenderRect::new(0, 0, 4, 4),
+                    color: "#ff0000".to_string(),
+                    opacity: 1.0,
+                },
+            )],
+        };
+
+        let png = renderer
+            .render_document(&document)
+            .expect("render document with explicit bundle");
+        assert!(!png.is_empty());
+    }
+
+    #[test]
+    fn explicit_bundle_renderer_draws_bundle_image_assets() {
+        let bundle = load_test_bundle();
+        assert!(bundle.has_image("card-normal.webp"));
+        let renderer = super::Renderer::with_bundle(bundle);
+        let document = RenderDocument {
+            schema_version: RenderDocument::SCHEMA_VERSION,
+            kind: CardKind::Yugioh,
+            canvas: crate::document::RenderCanvas {
+                width: 16,
+                height: 16,
+                background: None,
+            },
+            language: None,
+            output_scale: 1.0,
+            card: YgoCardMeta::from(CardDataEntry::default()),
+            options: RenderOptions::default(),
+            nodes: vec![RenderNode::new(
+                "test-image",
+                0,
+                RenderOp::ImageAsset {
+                    asset: "card-normal.webp".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+            )],
+        };
+
+        let png = renderer
+            .render_document(&document)
+            .expect("render image asset with explicit bundle");
         assert!(!png.is_empty());
     }
 
