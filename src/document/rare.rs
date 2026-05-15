@@ -1,4 +1,4 @@
-use crate::model::RareType;
+use crate::model::{RareType, TextGradient, TextPaint};
 
 use super::{EffectStyle, EffectTarget, EffectTargetWeight, RenderNode, RenderOp};
 
@@ -305,7 +305,43 @@ fn tw(target: EffectTarget, opacity: f32) -> EffectTargetWeight {
     EffectTargetWeight { target, opacity }
 }
 
-#[cfg(test)]
+// ── Title paint preset ──────────────────────────────────────────────────────
+
+pub(super) fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextPaint>) {
+    match rare {
+        Some(RareType::Ur | RareType::Gr | RareType::Gser) => (
+            Some(TextPaint {
+                color: None,
+                gradient: Some(TextGradient::vertical_middle(
+                    "#9a6718", "#fff0a8", "#6f4208",
+                )),
+            }),
+            Some(TextPaint {
+                color: Some("#5a3708".to_string()),
+                gradient: Some(TextGradient::vertical_middle(
+                    "#2d1903", "#a46a16", "#221103",
+                )),
+            }),
+        ),
+        Some(RareType::Ser | RareType::Pser | RareType::Scr) => (
+            Some(TextPaint {
+                color: None,
+                gradient: Some(TextGradient::vertical_middle(
+                    "#f8fafc", "#94a3b8", "#f1f5f9",
+                )),
+            }),
+            Some(TextPaint {
+                color: Some("#94a3b8".to_string()),
+                gradient: Some(TextGradient::vertical_middle(
+                    "#cbd5e1", "#64748b", "#cbd5e1",
+                )),
+            }),
+        ),
+        _ => (None, None),
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
 mod tests {
     use super::*;
 
@@ -632,5 +668,41 @@ mod tests {
             EffectTarget::FullCard,
             EffectStyle::BrightBorder { opacity: 0.72 },
         );
+    }
+
+    #[test]
+    fn rare_title_paints_returns_none_for_none_rare() {
+        assert_eq!(rare_title_paints(None), (None, None));
+    }
+
+    #[test]
+    fn rare_title_paints_returns_none_for_dt() {
+        assert_eq!(rare_title_paints(Some(RareType::Dt)), (None, None));
+    }
+
+    #[test]
+    fn rare_title_paints_gold_for_ur_gr_gser() {
+        for rare in [RareType::Ur, RareType::Gr, RareType::Gser] {
+            let (fill, shadow) = rare_title_paints(Some(rare));
+            assert!(fill.is_some(), "{rare:?} should have fill");
+            assert!(shadow.is_some(), "{rare:?} should have shadow");
+            assert!(
+                fill.unwrap().gradient.is_some(),
+                "{rare:?} fill should be gradient"
+            );
+            assert!(
+                shadow.unwrap().color.is_some(),
+                "{rare:?} shadow should have color"
+            );
+        }
+    }
+
+    #[test]
+    fn rare_title_paints_silver_for_ser_pser_scr() {
+        for rare in [RareType::Ser, RareType::Pser, RareType::Scr] {
+            let (fill, shadow) = rare_title_paints(Some(rare));
+            assert!(fill.is_some(), "{rare:?} should have fill");
+            assert!(shadow.is_some(), "{rare:?} should have shadow");
+        }
     }
 }
