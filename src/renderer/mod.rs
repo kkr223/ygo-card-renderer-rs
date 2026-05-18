@@ -14,7 +14,7 @@ use crate::{
         EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument, RenderOp, RenderRect,
         RubyStyle,
     },
-    model::{RenderError, RenderRequest},
+    model::{FontWeight, RenderError, RenderRequest},
     rare_effect::{CoverageRect, draw_bright_border},
     text::{
         DrawTextLine, RubyLineParams, RubyMultilineParams, draw_multiline_ruby_text,
@@ -106,12 +106,31 @@ impl Renderer {
                                 .map_err(RenderError::Backend)?;
                         }
                     }
+                    RenderOp::ImageAssetRect { asset, rect } => {
+                        if bundle.has_image(asset) {
+                            draw_image_asset_rect(bundle, &mut target, asset, rect)?;
+                        }
+                    }
                     RenderOp::ExternalImage {
                         path,
                         rect,
                         fit,
                         align,
-                    } => draw_external_image(&mut target, path.as_deref(), rect, *fit, *align),
+                        crop,
+                        scale,
+                        offset_x,
+                        offset_y,
+                    } => draw_external_image(
+                        &mut target,
+                        path.as_deref(),
+                        rect,
+                        *fit,
+                        *align,
+                        *crop,
+                        *scale,
+                        *offset_x,
+                        *offset_y,
+                    ),
                     RenderOp::PositionedImage { image } => {
                         draw_positioned_render_image(&mut target, image)
                     }
@@ -131,6 +150,7 @@ impl Renderer {
                         shadow,
                         ruby,
                         width_compress,
+                        font_weight,
                     } => draw_text_line_op(
                         &mut target,
                         language,
@@ -144,6 +164,7 @@ impl Renderer {
                         shadow.as_ref(),
                         ruby.as_ref(),
                         *width_compress,
+                        *font_weight,
                     ),
                     RenderOp::TextBlock {
                         text,
@@ -156,6 +177,8 @@ impl Renderer {
                         shadow,
                         ruby,
                         first_line_compress,
+                        align,
+                        font_weight,
                     } => draw_text_block_op(
                         &mut target,
                         language,
@@ -169,6 +192,8 @@ impl Renderer {
                         shadow.as_ref(),
                         ruby.as_ref(),
                         *first_line_compress,
+                        *align,
+                        *font_weight,
                     ),
                     RenderOp::VisualEffect {
                         target: effect_target,
@@ -411,6 +436,35 @@ fn draw_fill_rect(target: &mut Pixmap, rect: &RenderRect, color: &str, opacity: 
     target.fill_rect(tiny_rect, &paint, tiny_skia::Transform::identity(), None);
 }
 
+fn draw_image_asset_rect(
+    bundle: &AssetBundle,
+    target: &mut Pixmap,
+    asset: &str,
+    rect: &RenderRect,
+) -> Result<(), RenderError> {
+    let Some(rect) = sanitize_render_rect(rect) else {
+        return Ok(());
+    };
+    let pixmap = bundle
+        .decoded_image_for_render(asset)
+        .map_err(RenderError::Backend)?;
+    let source_w = pixmap.width() as f32;
+    let source_h = pixmap.height() as f32;
+    if source_w <= 0.0 || source_h <= 0.0 {
+        return Ok(());
+    }
+    target.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref().as_ref(),
+        &PixmapPaint::default(),
+        Transform::from_scale(rect.width / source_w, rect.height / source_h)
+            .post_translate(rect.x, rect.y),
+        None,
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_text_line_op(
     target: &mut Pixmap,
@@ -425,6 +479,7 @@ fn draw_text_line_op(
     shadow: Option<&crate::model::TextPaint>,
     ruby: Option<&RubyStyle>,
     width_compress: bool,
+    font_weight: Option<FontWeight>,
 ) {
     let Some(rect) = sanitize_render_rect(rect) else {
         return;
@@ -484,6 +539,7 @@ fn draw_text_line_op(
                             language,
                             letter_spacing,
                             scale_x,
+                            font_weight,
                         },
                     );
                 }
@@ -506,6 +562,7 @@ fn draw_text_line_op(
                     language,
                     letter_spacing,
                     scale_x,
+                    font_weight,
                 },
             );
             return;
@@ -551,6 +608,7 @@ fn draw_text_line_op(
                     language,
                     letter_spacing: title_layout.letter_spacing,
                     scale_x: title_layout.scale_x,
+                    font_weight,
                 },
             );
         }
@@ -572,6 +630,7 @@ fn draw_text_line_op(
             language,
             letter_spacing: title_layout.letter_spacing,
             scale_x: title_layout.scale_x,
+            font_weight,
         },
     );
 }
@@ -589,6 +648,8 @@ fn draw_text_block_op(
     shadow: Option<&crate::model::TextPaint>,
     ruby: Option<&RubyStyle>,
     first_line_compress: bool,
+    align: crate::model::TextAlignChoice,
+    font_weight: Option<FontWeight>,
 ) {
     let Some(rect) = sanitize_render_rect(rect) else {
         return;
@@ -638,6 +699,8 @@ fn draw_text_block_op(
             letter_spacing,
             min_font_size: font_size.saturating_sub(10),
             first_line_compress,
+            align: text_align_choice(align),
+            font_weight,
         },
     );
 }

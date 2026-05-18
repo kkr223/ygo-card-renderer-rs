@@ -13,8 +13,7 @@ pub enum CardKind {
 
 // ── Extra display metadata (not stored in CDB) ─────────────────────────────
 
-/// Rare/foil stamp overlaid in the card art area.
-/// Variant names mirror the asset filename stems (`rare-{variant}[‑pendulum].webp`).
+/// Rare/foil preset rendered by algorithmic visual effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RareType {
@@ -63,38 +62,6 @@ pub enum OutFrameEffectBox {
     EblockBorderO,
 }
 
-impl RareType {
-    /// Asset filename stem, e.g. `"hr"` or `"pser-print"`.
-    pub fn asset_stem(self) -> &'static str {
-        match self {
-            Self::Sr => "sr",
-            Self::Hr => "hr",
-            Self::Gr => "gr",
-            Self::Ur => "ur",
-            Self::Utr => "utr",
-            Self::Ser => "ser",
-            Self::Gser => "gser",
-            Self::Pser => "pser",
-            Self::PserPrint => "pser-print",
-            Self::Scr => "scr",
-            Self::Esr => "esr",
-            Self::Npr => "npr",
-            Self::Upr => "upr",
-            Self::Sepr => "sepr",
-            Self::Dt => "dt",
-        }
-    }
-
-    /// Whether this rare type also shows the attribute-rare overlay
-    /// (holographic border around the attribute icon).
-    pub fn shows_attribute_rare(self) -> bool {
-        matches!(
-            self,
-            Self::Hr | Self::Ser | Self::Scr | Self::Gser | Self::Pser | Self::Esr | Self::Sepr
-        )
-    }
-}
-
 /// How to color the card name text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "value")]
@@ -119,6 +86,83 @@ pub enum TextAlignChoice {
     Left,
     Center,
     Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImageFit {
+    Stretch,
+    Cover,
+    Contain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImageAlign {
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCrop {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FontWeight {
+    Keyword(FontWeightKeyword),
+    Number(u16),
+}
+
+impl FontWeight {
+    pub fn to_number(self) -> u16 {
+        match self {
+            Self::Keyword(keyword) => keyword.to_number(),
+            Self::Number(value) => value.clamp(1, 1000),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FontWeightKeyword {
+    Thin,
+    ExtraLight,
+    Light,
+    Normal,
+    Medium,
+    SemiBold,
+    Bold,
+    ExtraBold,
+    Black,
+}
+
+impl FontWeightKeyword {
+    fn to_number(self) -> u16 {
+        match self {
+            Self::Thin => 100,
+            Self::ExtraLight => 200,
+            Self::Light => 300,
+            Self::Normal => 400,
+            Self::Medium => 500,
+            Self::SemiBold => 600,
+            Self::Bold => 700,
+            Self::ExtraBold => 800,
+            Self::Black => 900,
+        }
+    }
 }
 
 /// CSS-style two-stop horizontal gradient for text rendering.
@@ -237,6 +281,18 @@ pub struct PositionedRenderImage {
     pub path: PathBuf,
     pub x: i32,
     pub y: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "rotate")]
+    pub rotation: Option<f32>,
 }
 
 /// Optional grayscale protection mask for visual/rare effects.
@@ -339,6 +395,11 @@ pub struct YgoCardMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub out_frame_effect_opacity: Option<f32>,
 
+    /// Optional custom monster race/type line. Empty strings fall back to the
+    /// auto-generated race + type text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monster_type: Option<String>,
+
     /// Whether the out-frame card name block should be drawn.
     #[serde(default = "default_true")]
     pub out_frame_name_block_enabled: bool,
@@ -369,6 +430,7 @@ impl YgoCardMeta {
             out_frame_effect_box: OutFrameEffectBox::default(),
             out_frame_effect_background_color: None,
             out_frame_effect_opacity: None,
+            monster_type: None,
             out_frame_name_block_enabled: true,
             scale: None,
         }
@@ -459,6 +521,18 @@ pub struct RenderOptions {
     pub language: Option<String>,
     pub art_image: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_fit: Option<ImageFit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_align: Option<ImageAlign>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_crop: Option<ImageCrop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_offset_x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub art_offset_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_mask: Option<EffectMask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreground_image: Option<PositionedRenderImage>,
@@ -470,8 +544,30 @@ pub struct RenderOptions {
     pub text_colors: TextColorOverrides,
     #[serde(default)]
     pub title_width_compress: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<TextAlignChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_align: Option<TextAlignChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_zoom: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_weight: Option<FontWeight>,
     #[serde(default)]
     pub description_first_line_compress: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atk_bar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_block_x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_block_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_block_width: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_block_height: Option<f32>,
     /// 逐字段覆盖布局参数。优先级：此字段 > bundle text_layout > 硬编码默认值。
     #[serde(default)]
     pub layout_overrides: LayoutOverrides,
@@ -482,13 +578,30 @@ impl Default for RenderOptions {
         Self {
             language: None,
             art_image: None,
+            art_fit: None,
+            art_align: None,
+            art_crop: None,
+            art_scale: None,
+            art_offset_x: None,
+            art_offset_y: None,
             effect_mask: None,
             foreground_image: None,
             scale: 1.0,
             description_color_override: None,
             text_colors: TextColorOverrides::default(),
             title_width_compress: false,
+            font: None,
+            align: None,
+            description_align: None,
+            description_zoom: None,
+            description_weight: None,
             description_first_line_compress: false,
+            radius: None,
+            atk_bar: None,
+            effect_block_x: None,
+            effect_block_y: None,
+            effect_block_width: None,
+            effect_block_height: None,
             layout_overrides: LayoutOverrides::default(),
         }
     }

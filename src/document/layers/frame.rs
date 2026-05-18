@@ -36,6 +36,26 @@ pub(crate) fn push_out_frame_nodes(
         OutFrameEffectBox::EblockBorder => &base.out_frame.effect_box,
         OutFrameEffectBox::EblockBorderO => &base.out_frame.effect_box_colored,
     };
+    let effect_rect = RenderRect::from_f32(
+        request
+            .options
+            .effect_block_x
+            .unwrap_or(effect_box.x as f32),
+        request
+            .options
+            .effect_block_y
+            .unwrap_or(effect_box.y as f32),
+        request
+            .options
+            .effect_block_width
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or_else(|| effect_box.w(bundle) as f32),
+        request
+            .options
+            .effect_block_height
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or_else(|| effect_box.h(bundle) as f32),
+    );
 
     if card.out_frame_effect_enabled {
         // Effect box background FillRect
@@ -50,12 +70,7 @@ pub(crate) fn push_out_frame_nodes(
                     "out-frame-effect-bg",
                     51,
                     RenderOp::FillRect {
-                        rect: RenderRect::new(
-                            effect_box.x,
-                            effect_box.y,
-                            effect_box.w(bundle),
-                            effect_box.h(bundle),
-                        ),
+                        rect: effect_rect,
                         color: color.to_string(),
                         opacity,
                     },
@@ -66,10 +81,9 @@ pub(crate) fn push_out_frame_nodes(
         nodes.push(RenderNode::new(
             "out-frame-effect-box",
             52,
-            RenderOp::ImageAsset {
+            RenderOp::ImageAssetRect {
                 asset: effect_box.asset.clone(),
-                x: effect_box.x as f32,
-                y: effect_box.y as f32,
+                rect: effect_rect,
             },
         ));
     }
@@ -176,7 +190,9 @@ pub(crate) fn push_stats_nodes(
 ) {
     let card = &request.card;
 
-    if card.is_monster() || card.is_pendulum() {
+    let show_atk_bar = request.options.atk_bar.unwrap_or(true);
+
+    if show_atk_bar && (card.is_monster() || card.is_pendulum()) {
         // Stat separator background
         let sep_asset = if card.is_link() {
             bundle
@@ -212,7 +228,7 @@ pub(crate) fn push_stats_nodes(
         }
     }
 
-    if card.is_monster() {
+    if show_atk_bar && card.is_monster() {
         let stats_fill = paint::resolve_text_fill(
             &request.options.text_colors.stats,
             None,
@@ -237,6 +253,7 @@ pub(crate) fn push_stats_nodes(
                     shadow: stats_shadow.clone(),
                     ruby: None,
                     width_compress: false,
+                    font_weight: None,
                 },
             ));
             // Link value
@@ -254,6 +271,7 @@ pub(crate) fn push_stats_nodes(
                     shadow: stats_shadow.clone(),
                     ruby: None,
                     width_compress: false,
+                    font_weight: None,
                 },
             ));
         } else {
@@ -272,6 +290,7 @@ pub(crate) fn push_stats_nodes(
                     shadow: stats_shadow.clone(),
                     ruby: None,
                     width_compress: false,
+                    font_weight: None,
                 },
             ));
             // DEF
@@ -289,6 +308,7 @@ pub(crate) fn push_stats_nodes(
                     shadow: stats_shadow,
                     ruby: None,
                     width_compress: false,
+                    font_weight: None,
                 },
             ));
         }
@@ -337,6 +357,7 @@ pub(crate) fn push_stats_nodes(
                 shadow: stats_shadow.clone(),
                 ruby: None,
                 width_compress: false,
+                font_weight: None,
             },
         ));
         nodes.push(RenderNode::new(
@@ -353,6 +374,7 @@ pub(crate) fn push_stats_nodes(
                 shadow: stats_shadow,
                 ruby: None,
                 width_compress: false,
+                font_weight: None,
             },
         ));
     }

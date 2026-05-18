@@ -309,6 +309,10 @@ impl AssetBundle {
         Ok(())
     }
 
+    pub(crate) fn decoded_image_for_render(&self, name: &str) -> Result<Arc<Pixmap>, String> {
+        self.decoded_image(name)
+    }
+
     fn decoded_image(&self, name: &str) -> Result<Arc<Pixmap>, String> {
         let cache = self
             .image_cache

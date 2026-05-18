@@ -6,7 +6,6 @@ mod bright_border;
 mod diamond_foil;
 mod dot_grid;
 mod holographic;
-mod legacy;
 pub(crate) mod math;
 mod optical;
 mod rainbow_foil;
@@ -34,9 +33,6 @@ pub(crate) use optical::{
 };
 pub(crate) use rainbow_foil::draw_rainbow_foil;
 pub(crate) use secret::{draw_secret_foil, draw_secret_weave};
-
-// Legacy (not called by active code paths)
-pub use legacy::{RareCoverage, draw_rare_effect};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

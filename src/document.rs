@@ -14,10 +14,12 @@ use crate::{
     constants::{BACKGROUND_CREAM, CARD_HEIGHT, CARD_WIDTH},
     layout::layout_style,
     model::{
-        CardKind, PositionedRenderImage, RenderOptions, RenderRequest, TextAlignChoice, TextPaint,
-        YgoCardMeta,
+        CardKind, FontWeight, PositionedRenderImage, RenderOptions, RenderRequest, TextAlignChoice,
+        TextPaint, YgoCardMeta,
     },
 };
+
+pub use crate::model::{ImageAlign, ImageCrop, ImageFit};
 
 // ── RenderDocument ────────────────────────────────────────────────────────────
 
@@ -71,26 +73,32 @@ impl RenderDocument {
             RenderOp::ExternalImage {
                 path: request.options.art_image.clone(),
                 rect: RenderRect::new(art_x, art_y, art_w, art_h),
-                fit: ImageFit::Cover,
-                align: ImageAlign::Top,
+                fit: request.options.art_fit.unwrap_or(ImageFit::Cover),
+                align: request.options.art_align.unwrap_or(ImageAlign::Top),
+                crop: request.options.art_crop,
+                scale: sanitize_positive_f32(request.options.art_scale, 1.0),
+                offset_x: sanitize_f32(request.options.art_offset_x, 0.0),
+                offset_y: sanitize_f32(request.options.art_offset_y, 0.0),
             },
         ));
 
         // ── Mask ───────────────────────────────────────────────────────────
-        let mask = if card.is_pendulum() {
-            &base.mask.pendulum
-        } else {
-            &base.mask.normal
-        };
-        nodes.push(RenderNode::new(
-            "mask",
-            20,
-            RenderOp::ImageAsset {
-                asset: mask.asset.clone(),
-                x: mask.x as f32,
-                y: mask.y as f32,
-            },
-        ));
+        if request.options.radius.unwrap_or(true) {
+            let mask = if card.is_pendulum() {
+                &base.mask.pendulum
+            } else {
+                &base.mask.normal
+            };
+            nodes.push(RenderNode::new(
+                "mask",
+                20,
+                RenderOp::ImageAsset {
+                    asset: mask.asset.clone(),
+                    x: mask.x as f32,
+                    y: mask.y as f32,
+                },
+            ));
+        }
 
         // ── Rare effects ───────────────────────────────────────────────────
         rare::push_rare_effect_nodes(&mut nodes, card.rare);
@@ -160,7 +168,10 @@ impl RenderDocument {
         // ── Spell/Trap line or monster type line → TextLine ─────────────────
         if card.is_spell() || card.is_trap() {
             layers::text::push_spell_trap_nodes(&mut nodes, bundle, request, &style, language);
-        } else if let Some(text) = build_effect_line(card, request.kind, language) {
+        } else if let Some(text) = custom_monster_type(card)
+            .map(ToOwned::to_owned)
+            .or_else(|| build_effect_line(card, request.kind, language))
+        {
             layers::text::push_monster_type_node(&mut nodes, &style, base, &text, &request.options);
         }
 
@@ -274,6 +285,23 @@ fn effective_output_scale(request: &RenderRequest) -> f32 {
     }
 }
 
+fn custom_monster_type(card: &YgoCardMeta) -> Option<&str> {
+    card.monster_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn sanitize_f32(value: Option<f32>, fallback: f32) -> f32 {
+    value.filter(|v| v.is_finite()).unwrap_or(fallback)
+}
+
+fn sanitize_positive_f32(value: Option<f32>, fallback: f32) -> f32 {
+    value
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(fallback)
+}
+
 pub(crate) fn laser_asset_name(laser: &str) -> Option<String> {
     let laser = laser.trim();
     if laser.is_empty() {
@@ -328,12 +356,24 @@ pub enum RenderOp {
         x: f32,
         y: f32,
     },
+    ImageAssetRect {
+        asset: String,
+        rect: RenderRect,
+    },
     ExternalImage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
         rect: RenderRect,
         fit: ImageFit,
         align: ImageAlign,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crop: Option<ImageCrop>,
+        #[serde(default = "default_image_scale")]
+        scale: f32,
+        #[serde(default)]
+        offset_x: f32,
+        #[serde(default)]
+        offset_y: f32,
     },
     PositionedImage {
         image: PositionedRenderImage,
@@ -357,6 +397,8 @@ pub enum RenderOp {
         ruby: Option<RubyStyle>,
         #[serde(default)]
         width_compress: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_weight: Option<FontWeight>,
     },
     TextBlock {
         text: String,
@@ -372,6 +414,10 @@ pub enum RenderOp {
         ruby: Option<RubyStyle>,
         #[serde(default)]
         first_line_compress: bool,
+        #[serde(default)]
+        align: TextAlignChoice,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_weight: Option<FontWeight>,
     },
     VisualEffect {
         target: EffectTarget,
@@ -431,23 +477,6 @@ impl RenderRect {
     }
 }
 
-// ── ImageFit / ImageAlign ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ImageFit {
-    Stretch,
-    Cover,
-    Contain,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ImageAlign {
-    Top,
-    Center,
-}
-
 // ── EffectTarget / EffectStyle ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -488,6 +517,10 @@ pub enum EffectStyle {
 
 fn default_visible() -> bool {
     true
+}
+
+fn default_image_scale() -> f32 {
+    1.0
 }
 
 impl PositionedAsset {

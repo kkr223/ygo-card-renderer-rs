@@ -10,6 +10,7 @@
 
 use tiny_skia::{Color, Pixmap};
 
+use crate::model::FontWeight;
 use crate::ruby::{
     RT_COMPRESS_RATE, RT_STRETCH_RATE, RUBY_PADDING_MAX, RubyToken, contains_ruby_markup,
     parse_ruby_text,
@@ -17,7 +18,8 @@ use crate::ruby::{
 
 use super::{
     draw::{
-        DrawMultiline, ShadowedText, TextBrush, draw_multiline_text, draw_text_shadowed_scaled,
+        DrawMultiline, ShadowedText, TextAlign, TextBrush, draw_multiline_text,
+        draw_text_shadowed_scaled,
     },
     measure::{estimate_text_width, max_lines_for_height, total_text_height},
 };
@@ -47,6 +49,7 @@ pub struct RubyLineParams<'a> {
     pub letter_spacing: f32,
     /// Overall horizontal compression factor for the whole line.
     pub scale_x: f32,
+    pub font_weight: Option<FontWeight>,
 }
 
 /// Parameters for drawing multi-line ruby-annotated text.
@@ -70,6 +73,8 @@ pub struct RubyMultilineParams<'a> {
     pub letter_spacing: f32,
     pub min_font_size: u32,
     pub first_line_compress: bool,
+    pub align: TextAlign,
+    pub font_weight: Option<FontWeight>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +265,7 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
                     family_name: p.family,
                     letter_spacing: p.letter_spacing,
                     scale_x: p.scale_x,
+                    font_weight: p.font_weight,
                 },
             );
         }
@@ -297,6 +303,7 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
                         family_name: p.family,
                         letter_spacing: slot.rt_letter_spacing,
                         scale_x: combined_scale,
+                        font_weight: p.font_weight,
                     },
                 );
             }
@@ -404,6 +411,8 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 letter_spacing: p.letter_spacing,
                 min_font_size: p.min_font_size,
                 first_line_compress: p.first_line_compress,
+                align: p.align,
+                font_weight: p.font_weight,
             },
         );
         return;
@@ -467,11 +476,28 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
         } else {
             p.y + index as f32 * font_size as f32 * p.line_height
         };
+        let line_width = measure_ruby_slots(
+            line_tokens,
+            p.family,
+            font_size as f32,
+            eff_rt_font_size,
+            p.letter_spacing,
+            p.rt_font_scale_x,
+        )
+        .iter()
+        .map(RubySlot::slot_width)
+        .sum::<f32>()
+        .min(p.width);
+        let line_x = match p.align {
+            TextAlign::Left => p.x,
+            TextAlign::Center => p.x + (p.width - line_width) / 2.0,
+            TextAlign::Right => p.x + p.width - line_width,
+        };
         draw_ruby_text_line(
             pixmap,
             RubyLineParams {
                 tokens: line_tokens,
-                x: p.x,
+                x: line_x,
                 y: line_y,
                 font_size: font_size as f32,
                 rt_font_size: eff_rt_font_size,
@@ -485,6 +511,7 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 language: p.language,
                 letter_spacing: p.letter_spacing,
                 scale_x: 1.0,
+                font_weight: p.font_weight,
             },
         );
     }

@@ -335,22 +335,7 @@ fn pendulum_border_effect_areas(bundle: &AssetBundle, base: &BaseLayout) -> Vec<
         }
     }
 
-    // Back-compat for bundles built before `base.mask.pendulum_border` existed.
-    const FALLBACK_ASSET: &str = "rare-pser-print-pendulum.webp";
-    decode_bundle_image(bundle, FALLBACK_ASSET)
-        .map(Arc::new)
-        .map(|mask| {
-            vec![EffectArea::MaskedRect {
-                rect: CoverageRect {
-                    x: 0,
-                    y: 0,
-                    w: mask.width(),
-                    h: mask.height(),
-                },
-                mask,
-            }]
-        })
-        .unwrap_or_default()
+    Vec::new()
 }
 
 fn art_effect_areas(

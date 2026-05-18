@@ -386,7 +386,6 @@ fn build_layout_with_generated_masks(
     let mut layout: Value = serde_json::from_str(&json_str)?;
 
     add_pendulum_art_effect_mask(image_dir, image_entries, &mut layout, images, payload)?;
-    add_pendulum_border_effect_mask(image_dir, image_entries, &mut layout);
 
     let Some(arrows) = layout["base"]["link_arrows"].as_object_mut() else {
         return Ok(layout.to_string().into_bytes());
@@ -434,17 +433,6 @@ fn build_layout_with_generated_masks(
             json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
     }
     Ok(layout.to_string().into_bytes())
-}
-
-fn add_pendulum_border_effect_mask(
-    image_dir: &Path,
-    image_entries: &[(String, PathBuf)],
-    layout: &mut Value,
-) {
-    const ASSET: &str = "rare-pser-print-pendulum.webp";
-    if resource_path(image_dir, image_entries, ASSET).is_some() {
-        layout["base"]["mask"]["pendulum_border"] = json!({"asset": ASSET, "x": 0, "y": 0});
-    }
 }
 
 fn add_pendulum_art_effect_mask(

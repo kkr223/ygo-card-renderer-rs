@@ -63,14 +63,21 @@ pub(crate) fn push_title_node(
         RenderOp::TextLine {
             text: card.name.clone(),
             rect: RenderRect::new(style.name_x, style.name_top, title_width, base.name.height),
-            font_family: style.name_font_family.clone(),
+            font_family: request
+                .options
+                .font
+                .as_deref()
+                .filter(|font| !font.trim().is_empty())
+                .map(|font| format!("'{font}'"))
+                .unwrap_or_else(|| style.name_font_family.clone()),
             font_size: style.name_size,
             letter_spacing: style.title_letter_spacing,
-            align: TextAlignChoice::Left,
+            align: request.options.align.unwrap_or(TextAlignChoice::Left),
             fill,
             shadow,
             ruby,
             width_compress: request.options.title_width_compress,
+            font_weight: None,
         },
     ));
 }
@@ -147,6 +154,7 @@ pub(crate) fn push_spell_trap_nodes(
             shadow: shadow.clone(),
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 
@@ -208,6 +216,7 @@ pub(crate) fn push_spell_trap_nodes(
             shadow,
             ruby,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }
@@ -247,6 +256,7 @@ pub(crate) fn push_monster_type_node(
             shadow,
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }
@@ -282,13 +292,18 @@ pub(crate) fn push_pendulum_description_node(
                     base.pendulum_description.height,
                 ),
                 font_family: style.base_font_family.clone(),
-                font_size: style.pendulum_description_size,
+                font_size: zoomed_font_size(
+                    style.pendulum_description_size,
+                    options.description_zoom,
+                ),
                 line_height: style.pendulum_description_line_height,
                 letter_spacing: style.pendulum_description_letter_spacing,
                 fill,
                 shadow,
                 ruby: paint::description_ruby_style(style),
                 first_line_compress: options.description_first_line_compress,
+                align: options.description_align.unwrap_or(TextAlignChoice::Left),
+                font_weight: options.description_weight,
             },
         ));
     }
@@ -324,15 +339,24 @@ pub(crate) fn push_description_node(
                 description_height(card, style, base),
             ),
             font_family: style.base_font_family.clone(),
-            font_size: style.description_size,
+            font_size: zoomed_font_size(style.description_size, options.description_zoom),
             line_height: style.description_line_height,
             letter_spacing: style.description_letter_spacing,
             fill,
             shadow,
             ruby: paint::description_ruby_style(style),
             first_line_compress: options.description_first_line_compress,
+            align: options.description_align.unwrap_or(TextAlignChoice::Left),
+            font_weight: options.description_weight,
         },
     ));
+}
+
+fn zoomed_font_size(base: u32, zoom: Option<f32>) -> u32 {
+    let zoom = zoom
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(1.0);
+    ((base as f32 * zoom).round() as u32).max(1)
 }
 
 // ── Spell/trap icon margins helper ───────────────────────────────────────────

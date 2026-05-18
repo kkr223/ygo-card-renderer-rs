@@ -12,6 +12,8 @@
 use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping};
 use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 
+use crate::model::FontWeight;
+
 use super::{
     engine::{TextEngine, with_text_engine},
     measure::{
@@ -49,6 +51,7 @@ pub struct DrawTextLine<'a> {
     pub letter_spacing: f32,
     /// Horizontal glyph-level scale (1.0 = no compression).
     pub scale_x: f32,
+    pub font_weight: Option<FontWeight>,
 }
 
 impl<'a> DrawTextLine<'a> {
@@ -82,6 +85,7 @@ impl<'a> DrawTextLine<'a> {
             language,
             letter_spacing,
             scale_x: 1.0,
+            font_weight: None,
         }
     }
 
@@ -116,6 +120,8 @@ pub struct DrawMultiline<'a> {
     pub letter_spacing: f32,
     pub min_font_size: u32,
     pub first_line_compress: bool,
+    pub align: TextAlign,
+    pub font_weight: Option<FontWeight>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -287,6 +293,7 @@ fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
             family_name: p.family_name,
             letter_spacing: p.letter_spacing,
             scale_x: p.scale_x,
+            font_weight: p.font_weight,
         },
     );
 }
@@ -307,6 +314,8 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
                 DrawMultiline {
                     text,
                     first_line_compress: false,
+                    align: p.align,
+                    font_weight: p.font_weight,
                     ..p
                 },
             );
@@ -358,11 +367,20 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
         } else {
             p.y + index as f32 * font_size as f32 * p.line_height
         };
+        let line_width = estimate_text_width(
+            line,
+            p.language,
+            p.family_name,
+            font_size as f32,
+            p.letter_spacing,
+        )
+        .min(p.width);
+        let draw_x = aligned_line_x(p.x, p.width, line_width, p.align);
         draw_text_shadowed_scaled(
             pixmap,
             ShadowedText {
                 text: line,
-                x: p.x,
+                x: draw_x,
                 y: line_y,
                 font_size: font_size as f32,
                 width: p.width,
@@ -374,6 +392,7 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
                 family_name: p.family_name,
                 letter_spacing: p.letter_spacing,
                 scale_x: 1.0,
+                font_weight: p.font_weight,
             },
         );
     }
@@ -398,6 +417,7 @@ pub struct ShadowedText<'a> {
     pub family_name: &'a str,
     pub letter_spacing: f32,
     pub scale_x: f32,
+    pub font_weight: Option<FontWeight>,
 }
 
 /// Draw text with a 1px shadow offset and optional horizontal scale.
@@ -421,7 +441,11 @@ pub fn draw_text_shadowed_scaled(pixmap: &mut Pixmap, p: ShadowedText<'_>) {
 
         let attrs = Attrs::new()
             .family(Family::Name(resolved_family.as_str()))
-            .weight(font_weight_for_family(resolved_family.as_str()));
+            .weight(
+                p.font_weight
+                    .map(|weight| cosmic_text::Weight(weight.to_number()))
+                    .unwrap_or_else(|| font_weight_for_family(resolved_family.as_str())),
+            );
         buffer.set_text(font_system, p.text, &attrs, Shaping::Advanced);
         buffer.shape_until_scroll(font_system, true);
 
@@ -646,10 +670,11 @@ fn draw_multiline_with_first_line_compress(
             brush: p.brush.clone(),
             shadow_brush: p.shadow_brush.clone(),
             family_name: p.family_name,
-            align: TextAlign::Left,
+            align: p.align,
             language: p.language,
             letter_spacing: p.letter_spacing,
             scale_x: first_line_scale_x,
+            font_weight: p.font_weight,
         },
     );
 
@@ -668,6 +693,14 @@ fn draw_multiline_with_first_line_compress(
             ..p
         },
     );
+}
+
+fn aligned_line_x(x: f32, width: f32, line_width: f32, align: TextAlign) -> f32 {
+    match align {
+        TextAlign::Left => x,
+        TextAlign::Center => x + (width - line_width) / 2.0,
+        TextAlign::Right => x + width - line_width,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

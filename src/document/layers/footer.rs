@@ -42,6 +42,7 @@ pub(crate) fn push_password_node(
             shadow,
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }
@@ -85,6 +86,7 @@ pub(crate) fn push_scale_line_node(
             shadow: scale_shadow,
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }
@@ -159,6 +161,7 @@ pub(crate) fn push_package_node(
             shadow,
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }
@@ -219,6 +222,7 @@ pub(crate) fn push_copyright_node(
             shadow,
             ruby: None,
             width_compress: false,
+            font_weight: None,
         },
     ));
 }

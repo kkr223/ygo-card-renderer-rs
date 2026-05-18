@@ -5,10 +5,12 @@ use std::{fs, path::PathBuf};
 use ygo_card_renderer_rs::{
     CardKind, RenderDocument, RenderOptions, RenderRequest, Renderer,
     asset_bundle::init_global_bundle,
-    document::{EffectStyle, EffectTarget, EffectTargetWeight, ImageFit, RenderOp},
+    document::{
+        EffectStyle, EffectTarget, EffectTargetWeight, ImageAlign, ImageCrop, ImageFit, RenderOp,
+    },
     model::{
-        EffectMask, LayoutOverrides, OutFrameEffectBox, PositionedRenderImage, RareType,
-        TextAlignChoice, YgoCardMeta,
+        EffectMask, FontWeight, FontWeightKeyword, LayoutOverrides, OutFrameEffectBox,
+        PositionedRenderImage, RareType, TextAlignChoice, YgoCardMeta,
     },
 };
 use ygopro_cdb_encode_rs::YgoProCdb;
@@ -118,6 +120,12 @@ fn foreground_image_from_env() -> Option<PositionedRenderImage> {
         path: PathBuf::from(env_opt_string("YGO_FOREGROUND_IMAGE")?),
         x: env_opt_i32("YGO_FOREGROUND_X").unwrap_or(0),
         y: env_opt_i32("YGO_FOREGROUND_Y").unwrap_or(0),
+        width: None,
+        height: None,
+        scale: None,
+        scale_x: None,
+        scale_y: None,
+        rotation: None,
     })
 }
 
@@ -126,6 +134,12 @@ fn out_frame_image_from_env() -> Option<PositionedRenderImage> {
         path: PathBuf::from(env_opt_string("YGO_OUT_FRAME_IMAGE")?),
         x: env_opt_i32("YGO_OUT_FRAME_X").unwrap_or(0),
         y: env_opt_i32("YGO_OUT_FRAME_Y").unwrap_or(0),
+        width: None,
+        height: None,
+        scale: None,
+        scale_x: None,
+        scale_y: None,
+        rotation: None,
     })
 }
 
@@ -215,6 +229,145 @@ fn render_document_roundtrips_and_renders() {
         .render_document(&document)
         .expect("render document after external-style edit");
     assert!(!png.is_empty());
+}
+
+#[test]
+fn render_document_wires_title_description_and_art_options() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 10000000,
+        name: "文档测试卡".to_string(),
+        desc: "第一行描述\n第二行描述".to_string(),
+        type_: 0x41,
+        attack: 1800,
+        defense: 1200,
+        level: 4,
+        race: 0x1,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+    let mut card: YgoCardMeta = entry.into();
+    card.monster_type = Some("[Mage/Effect]".to_string());
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions {
+            language: Some("jp".to_string()),
+            font: Some("'Custom Font'".to_string()),
+            align: Some(TextAlignChoice::Center),
+            description_align: Some(TextAlignChoice::Right),
+            description_zoom: Some(1.25),
+            description_weight: Some(FontWeight::Keyword(FontWeightKeyword::Bold)),
+            art_fit: Some(ImageFit::Contain),
+            art_align: Some(ImageAlign::BottomRight),
+            art_crop: Some(ImageCrop {
+                x: 12.0,
+                y: 8.0,
+                width: 300.0,
+                height: 400.0,
+            }),
+            art_scale: Some(0.75),
+            art_offset_x: Some(14.0),
+            art_offset_y: Some(-6.0),
+            ..RenderOptions::default()
+        },
+    };
+
+    let document = Renderer::new()
+        .build_document(&request)
+        .expect("build document");
+
+    let title = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "title")
+        .unwrap();
+    assert!(matches!(
+        &title.op,
+        RenderOp::TextLine { font_family, align, .. }
+            if font_family.contains("Custom Font") && *align == TextAlignChoice::Center
+    ));
+
+    let description = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "description")
+        .unwrap();
+    assert!(matches!(
+        &description.op,
+        RenderOp::TextBlock { align, font_weight, .. }
+            if *align == TextAlignChoice::Right
+                && matches!(font_weight, Some(FontWeight::Keyword(FontWeightKeyword::Bold)))
+    ));
+
+    let monster_type = document
+        .nodes
+        .iter()
+        .find(|node| node.id == "monster-type-line")
+        .unwrap();
+    assert!(matches!(
+        &monster_type.op,
+        RenderOp::TextLine { text, .. } if text == "[Mage/Effect]"
+    ));
+
+    let art = document.nodes.iter().find(|node| node.id == "art").unwrap();
+    assert!(matches!(
+        &art.op,
+        RenderOp::ExternalImage {
+            fit,
+            align,
+            crop: Some(ImageCrop { x: 12.0, y: 8.0, width: 300.0, height: 400.0 }),
+            scale,
+            offset_x,
+            offset_y,
+            ..
+        } if *fit == ImageFit::Contain
+            && *align == ImageAlign::BottomRight
+            && (*scale - 0.75).abs() < f32::EPSILON
+            && (*offset_x - 14.0).abs() < f32::EPSILON
+            && (*offset_y + 6.0).abs() < f32::EPSILON
+    ));
+}
+
+#[test]
+fn render_document_hides_radius_and_atk_bar_nodes() {
+    init_bundle();
+
+    let entry = ygopro_cdb_encode_rs::CardDataEntry {
+        code: 10000001,
+        name: "节点隐藏测试".to_string(),
+        desc: "用于验证文档节点开关。".to_string(),
+        type_: 0x41,
+        attack: 1400,
+        defense: 1200,
+        level: 4,
+        race: 0x1,
+        attribute: 0x10,
+        ..ygopro_cdb_encode_rs::CardDataEntry::default()
+    };
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card: entry.into(),
+        options: RenderOptions {
+            language: Some("jp".to_string()),
+            atk_bar: Some(false),
+            radius: Some(false),
+            ..RenderOptions::default()
+        },
+    };
+
+    let document = Renderer::new()
+        .build_document(&request)
+        .expect("build document");
+
+    assert!(!document.nodes.iter().any(|node| matches!(
+        node.id.as_str(),
+        "stats-separator" | "stats-atk" | "stats-def"
+    )));
+    assert!(!document.nodes.iter().any(|node| node.id == "mask"));
 }
 
 #[test]

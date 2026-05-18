@@ -1,5 +1,5 @@
 use ygopro_cdb_encode_rs::{
-    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_TOKEN, TYPE_XYZ,
+    CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ,
 };
 
 const TYPE_NORMAL: u32 = 0x10;
@@ -18,46 +18,6 @@ const TYPE_TOON: u32 = 0x40_0000;
 const TYPE_SPS_SUMMON: u32 = 0x200_0000;
 
 use crate::{asset_bundle::BaseLayout, layout::LayoutStyle, model::CardKind};
-
-/// Resolve the frame asset by priority: spell/trap → token → pendulum variants
-/// → link/xyz/synchro/fusion/ritual → effect/normal.
-pub(crate) fn frame_asset_name(card: &CardDataEntry) -> &'static str {
-    if card.is_spell() {
-        "card-spell.webp"
-    } else if card.is_trap() {
-        "card-trap.webp"
-    } else if (card.type_ & TYPE_TOKEN) != 0 {
-        "card-token.webp"
-    } else if card.is_pendulum() {
-        if (card.type_ & TYPE_XYZ) != 0 {
-            "card-xyz-pendulum.webp"
-        } else if (card.type_ & TYPE_SYNCHRO) != 0 {
-            "card-synchro-pendulum.webp"
-        } else if (card.type_ & TYPE_FUSION) != 0 {
-            "card-fusion-pendulum.webp"
-        } else if (card.type_ & TYPE_RITUAL) != 0 {
-            "card-ritual-pendulum.webp"
-        } else if (card.type_ & TYPE_EFFECT) != 0 {
-            "card-effect-pendulum.webp"
-        } else {
-            "card-normal-pendulum.webp"
-        }
-    } else if (card.type_ & TYPE_LINK) != 0 {
-        "card-link.webp"
-    } else if (card.type_ & TYPE_XYZ) != 0 {
-        "card-xyz.webp"
-    } else if (card.type_ & TYPE_SYNCHRO) != 0 {
-        "card-synchro.webp"
-    } else if (card.type_ & TYPE_FUSION) != 0 {
-        "card-fusion.webp"
-    } else if (card.type_ & TYPE_RITUAL) != 0 {
-        "card-ritual.webp"
-    } else if (card.type_ & TYPE_EFFECT) != 0 {
-        "card-effect.webp"
-    } else {
-        "card-normal.webp"
-    }
-}
 
 pub(crate) fn build_effect_line(
     card: &CardDataEntry,
@@ -729,18 +689,8 @@ fn join_trimmed_lines(lines: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_effect_line, frame_asset_name, split_pendulum_description};
-    use ygopro_cdb_encode_rs::{CardDataEntry, TYPE_MONSTER, TYPE_TOKEN};
-
-    #[test]
-    fn token_cards_use_token_frame() {
-        let card = CardDataEntry {
-            type_: TYPE_MONSTER | TYPE_TOKEN,
-            ..CardDataEntry::default()
-        };
-
-        assert_eq!(frame_asset_name(&card), "card-token.webp");
-    }
+    use super::{build_effect_line, split_pendulum_description};
+    use ygopro_cdb_encode_rs::{CardDataEntry, TYPE_MONSTER};
 
     #[test]
     fn builds_english_monster_type_line() {
