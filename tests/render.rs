@@ -1007,7 +1007,7 @@ fn render_rare_effects() {
         // ("ser", RareType::Ser),
         ("npr", RareType::Npr),
         // ("gser", RareType::Gser),
-        // ("pser", RareType::Pser),
+        ("pser", RareType::Pser),
         // ("pser-print", RareType::PserPrint),
     ];
 

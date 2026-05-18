@@ -342,6 +342,7 @@ pub(super) fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, O
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+#[cfg(test)]
 mod tests {
     use super::*;
 
