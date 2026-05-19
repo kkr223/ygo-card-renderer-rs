@@ -7,7 +7,7 @@ mod rare;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    asset_bundle::{AssetBundle, PositionedAsset},
+    asset_bundle::{AssetBundle, BaseLayout, PositionedAsset},
     card_logic::{
         attribute_asset_name, build_effect_line, image_frame, split_pendulum_description,
     },
@@ -84,20 +84,7 @@ impl RenderDocument {
 
         // ── Mask ───────────────────────────────────────────────────────────
         if request.options.radius.unwrap_or(true) {
-            let mask = if card.is_pendulum() {
-                &base.mask.pendulum
-            } else {
-                &base.mask.normal
-            };
-            nodes.push(RenderNode::new(
-                "mask",
-                20,
-                RenderOp::ImageAsset {
-                    asset: mask.asset.clone(),
-                    x: mask.x as f32,
-                    y: mask.y as f32,
-                },
-            ));
+            push_mask_nodes(&mut nodes, card, base);
         }
 
         // ── Rare effects ───────────────────────────────────────────────────
@@ -263,6 +250,35 @@ impl RenderDocument {
 }
 
 // ── RenderDocument helpers ─────────────────────────────────────────────────────
+
+fn push_mask_nodes(nodes: &mut Vec<RenderNode>, card: &YgoCardMeta, base: &BaseLayout) {
+    if card.is_pendulum() {
+        if let (Some(border), Some(effect)) =
+            (&base.mask.pendulum_border, &base.mask.pendulum_effect)
+        {
+            push_mask_node(nodes, "mask", 20, border);
+            push_mask_node(nodes, "mask-pendulum-effect", 21, effect);
+            return;
+        }
+
+        push_mask_node(nodes, "mask", 20, &base.mask.pendulum);
+        return;
+    }
+
+    push_mask_node(nodes, "mask", 20, &base.mask.normal);
+}
+
+fn push_mask_node(nodes: &mut Vec<RenderNode>, id: &str, z: i32, mask: &PositionedAsset) {
+    nodes.push(RenderNode::new(
+        id,
+        z,
+        RenderOp::ImageAsset {
+            asset: mask.asset.clone(),
+            x: mask.x as f32,
+            y: mask.y as f32,
+        },
+    ));
+}
 
 fn foreground_image_for_request(request: &RenderRequest) -> Option<&PositionedRenderImage> {
     if request.card.out_frame {

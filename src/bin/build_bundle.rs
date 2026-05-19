@@ -385,6 +385,8 @@ fn build_layout_with_generated_masks(
     json_str.push('}');
     let mut layout: Value = serde_json::from_str(&json_str)?;
 
+    add_pendulum_split_masks(image_dir, image_entries, &mut layout)?;
+    add_pendulum_effect_border_mask(image_dir, image_entries, &mut layout, images, payload)?;
     add_pendulum_art_effect_mask(image_dir, image_entries, &mut layout, images, payload)?;
 
     let Some(arrows) = layout["base"]["link_arrows"].as_object_mut() else {
@@ -433,6 +435,83 @@ fn build_layout_with_generated_masks(
             json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
     }
     Ok(layout.to_string().into_bytes())
+}
+
+fn add_pendulum_split_masks(
+    image_dir: &Path,
+    image_entries: &[(String, PathBuf)],
+    layout: &mut Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let border_asset = "card-mask-pendulum-art.webp";
+    let effect_asset = "card-mask-pendulum-effect.webp";
+    let Some(border_path) = resource_path(image_dir, image_entries, border_asset) else {
+        return Ok(());
+    };
+    let Some(effect_path) = resource_path(image_dir, image_entries, effect_asset) else {
+        return Ok(());
+    };
+
+    let pendulum = &layout["base"]["mask"]["pendulum"];
+    let x = json_u32(pendulum, "x")?;
+    let y = json_u32(pendulum, "y")?;
+    let (_, border_h) = image_size(&border_path)?;
+    // Touch the lower asset too so invalid image resources fail during bundle build.
+    let _ = image_size(&effect_path)?;
+
+    layout["base"]["mask"]["pendulum_border"] = json!({"asset": border_asset, "x": x, "y": y});
+    layout["base"]["mask"]["pendulum_effect"] =
+        json!({"asset": effect_asset, "x": x, "y": y.saturating_add(border_h)});
+    Ok(())
+}
+
+fn add_pendulum_effect_border_mask(
+    image_dir: &Path,
+    image_entries: &[(String, PathBuf)],
+    layout: &mut Value,
+    images: &mut serde_json::Map<String, Value>,
+    payload: &mut Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let effect = &layout["base"]["mask"]["pendulum_effect"];
+    if effect.is_null() {
+        return Ok(());
+    }
+    let effect_x = json_u32(effect, "x")?;
+    let effect_y = json_u32(effect, "y")?;
+    let Some(effect_asset) = effect["asset"].as_str() else {
+        return Ok(());
+    };
+    let Some(effect_path) = resource_path(image_dir, image_entries, effect_asset) else {
+        return Ok(());
+    };
+
+    let rgba = image::open(&effect_path)?.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut mask = ImageBuffer::<Rgba<u8>, _>::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let p = rgba.get_pixel(x, y);
+            let alpha = p[3];
+            let luma =
+                (299u32 * p[0] as u32 + 587u32 * p[1] as u32 + 114u32 * p[2] as u32) / 1000u32;
+            // The lower pendulum resource contains both pale fill and dark
+            // outlines. Keep only the dark outline/anti-aliased border pixels
+            // so rare effects do not wash over the readable text background.
+            let allow = if alpha > 8 && luma <= 190 { alpha } else { 0 };
+            mask.put_pixel(x, y, Rgba([allow, allow, allow, allow]));
+        }
+    }
+
+    let mask_name = "card-mask-pendulum-effect-border.webp".to_string();
+    let mut webp_buf = Vec::new();
+    let encoder = WebPEncoder::new_lossless(&mut webp_buf);
+    encoder.encode(&mask, w, h, ColorType::Rgba8.into())?;
+    images.insert(
+        mask_name.clone(),
+        json!({"kind":"raster","storage":"buffer","size":{"w":w,"h":h},"buffer": buffer_ptr(payload, &webp_buf)}),
+    );
+    layout["base"]["mask"]["pendulum_effect_border"] =
+        json!({"asset": mask_name, "x": effect_x, "y": effect_y});
+    Ok(())
 }
 
 fn add_pendulum_art_effect_mask(

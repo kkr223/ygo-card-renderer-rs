@@ -156,6 +156,10 @@ pub struct MaskFrames {
     pub pendulum_art: Option<PositionedAsset>,
     #[serde(default)]
     pub pendulum_border: Option<PositionedAsset>,
+    #[serde(default)]
+    pub pendulum_effect: Option<PositionedAsset>,
+    #[serde(default)]
+    pub pendulum_effect_border: Option<PositionedAsset>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

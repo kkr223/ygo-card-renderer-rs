@@ -167,6 +167,7 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
                 vec![
                     tw(EffectTarget::CardBorder, 0.42),
                     tw(EffectTarget::ArtFrame, 0.56),
+                    tw(EffectTarget::EffectBoxBorder, 0.56),
                 ],
             );
             push_composite_rare_effect(
@@ -528,6 +529,7 @@ mod tests {
             &[
                 tw(EffectTarget::CardBorder, 0.42),
                 tw(EffectTarget::ArtFrame, 0.56),
+                tw(EffectTarget::EffectBoxBorder, 0.56),
             ],
         );
         assert_composite(

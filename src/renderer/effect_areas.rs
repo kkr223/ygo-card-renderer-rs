@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::{
-    asset_bundle::{AssetBundle, BaseLayout},
+    asset_bundle::{AssetBundle, BaseLayout, PositionedAsset},
     card_logic::{attribute_asset_name, image_frame, uses_rank},
     constants::{CARD_HEIGHT, CARD_WIDTH},
     document::{EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument},
@@ -130,9 +130,6 @@ pub(super) fn effect_target_areas(
             pendulum_border_effect_areas(bundle, base)
         }
         EffectTarget::ArtFrame => art_frame_effect_areas(bundle, &document.card, base, art_rect),
-        EffectTarget::CardBorder if document.card.is_pendulum() => {
-            pendulum_border_effect_areas(bundle, base)
-        }
         EffectTarget::CardBorder => card_border_areas()
             .into_iter()
             .map(EffectArea::Rect)
@@ -143,7 +140,7 @@ pub(super) fn effect_target_areas(
         EffectTarget::LevelOrRank => level_or_rank_effect_areas(bundle, &document.card, base),
         EffectTarget::LinkArrows => link_arrows_effect_areas(bundle, &document.card, base),
         EffectTarget::EffectBoxBorder if document.card.is_pendulum() => {
-            pendulum_border_effect_areas(bundle, base)
+            pendulum_effect_box_border_areas(bundle, base)
         }
         EffectTarget::EffectBoxBorder => effect_box_border_areas(bundle, &document.card, base),
     }
@@ -338,6 +335,31 @@ fn pendulum_border_effect_areas(bundle: &AssetBundle, base: &BaseLayout) -> Vec<
     Vec::new()
 }
 
+fn pendulum_effect_box_border_areas(bundle: &AssetBundle, base: &BaseLayout) -> Vec<EffectArea> {
+    let Some(border) = &base.mask.pendulum_effect_border else {
+        return Vec::new();
+    };
+    let Some(mask) = decode_bundle_image(bundle, &border.asset).map(Arc::new) else {
+        return Vec::new();
+    };
+    vec![EffectArea::MaskedRect {
+        rect: CoverageRect {
+            x: border.x,
+            y: border.y,
+            w: mask.width(),
+            h: mask.height(),
+        },
+        mask,
+    }]
+}
+
+fn pendulum_frame_mask(base: &BaseLayout) -> &PositionedAsset {
+    base.mask
+        .pendulum_border
+        .as_ref()
+        .unwrap_or(&base.mask.pendulum)
+}
+
 fn art_effect_areas(
     bundle: &AssetBundle,
     card: &YgoCardMeta,
@@ -362,7 +384,7 @@ fn art_effect_areas(
         }
     }
 
-    let frame_mask = &base.mask.pendulum;
+    let frame_mask = pendulum_frame_mask(base);
     let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) else {
         return vec![EffectArea::Rect(art_rect)];
     };
@@ -435,9 +457,10 @@ pub(super) fn art_frame_effect_areas(
     art_rect: CoverageRect,
 ) -> Vec<EffectArea> {
     let frame_mask = if card.is_pendulum() {
-        // Pendulum cards use a single authored frame mask that combines the
-        // illustration frame, pendulum effect box, and lower text box border.
-        &base.mask.pendulum
+        // Split bundles expose only the upper illustration frame here, so
+        // frame-targeted effects don't wash over the pendulum effect panel,
+        // scale boxes, or lower text-box background.
+        pendulum_frame_mask(base)
     } else {
         &base.mask.normal
     };
@@ -468,7 +491,7 @@ pub(super) fn art_frame_coverage_rect(
     base: &BaseLayout,
 ) -> Option<CoverageRect> {
     let mask = if card.is_pendulum() {
-        &base.mask.pendulum
+        pendulum_frame_mask(base)
     } else {
         &base.mask.normal
     };

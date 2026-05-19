@@ -32,6 +32,14 @@ pub(crate) fn push_out_frame_nodes(
         ));
     }
 
+    if card.is_pendulum() {
+        // Pendulum cards carry their effect-panel and lower text-box
+        // background in the split pendulum mask. Reusing the normal out-frame
+        // eblock would wash over the lower half and make scale/text areas hard
+        // to read, so only the name block is added here.
+        return;
+    }
+
     let effect_box = match card.out_frame_effect_box {
         OutFrameEffectBox::EblockBorder => &base.out_frame.effect_box,
         OutFrameEffectBox::EblockBorderO => &base.out_frame.effect_box_colored,
