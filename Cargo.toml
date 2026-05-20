@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Rust card rendering core for Yu-Gi-Oh! custom card generation"
-repository = "https://github.com/placeholder/ygo-card-renderer-rs"
+repository = "https://github.com/kkr223/ygo-card-renderer-rs"
 
 [dependencies]
 base64 = "0.22.1"
