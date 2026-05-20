@@ -8,6 +8,8 @@ use crate::{
     text::estimate_text_width,
 };
 
+use ygopro_cdb_encode_rs::{TYPE_FUSION, TYPE_LINK, TYPE_SYNCHRO, TYPE_XYZ};
+
 use super::super::paint;
 use super::super::{RenderNode, RenderOp, RenderRect, RubyStyle};
 use super::footer;
@@ -280,11 +282,14 @@ pub(crate) fn push_pendulum_description_node(
         );
         let shadow = paint::resolve_optional_fill(&options.text_colors.description_shadow, None);
 
+        let mut tmp = String::new();
+        let (formatted_text, first_line_compress) = apply_format_mode(&text, &mut tmp, card, options);
+
         nodes.push(RenderNode::new(
             "pendulum-description",
             120,
             RenderOp::TextBlock {
-                text,
+                text: formatted_text.to_string(),
                 rect: RenderRect::new(
                     base.pendulum_description.x,
                     style.pendulum_description_top,
@@ -301,7 +306,7 @@ pub(crate) fn push_pendulum_description_node(
                 fill,
                 shadow,
                 ruby: paint::description_ruby_style(style),
-                first_line_compress: options.description_first_line_compress,
+                first_line_compress,
                 align: options.description_align.unwrap_or(TextAlignChoice::Left),
                 font_weight: options.description_weight,
             },
@@ -311,6 +316,41 @@ pub(crate) fn push_pendulum_description_node(
 }
 
 // ── Effect / description ─────────────────────────────────────────────────────
+
+/// Apply `format_text` mode: compact newlines and determine `first_line_compress`.
+///
+/// When `options.format_text` is true:
+/// - Extra-deck monsters (Fusion/Synchro/Xyz/Link): keep the first newline,
+///   strip the rest, and enable first-line compression.
+/// - All other cards: strip all newlines.
+fn apply_format_mode<'a>(
+    text: &'a str,
+    tmp: &'a mut String,
+    card: &YgoCardMeta,
+    options: &RenderOptions,
+) -> (&'a str, bool) {
+    if !options.format_text {
+        return (text, options.description_first_line_compress);
+    }
+    let t = card.type_;
+    let is_extra =
+        (t & TYPE_FUSION) != 0 || (t & TYPE_SYNCHRO) != 0 || (t & TYPE_XYZ) != 0 || (t & TYPE_LINK) != 0;
+
+    tmp.clear();
+    if is_extra {
+        // Keep first newline, remove the rest.
+        if let Some(pos) = text.find('\n') {
+            tmp.push_str(&text[..=pos]);
+            tmp.push_str(&text[pos + 1..].replace('\n', ""));
+        } else {
+            tmp.push_str(text);
+        }
+    } else {
+        // Remove all newlines.
+        tmp.push_str(&text.replace('\n', ""));
+    }
+    (tmp.as_str(), is_extra)
+}
 
 pub(crate) fn push_description_node(
     nodes: &mut Vec<RenderNode>,
@@ -327,11 +367,14 @@ pub(crate) fn push_description_node(
     );
     let shadow = paint::resolve_optional_fill(&options.text_colors.description_shadow, None);
 
+    let mut tmp = String::new();
+    let (formatted_text, first_line_compress) = apply_format_mode(text, &mut tmp, card, options);
+
     nodes.push(RenderNode::new(
         "description",
         130,
         RenderOp::TextBlock {
-            text: text.to_string(),
+            text: formatted_text.to_string(),
             rect: RenderRect::new(
                 style.description_x,
                 description_y(card, style),
@@ -345,7 +388,7 @@ pub(crate) fn push_description_node(
             fill,
             shadow,
             ruby: paint::description_ruby_style(style),
-            first_line_compress: options.description_first_line_compress,
+            first_line_compress,
             align: options.description_align.unwrap_or(TextAlignChoice::Left),
             font_weight: options.description_weight,
         },

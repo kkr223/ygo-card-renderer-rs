@@ -68,6 +68,7 @@ struct Args {
     mask_threshold: Option<f32>,
     mask_dilate: Option<u32>,
     overwrite_mask: bool,
+    format_text: bool,
     jobs: usize,
 }
 
@@ -89,6 +90,7 @@ fn parse_args() -> Result<Args, String> {
     let mut mask_threshold: Option<f32> = None;
     let mut mask_dilate: Option<u32> = None;
     let mut overwrite_mask = false;
+    let mut format_text = false;
     let mut jobs: usize = num_cpus();
 
     let mut i = 0usize;
@@ -169,6 +171,7 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|e| format!("--mask-dilate: invalid integer: {e}"))?,
                 );
             }
+            "--format" => format_text = true,
             "--overwrite-mask" => overwrite_mask = true,
             "--jobs" => {
                 i += 1;
@@ -206,6 +209,7 @@ fn parse_args() -> Result<Args, String> {
         mask_threshold,
         mask_dilate,
         overwrite_mask,
+        format_text,
         jobs,
     })
 }
@@ -255,7 +259,8 @@ OPTIONS
   --mask-dilate <PX>
                    override subject dilation in model pixels
   --overwrite-mask
-                   regenerate masks even when the cache file already exists
+                    regenerate masks even when the cache file already exists
+  --format           enable text formatting: title compress + compact description
   --jobs   <N>      parallel workers       [default: CPU count]
   --help            show this message
 "#
@@ -398,6 +403,7 @@ fn make_request(
     scale: f32,
     art_dir: &Path,
     effect_mask: Option<&Path>,
+    format_text: bool,
 ) -> RenderRequest {
     let art_image = find_art(art_dir, card.entry.code);
     RenderRequest {
@@ -411,6 +417,8 @@ fn make_request(
                 x: None,
                 y: None,
             }),
+            title_width_compress: format_text,
+            format_text,
             ..RenderOptions::default()
         },
         card,
@@ -425,8 +433,9 @@ fn render_one(
     art_dir: &Path,
     effect_mask: Option<&Path>,
     out_path: &Path,
+    format_text: bool,
 ) -> Result<(), String> {
-    let request = make_request(card.clone(), lang, scale, art_dir, effect_mask);
+    let request = make_request(card.clone(), lang, scale, art_dir, effect_mask, format_text);
     let png = renderer
         .render_png(&request)
         .map_err(|e| format!("render error for {}: {e}", card.entry.code))?;
@@ -496,6 +505,7 @@ fn main() {
             &args.art_dir,
             effect_mask.as_deref(),
             &out_path,
+            args.format_text,
         )
         .unwrap_or_else(|e| fatal(&e));
 
@@ -577,6 +587,7 @@ fn main() {
                             &art_dir,
                             effect_mask.as_deref(),
                             &out_path,
+                            args.format_text,
                         ) {
                             errors.lock().unwrap().push(e);
                         }

@@ -556,6 +556,9 @@ pub struct RenderOptions {
     pub description_weight: Option<FontWeight>,
     #[serde(default)]
     pub description_first_line_compress: bool,
+    /// Enable text formatting mode: title compress + compact description by type.
+    #[serde(default)]
+    pub format_text: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -596,6 +599,7 @@ impl Default for RenderOptions {
             description_zoom: None,
             description_weight: None,
             description_first_line_compress: false,
+            format_text: false,
             radius: None,
             atk_bar: None,
             effect_block_x: None,
