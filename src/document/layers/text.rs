@@ -74,7 +74,7 @@ pub(crate) fn push_title_node(
                 .unwrap_or_else(|| style.name_font_family.clone()),
             font_size: style.name_size,
             letter_spacing: style.title_letter_spacing,
-            align: request.options.align.unwrap_or(TextAlignChoice::Left),
+            align: request.options.align.unwrap_or(TextAlignChoice::Justify),
             fill,
             shadow,
             ruby,
@@ -307,7 +307,7 @@ pub(crate) fn push_pendulum_description_node(
                 shadow,
                 ruby: paint::description_ruby_style(style),
                 first_line_compress,
-                align: options.description_align.unwrap_or(TextAlignChoice::Left),
+                align: options.description_align.unwrap_or(TextAlignChoice::Justify),
                 font_weight: options.description_weight,
             },
         ));
@@ -389,7 +389,7 @@ pub(crate) fn push_description_node(
             shadow,
             ruby: paint::description_ruby_style(style),
             first_line_compress,
-            align: options.description_align.unwrap_or(TextAlignChoice::Left),
+            align: options.description_align.unwrap_or(TextAlignChoice::Justify),
             font_weight: options.description_weight,
         },
     ));

@@ -18,6 +18,7 @@ thiserror = "2.0.17"
 tiny-skia = "0.11"
 woff2-patched = "0.4.0"
 bytes = "1"
+icu_segmenter = { version = "2", features = ["compiled_data"] }
 ygopro-cdb-encode-rs = { path = "../ygopro-cdb-encode-rs" }
 
 [features]

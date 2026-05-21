@@ -18,7 +18,7 @@ use super::{
     engine::{TextEngine, with_text_engine},
     measure::{
         estimate_text_width, estimate_text_width_scaled, first_line_scale, max_lines_for_height,
-        split_first_explicit_line, total_text_height, wrap_text,
+        split_first_explicit_line, tokenize_line, total_text_height, wrap_text,
     },
     util::font_weight_for_family,
     util::primary_family_name,
@@ -128,11 +128,12 @@ pub struct DrawMultiline<'a> {
 // TextAlign
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
     Left,
     Center,
     Right,
+    Justify,
 }
 
 /// Fill used for text pixels.
@@ -267,7 +268,7 @@ fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
     .min(p.max_width);
 
     let draw_x = match p.align {
-        TextAlign::Left => p.x,
+        TextAlign::Left | TextAlign::Justify => p.x,
         TextAlign::Center => p.x - estimated / 2.0,
         TextAlign::Right => p.x - estimated,
     };
@@ -361,12 +362,42 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
         lines.truncate(max_lines);
     }
 
+    // The last line is only justified when the text was compressed
+    // (font_size < base_font_size), matching JS CompressText behaviour.
+    let force_last_line = font_size < p.base_font_size;
+
     for (index, line) in lines.iter().enumerate() {
         let line_y = if index == 0 {
             p.y
         } else {
             p.y + index as f32 * font_size as f32 * p.line_height
         };
+        let is_last = index == lines.len() - 1;
+
+        if p.align == TextAlign::Justify && (!is_last || force_last_line) {
+            // Tokenize the line and distribute remaining width as gaps.
+            let tokens = tokenize_line(line);
+            if tokens.len() > 1 {
+                draw_justified_token_line(
+                    pixmap,
+                    &tokens,
+                    p.x,
+                    line_y,
+                    p.width,
+                    font_size as f32,
+                    p.color,
+                    p.shadow_color,
+                    p.brush.clone(),
+                    p.shadow_brush.clone(),
+                    p.family_name,
+                    p.language,
+                    p.letter_spacing,
+                    p.font_weight,
+                );
+                continue;
+            }
+        }
+
         let line_width = estimate_text_width(
             line,
             p.language,
@@ -697,9 +728,72 @@ fn draw_multiline_with_first_line_compress(
 
 fn aligned_line_x(x: f32, width: f32, line_width: f32, align: TextAlign) -> f32 {
     match align {
-        TextAlign::Left => x,
+        TextAlign::Left | TextAlign::Justify => x,
         TextAlign::Center => x + (width - line_width) / 2.0,
         TextAlign::Right => x + width - line_width,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal: justified token-per-token line drawing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Draw a line of tokens with even gaps between them (justify alignment).
+#[allow(clippy::too_many_arguments)]
+fn draw_justified_token_line(
+    pixmap: &mut Pixmap,
+    tokens: &[String],
+    x: f32,
+    y: f32,
+    width: f32,
+    font_size: f32,
+    color: Color,
+    shadow_color: Color,
+    brush: Option<TextBrush>,
+    shadow_brush: Option<TextBrush>,
+    family_name: &str,
+    language: Option<&str>,
+    letter_spacing: f32,
+    font_weight: Option<FontWeight>,
+) {
+    // Measure each token.
+    let token_widths: Vec<f32> = tokens
+        .iter()
+        .map(|t| estimate_text_width(t, language, family_name, font_size, letter_spacing))
+        .collect();
+    let total: f32 = token_widths.iter().sum();
+    let gap = if tokens.len() > 1 {
+        (width - total).max(0.0) / (tokens.len() - 1) as f32
+    } else {
+        0.0
+    };
+
+    let mut cursor = x;
+    for (i, token) in tokens.iter().enumerate() {
+        if token.trim().is_empty() {
+            cursor += token_widths[i] + gap;
+            continue;
+        }
+        draw_text_shadowed_scaled(
+            pixmap,
+            ShadowedText {
+                text: token,
+                x: cursor,
+                y,
+                font_size,
+                width: token_widths[i] + gap + font_size * 2.0,
+                height: font_size * 1.4,
+                base_color: color,
+                shadow_color,
+                base_brush: brush.clone(),
+                shadow_brush: shadow_brush.clone(),
+                family_name,
+                letter_spacing,
+                scale_x: 1.0,
+                font_weight,
+            },
+        );
+        cursor += token_widths[i] + gap;
     }
 }
 

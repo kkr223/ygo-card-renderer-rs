@@ -86,6 +86,7 @@ pub enum TextAlignChoice {
     Left,
     Center,
     Right,
+    Justify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

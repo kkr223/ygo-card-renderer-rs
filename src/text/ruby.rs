@@ -49,6 +49,8 @@ pub struct RubyLineParams<'a> {
     pub letter_spacing: f32,
     /// Overall horizontal compression factor for the whole line.
     pub scale_x: f32,
+    /// Extra gap between slots for justify alignment (0 = disabled).
+    pub justify_gap: f32,
     pub font_weight: Option<FontWeight>,
 }
 
@@ -312,7 +314,7 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
             }
         }
 
-        cursor_x += slot.slot_width();
+        cursor_x += slot.slot_width() + p.justify_gap;
     }
 }
 
@@ -473,29 +475,44 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
         font_size as f32 * 0.5
     };
 
+    let force_last_line = (font_size as u32) < p.base_font_size;
+
     for (index, line_tokens) in lines.iter().enumerate() {
         let line_y = if index == 0 {
             p.y
         } else {
             p.y + index as f32 * font_size as f32 * p.line_height
         };
-        let line_width = measure_ruby_slots(
+        let is_last = index == lines.len() - 1;
+        let slots = measure_ruby_slots(
             line_tokens,
             p.family,
             font_size as f32,
             eff_rt_font_size,
             p.letter_spacing,
             p.rt_font_scale_x,
-        )
-        .iter()
-        .map(RubySlot::slot_width)
-        .sum::<f32>()
-        .min(p.width);
-        let line_x = match p.align {
-            TextAlign::Left => p.x,
-            TextAlign::Center => p.x + (p.width - line_width) / 2.0,
-            TextAlign::Right => p.x + p.width - line_width,
+        );
+        let line_width = slots
+            .iter()
+            .map(RubySlot::slot_width)
+            .sum::<f32>()
+            .min(p.width);
+
+        let (line_x, justify_gap) = if p.align == TextAlign::Justify
+            && (!is_last || force_last_line)
+            && line_tokens.len() > 1
+        {
+            let gap = (p.width - line_width).max(0.0) / (line_tokens.len() - 1) as f32;
+            (p.x, gap)
+        } else {
+            let x = match p.align {
+                TextAlign::Left | TextAlign::Justify => p.x,
+                TextAlign::Center => p.x + (p.width - line_width) / 2.0,
+                TextAlign::Right => p.x + p.width - line_width,
+            };
+            (x, 0.0)
         };
+
         draw_ruby_text_line(
             pixmap,
             RubyLineParams {
@@ -514,6 +531,7 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 language: p.language,
                 letter_spacing: p.letter_spacing,
                 scale_x: 1.0,
+                justify_gap,
                 font_weight: p.font_weight,
             },
         );

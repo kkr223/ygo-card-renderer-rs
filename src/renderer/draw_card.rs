@@ -305,5 +305,6 @@ pub(super) fn text_align_choice(align: crate::model::TextAlignChoice) -> TextAli
         TextAlignChoice::Left => TextAlign::Left,
         TextAlignChoice::Center => TextAlign::Center,
         TextAlignChoice::Right => TextAlign::Right,
+        TextAlignChoice::Justify => TextAlign::Justify,
     }
 }

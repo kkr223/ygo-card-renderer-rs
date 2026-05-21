@@ -539,6 +539,7 @@ fn draw_text_line_op(
                             language,
                             letter_spacing,
                             scale_x,
+                            justify_gap: 0.0,
                             font_weight,
                         },
                     );
@@ -562,6 +563,7 @@ fn draw_text_line_op(
                     language,
                     letter_spacing,
                     scale_x,
+                    justify_gap: 0.0,
                     font_weight,
                 },
             );

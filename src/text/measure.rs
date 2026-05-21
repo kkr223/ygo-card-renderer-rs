@@ -355,33 +355,55 @@ fn truncate_text_to_width(
     })
 }
 
-/// Tokenize a single line for wrapping.
+/// Tokenize a single line for wrapping using Unicode UAX #14 line-breaking
+/// rules (CSS `line-break: strict` / `word-break: normal`) — the same engine
+/// that the JS `yugioh-card` CompressText uses via `css-line-break`.
 ///
-/// ASCII word characters and a small set of punctuation are grouped into
-/// word tokens; whitespace becomes a single-space token; all other characters
-/// (CJK, etc.) become individual tokens.
-fn tokenize_line(text: &str) -> Vec<String> {
+/// After the line-breaking pass, each segment is further split by the CSS
+/// word-separator characters (SPACE, NBSP, etc.) so that whitespace tokens
+/// become independent, matching the behaviour of `splitBreakWord` in JS.
+pub(super) fn tokenize_line(text: &str) -> Vec<String> {
+    use icu_segmenter::{LineSegmenter, options::LineBreakOptions};
+
+    let segmenter = LineSegmenter::new_for_non_complex_scripts(LineBreakOptions::default());
+    let breakpoints: Vec<usize> = segmenter.segment_str(text).collect();
+
     let mut tokens = Vec::new();
-    let mut word = String::new();
+    let mut prev = 0usize;
 
-    for ch in text.chars() {
-        if ch.is_ascii_whitespace() {
-            if !word.is_empty() {
-                tokens.push(std::mem::take(&mut word));
+    for &bp in breakpoints.iter().skip(1) {
+        let segment = &text[prev..bp];
+        if !segment.is_empty() {
+            let mut word = String::new();
+            for ch in segment.chars() {
+                if is_word_separator(ch) {
+                    if !word.is_empty() {
+                        tokens.push(std::mem::take(&mut word));
+                    }
+                    tokens.push(ch.to_string());
+                } else {
+                    word.push(ch);
+                }
             }
-            tokens.push(" ".to_string());
-        } else if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '\'' | '/' | ':' | ',' | '.') {
-            word.push(ch);
-        } else {
             if !word.is_empty() {
-                tokens.push(std::mem::take(&mut word));
+                tokens.push(word);
             }
-            tokens.push(ch.to_string());
         }
+        prev = bp;
     }
 
-    if !word.is_empty() {
-        tokens.push(word);
-    }
     tokens
+}
+
+/// CSS word-separator code-points matched to `splitBreakWord` in JS.
+fn is_word_separator(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0020   // SPACE
+        | 0x00A0 // NO-BREAK SPACE
+        | 0x1361 // ETHIOPIC WORDSPACE
+        | 0x10100 | 0x10101 // AEGEAN WORD SEPARATOR LINE / DOT
+        | 0x1039 // MYANMAR SIGN LITTLE SECTION
+        | 0x1091 // MYANMAR SIGN SECTION
+    )
 }
