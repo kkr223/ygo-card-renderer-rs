@@ -144,6 +144,7 @@ cargo run --bin render -- \
   --art-dir /path/to/art \
   --out-dir ./export \
   --lang sc \
+  --format \
   --jobs 8
 ```
 
@@ -250,6 +251,7 @@ render --bundle <PATH> --cdb <PATH> --art-dir <DIR> --id <CODE> --out <FILE> [OP
 | `--mask-threshold <F>` | 覆盖自动 mask 主体阈值 | 元数据推荐值 |
 | `--mask-dilate <PX>` | 覆盖自动 mask 主体膨胀像素 | 元数据推荐值 |
 | `--overwrite-mask` | 自动 mask cache 已存在时也重新生成；不会覆盖 `--effect-mask-dir` 已命中的 mask | false |
+| `--format` | 启用文本格式化：标题压缩 + 描述紧凑化（额外卡组怪兽保留首行换行，其余移除所有换行） | false |
 | `--jobs <N>` | 批量渲染线程数 | 逻辑 CPU 数 |
 
 如果 `art-dir` 中找不到对应卡图，卡图区域会留空，不会中断渲染。
@@ -411,6 +413,7 @@ pub enum RareType {
 | `description_weight` | 描述文本字重 |
 | `description_first_line_compress` | 描述首行压缩 |
 | `title_width_compress` | 标题宽度压缩 |
+| `format_text` | 文本格式化开关：标题压缩 + 智能换行移除 |
 | `layout_overrides: LayoutOverrides` | 精确布局参数覆盖 |
 
 ---
