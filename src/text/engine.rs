@@ -5,13 +5,13 @@
 //! per OS thread via a `thread_local!` cell; callers reach it through the
 //! module-private [`with_text_engine`] helper.
 //!
-//! Font bytes are decoded from WOFF2 globally on first use per family.  Each
-//! thread-local `FontSystem` then loads only the families it actually needs,
-//! plus a small fallback family, instead of eagerly loading every bundled font.
+//! Font bytes are decoded from WOFF2 on first use per family using the
+//! `woff2-patched` crate.  Each thread-local `FontSystem` then loads only the
+//! families it actually needs, plus a small fallback family, instead of eagerly
+//! loading every bundled font.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
 use std::sync::{Arc, OnceLock};
 
 use cosmic_text::{
@@ -223,8 +223,9 @@ fn get_font_data(key: &str) -> Option<Result<Arc<Vec<u8>>, String>> {
                 .get(key)
                 .ok_or_else(|| format!("missing font metadata for {key}"))?;
             let bytes = bundle.get_bytes(&font_meta.buffer)?;
-            let font_data = if ygo_woff2::is_woff2(bytes) {
-                ygo_woff2::convert_woff2_to_ttf(&mut Cursor::new(bytes))
+            let font_data = if woff2_patched::decode::is_woff2(bytes) {
+                let mut buf = bytes::Bytes::from(bytes.to_vec());
+                woff2_patched::decode::convert_woff2_to_ttf(&mut buf)
                     .map_err(|e| format!("woff2 decode failed: {e}"))?
             } else {
                 bytes.to_vec()

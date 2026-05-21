@@ -2071,6 +2071,7 @@ checksum = "e01738255b5a16e78bbb83e7fbba0a1e7dd506905cfc53f4622d89015a03fbb5"
 name = "ygo-card-renderer-rs"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "cosmic-text",
  "criterion",
  "image",
@@ -2081,17 +2082,8 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tiny-skia",
- "ygo-woff2",
- "ygopro-cdb-encode-rs",
-]
-
-[[package]]
-name = "ygo-woff2"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "thiserror 1.0.69",
  "woff2-patched",
+ "ygopro-cdb-encode-rs",
 ]
 
 [[package]]

@@ -279,12 +279,15 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
                 let base_screen_w = slot.base_width * p.scale_x;
                 let base_center_screen = base_draw_x + base_screen_w / 2.0;
 
-                let rt_draw_x = if slot.rt_letter_spacing > 0.0 {
-                    base_draw_x
+                let eff_rt_w = if slot.rt_letter_spacing > 0.0 {
+                    (slot.rt_natural_width
+                        + slot.rt_letter_spacing
+                            * (rt.chars().count().saturating_sub(1)) as f32)
+                        * combined_scale
                 } else {
-                    let eff_rt_w = slot.rt_natural_width * combined_scale;
-                    base_center_screen - eff_rt_w / 2.0
+                    slot.rt_natural_width * combined_scale
                 };
+                let rt_draw_x = base_center_screen - eff_rt_w / 2.0;
 
                 let rt_layout_w = slot.rt_natural_width / slot.rt_scale_x.max(0.01) + 200.0;
                 draw_text_shadowed_scaled(
