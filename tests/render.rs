@@ -488,11 +488,6 @@ fn render_document_allows_external_display_edits() {
         "link monsters should render LINK value"
     );
 
-    assert!(
-        document.nodes.iter().any(|node| node.id == "scale-line"),
-        "monster footer scale/link marker line should not require package text"
-    );
-
     let copyright = document
         .nodes
         .iter()

@@ -59,19 +59,6 @@ pub(crate) fn build_effect_line(
     ))
 }
 
-pub(crate) fn build_scale_line(card: &CardDataEntry) -> String {
-    if card.is_pendulum() {
-        format!(
-            "Level {}  Scale {}/{}",
-            card.level, card.lscale, card.rscale
-        )
-    } else if card.is_link() {
-        format!("Link Marker {:#x}", card.link_marker)
-    } else {
-        format!("Level {}", card.level)
-    }
-}
-
 pub(crate) fn image_frame(card: &CardDataEntry, base: &BaseLayout) -> (u32, u32, u32, u32) {
     let rect = if card.is_pendulum() {
         &base.image.pendulum

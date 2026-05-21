@@ -193,11 +193,6 @@ impl RenderDocument {
         // ── Password → TextLine ───────────────────────────────────────────
         layers::footer::push_password_node(&mut nodes, request, &style, base);
 
-        // ── Monster footer scale/link-marker line → TextLine ──────────────
-        if card.is_monster() {
-            layers::footer::push_scale_line_node(&mut nodes, request, &style, base);
-        }
-
         // ── Package → TextLine ────────────────────────────────────────────
         if let Some(package) = &card.package {
             layers::footer::push_package_node(&mut nodes, request, &style, base, package);

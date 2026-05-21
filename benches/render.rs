@@ -128,6 +128,8 @@ fn bench_draw_multiline_ruby_text(c: &mut Criterion) {
                             family: "ygo-sc",
                             color: Color::BLACK,
                             shadow_color: Color::TRANSPARENT,
+                            brush: None,
+                            shadow_brush: None,
                             language: None,
                             base_font_size: 18,
                             rt_font_size: 9,
@@ -137,6 +139,8 @@ fn bench_draw_multiline_ruby_text(c: &mut Criterion) {
                             letter_spacing: 0.0,
                             min_font_size: 12,
                             first_line_compress: false,
+                            align: TextAlign::Left,
+                            font_weight: None,
                         },
                     );
                     pixmap

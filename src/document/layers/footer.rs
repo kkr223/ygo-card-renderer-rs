@@ -1,6 +1,5 @@
 use crate::{
     asset_bundle::{AssetBundle, BaseLayout},
-    card_logic::build_scale_line,
     constants::CARD_WIDTH,
     layout::LayoutStyle,
     model::{RenderOptions, RenderRequest, TextAlignChoice, YgoCardMeta},
@@ -40,50 +39,6 @@ pub(crate) fn push_password_node(
             align: TextAlignChoice::Left,
             fill,
             shadow,
-            ruby: None,
-            width_compress: false,
-            font_weight: None,
-        },
-    ));
-}
-
-// ── Scale / link-marker line ─────────────────────────────────────────────────
-
-pub(crate) fn push_scale_line_node(
-    nodes: &mut Vec<RenderNode>,
-    request: &RenderRequest,
-    style: &LayoutStyle,
-    base: &BaseLayout,
-) {
-    let ov = &request.options.layout_overrides;
-    let copyright_right = ov.copyright_right.unwrap_or(base.copyright.right);
-    let copyright_y = ov.copyright_y.unwrap_or(base.copyright.y);
-    let scale_fill = paint::resolve_text_fill(
-        &request.options.text_colors.copyright,
-        None,
-        paint::footer_text_paint(&request.card),
-    );
-    let scale_shadow =
-        paint::resolve_optional_fill(&request.options.text_colors.copyright_shadow, None);
-    let scale_text = build_scale_line(&request.card);
-
-    nodes.push(RenderNode::new(
-        "scale-line",
-        148,
-        RenderOp::TextLine {
-            text: scale_text,
-            rect: RenderRect::from_f32(
-                (CARD_WIDTH - copyright_right) as f32,
-                copyright_y as f32,
-                320.0,
-                22.0,
-            ),
-            font_family: style.base_font_family.clone(),
-            font_size: 22,
-            letter_spacing: 0.0,
-            align: TextAlignChoice::Right,
-            fill: scale_fill,
-            shadow: scale_shadow,
             ruby: None,
             width_compress: false,
             font_weight: None,

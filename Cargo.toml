@@ -7,13 +7,11 @@ description = "Rust card rendering core for Yu-Gi-Oh! custom card generation"
 repository = "https://github.com/kkr223/ygo-card-renderer-rs"
 
 [dependencies]
-base64 = "0.22.1"
-cosmic-text = "0.14"
-fontdb = "0.16"
-image = { version = "0.25", features = ["webp"] }
+cosmic-text = { version = "0.14", default-features = false, features = ["std", "swash"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 memmap2 = "0.9"
 ort = { version = "=2.0.0-rc.12", optional = true }
-resvg = "0.45.1"
+resvg = { version = "0.45.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.17"
@@ -26,9 +24,7 @@ default = []
 onnx-mask = ["dep:ort"]
 
 [dev-dependencies]
-brotli = "8.0.2"
 criterion = { version = "0.5", features = ["html_reports"] }
-tempfile = "3.23.0"
 
 [[bench]]
 name = "render"
