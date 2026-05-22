@@ -5,7 +5,7 @@
 
 use tiny_skia::Pixmap;
 
-use super::{CoverageRect, math::*};
+use super::{math::*, CoverageRect};
 
 const SECRET_CELL: u32 = 6;
 
@@ -80,7 +80,7 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                         let dy = ((yf - center_y).abs() - capsule_half_segment).max(0.0);
                         (dx * dx + dy * dy).sqrt()
                     };
-                    if hard_unit_mask(radius, dist) > 0.0 {
+                    if dist <= radius {
                         elem_mask = 1.0;
                         break;
                     }
@@ -93,11 +93,11 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let u = xf / rect_w;
             let v = yf / rect_h;
             let vertical_grating = 1.0 - smoothstep(0.68, 1.55, (in_xf - cx).abs());
-            let diagonal_grating = (ser_sin((xf + yf) * 0.11) * 0.5 + 0.5).powf(10.0);
+            let diagonal_grating = (((xf + yf) * 0.11).sin() * 0.5 + 0.5).powf(10.0);
             let pin_hash = ser_pixel_hash(local_x / 2, local_y / 2);
             let pin_spark = if (pin_hash & 0x1ff) < 11 { 1.0 } else { 0.0 };
             let broad_wave =
-                (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
+                ((u * 8.0 - v * 5.3 + (v * 17.0).sin() * 0.35).sin() * 0.5 + 0.5).powf(1.35);
             let cloud_a = value_noise(u, v, 2.4, 3, 11);
             let cloud_b = value_noise(u, v, 5.6, 7, 13);
             let cloud_c = value_noise(u, v, 9.0, 17, 5);
@@ -156,21 +156,21 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                 9.0,
             );
 
-            let h_center0 = 0.165 + ser_sin(u * 9.0 + 0.8) * 0.018 + (cloud_a - 0.5) * 0.030;
-            let h_center1 = 0.318 + ser_sin(u * 7.4 + 2.1) * 0.024 + (cloud_b - 0.5) * 0.034;
-            let h_center2 = 0.545 + ser_sin(u * 7.8 + 1.4) * 0.030 + (cloud_c - 0.5) * 0.038;
-            let h_center3 = 0.725 + ser_sin(u * 8.7 + 3.2) * 0.022 + (cloud_a - 0.5) * 0.030;
-            let h_center4 = 0.875 + ser_sin(u * 8.1 + 5.0) * 0.020 + (cloud_b - 0.5) * 0.028;
+            let h_center0 = 0.165 + (u * 9.0 + 0.8).sin() * 0.018 + (cloud_a - 0.5) * 0.030;
+            let h_center1 = 0.318 + (u * 7.4 + 2.1).sin() * 0.024 + (cloud_b - 0.5) * 0.034;
+            let h_center2 = 0.545 + (u * 7.8 + 1.4).sin() * 0.030 + (cloud_c - 0.5) * 0.038;
+            let h_center3 = 0.725 + (u * 8.7 + 3.2).sin() * 0.022 + (cloud_a - 0.5) * 0.030;
+            let h_center4 = 0.875 + (u * 8.1 + 5.0).sin() * 0.020 + (cloud_b - 0.5) * 0.028;
             let h_band0 = gauss(v - h_center0, 0.030);
             let h_band1 = gauss(v - h_center1, 0.038);
             let h_band2 = gauss(v - h_center2, 0.050);
             let h_band3 = gauss(v - h_center3, 0.042);
             let h_band4 = gauss(v - h_center4, 0.032);
-            let slant = v - (0.84 - u * 0.48 + ser_sin(u * 8.4) * 0.026);
+            let slant = v - (0.84 - u * 0.48 + (u * 8.4).sin() * 0.026);
             let slant_band = gauss(slant, 0.046);
-            let v_lobe0 = gauss(u - (0.185 + ser_sin(v * 6.2) * 0.026), 0.052);
-            let v_lobe1 = gauss(u - (0.525 + ser_sin(v * 5.8 + 1.1) * 0.035), 0.072);
-            let v_lobe2 = gauss(u - (0.815 + ser_sin(v * 6.8 + 2.4) * 0.034), 0.066);
+            let v_lobe0 = gauss(u - (0.185 + (v * 6.2).sin() * 0.026), 0.052);
+            let v_lobe1 = gauss(u - (0.525 + (v * 5.8 + 1.1).sin() * 0.035), 0.072);
+            let v_lobe2 = gauss(u - (0.815 + (v * 6.8 + 2.4).sin() * 0.034), 0.066);
             let h_cloud = (h_band0 * 0.28
                 + h_band1 * 0.40
                 + h_band2 * 0.44
@@ -410,9 +410,9 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
                     .max(0.16 + line_core * 0.14 + line_bright * 0.18)
                     .min(0.98);
             let reflect_scale = reflect_lum / src_lum;
-            let rr = clamp01(r * reflect_scale);
-            let rg = clamp01(g * reflect_scale);
-            let rb = clamp01(b * reflect_scale);
+            let rr = (r * reflect_scale).clamp(0.0, 1.0);
+            let rg = (g * reflect_scale).clamp(0.0, 1.0);
+            let rb = (b * reflect_scale).clamp(0.0, 1.0);
             let color_overlay = (alpha
                 * (0.94 * (0.35 + lit_gate * 0.65)
                     + line_core * 1.58
@@ -422,9 +422,9 @@ pub(crate) fn draw_secret_weave(target: &mut Pixmap, rect: CoverageRect, opacity
             let sr = screen_channel_float(br, r, screen_alpha);
             let sg = screen_channel_float(bg, g, screen_alpha);
             let sb = screen_channel_float(bb, b, screen_alpha);
-            let out_r = clamp01(sr * (1.0 - color_overlay) + rr * color_overlay);
-            let out_g = clamp01(sg * (1.0 - color_overlay) + rg * color_overlay);
-            let out_b = clamp01(sb * (1.0 - color_overlay) + rb * color_overlay);
+            let out_r = (sr * (1.0 - color_overlay) + rr * color_overlay).clamp(0.0, 1.0);
+            let out_g = (sg * (1.0 - color_overlay) + rg * color_overlay).clamp(0.0, 1.0);
+            let out_b = (sb * (1.0 - color_overlay) + rb * color_overlay).clamp(0.0, 1.0);
             pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
                 (out_r * 255.0).round() as u8,
                 (out_g * 255.0).round() as u8,
@@ -486,7 +486,7 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
                         let dy = ((yf - center_y).abs() - 5.0).max(0.0);
                         (dx * dx + dy * dy).sqrt()
                     };
-                    if hard_unit_mask(2.5, dist) > 0.0 {
+                    if dist <= 2.5 {
                         elem_mask = 1.0;
                         break;
                     }
@@ -497,11 +497,11 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             }
 
             let vertical_grating = 1.0 - smoothstep(0.68, 1.55, (in_xf - cx).abs());
-            let diagonal_grating = (ser_sin((xf + yf) * 0.11) * 0.5 + 0.5).powf(10.0);
+            let diagonal_grating = (((xf + yf) * 0.11).sin() * 0.5 + 0.5).powf(10.0);
             let pin_hash = ser_pixel_hash(local_x / 2, local_y / 2);
             let pin_spark = if (pin_hash & 0x1ff) < 11 { 1.0 } else { 0.0 };
             let broad_wave =
-                (ser_sin(u * 8.0 - v * 5.3 + ser_sin(v * 17.0) * 0.35) * 0.5 + 0.5).powf(1.35);
+                ((u * 8.0 - v * 5.3 + (v * 17.0).sin() * 0.35).sin() * 0.5 + 0.5).powf(1.35);
             let cloud_a = value_noise(u, v, 2.4, 3, 11);
             let cloud_b = value_noise(u, v, 5.6, 7, 13);
             let cloud_c = value_noise(u, v, 9.0, 17, 5);
@@ -617,14 +617,14 @@ pub(crate) fn draw_secret_foil(target: &mut Pixmap, rect: CoverageRect, opacity:
             let src_lum = (0.2126 * rgb.0 + 0.7152 * rgb.1 + 0.0722 * rgb.2).max(0.001);
             let reflect_lum = (lum * 0.36 + strength * 0.52 + speckle * 0.12).clamp(0.24, 1.0);
             let scale = reflect_lum / src_lum;
-            let rr = clamp01(rgb.0 * scale);
-            let rg = clamp01(rgb.1 * scale);
-            let rb = clamp01(rgb.2 * scale);
+            let rr = (rgb.0 * scale).clamp(0.0, 1.0);
+            let rg = (rgb.1 * scale).clamp(0.0, 1.0);
+            let rb = (rgb.2 * scale).clamp(0.0, 1.0);
 
             pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
-                (clamp01(sr * (1.0 - overlay) + rr * overlay) * 255.0).round() as u8,
-                (clamp01(sg * (1.0 - overlay) + rg * overlay) * 255.0).round() as u8,
-                (clamp01(sb * (1.0 - overlay) + rb * overlay) * 255.0).round() as u8,
+                (((sr * (1.0 - overlay) + rr * overlay).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (((sg * (1.0 - overlay) + rg * overlay).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (((sb * (1.0 - overlay) + rb * overlay).clamp(0.0, 1.0)) * 255.0).round() as u8,
                 dst.alpha(),
             )
             .unwrap_or(dst);

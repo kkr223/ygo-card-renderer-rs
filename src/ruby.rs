@@ -36,20 +36,8 @@ impl RubyToken {
         }
     }
 
-    /// The annotation text, or `None` for non-Ruby tokens.
-    pub fn rt_text(&self) -> Option<&str> {
-        match self {
-            RubyToken::Ruby { rt, .. } => Some(rt.as_str()),
-            _ => None,
-        }
-    }
-
     pub fn is_newline(&self) -> bool {
         matches!(self, RubyToken::Newline)
-    }
-
-    pub fn is_plain(&self) -> bool {
-        matches!(self, RubyToken::Plain(_))
     }
 }
 
@@ -162,9 +150,7 @@ pub(crate) fn parse_ruby_bracket(text: &str) -> Option<(String, String, usize)> 
 fn flush_plain(text: &str, plain_start: usize, plain_end: usize, tokens: &mut Vec<RubyToken>) {
     if plain_start < plain_end {
         let s = text[plain_start..plain_end].to_string();
-        if !s.is_empty() {
-            tokens.push(RubyToken::Plain(s));
-        }
+        tokens.push(RubyToken::Plain(s));
     }
 }
 
@@ -202,7 +188,7 @@ mod tests {
     fn test_parse_no_markup() {
         let tokens = parse_ruby_text("魔法カード");
         assert_eq!(tokens.len(), 1);
-        assert!(tokens[0].is_plain());
+        assert!(matches!(tokens[0], RubyToken::Plain(_)));
         assert_eq!(tokens[0].base_text(), "魔法カード");
     }
 
@@ -236,6 +222,6 @@ mod tests {
         // Missing ')' – should stay as plain text
         let tokens = parse_ruby_text("[魔(ま");
         assert_eq!(tokens.len(), 1);
-        assert!(tokens[0].is_plain());
+        assert!(matches!(tokens[0], RubyToken::Plain(_)));
     }
 }

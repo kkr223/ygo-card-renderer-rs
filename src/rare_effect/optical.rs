@@ -3,15 +3,9 @@
 //! Core algorithm: staggered micro-facet normal map, two orthogonal diffraction
 //! gratings, FBM energy variation, "#" band efficiency, and Blinn-Phong glints.
 
-use std::sync::OnceLock;
-
 use tiny_skia::Pixmap;
 
-use super::{CoverageRect, math::*};
-
-const OPTICAL_LUT_SIZE: usize = 1024;
-const OPTICAL_LAM_MIN: f32 = 380.0;
-const OPTICAL_LAM_MAX: f32 = 720.0;
+use super::{math::*, CoverageRect};
 
 #[derive(Debug, Clone, Copy)]
 struct OpticalSerParams {
@@ -131,8 +125,8 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
             let v_centered = v - 0.5;
 
             let (nx, ny, nz, inside, col, row) = optical_micro_facet(local_x, local_y, params);
-            let n_dot_l = clamp01(nx * light.0 + ny * light.1 + nz * light.2);
-            let n_dot_h = clamp01(nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2);
+            let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
+            let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
             let macro_axis = (u_centered * light.0 + v_centered * light.1) / light_xy_len;
             let macro_light = smoothstep(-0.70, 0.70, macro_axis);
             let energy = optical_energy(xf, yf, params);
@@ -143,17 +137,15 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
             let order = params.diffraction_order.max(1) as f32;
             let lam1 = params.grating_d_nm * delta1.abs() / order;
             let lam2 = params.grating_d_nm * delta2.abs() / order;
-            let rgb1 = optical_lut_lookup(lam1);
-            let rgb2 = optical_lut_lookup(lam2);
+            let rgb1 = spectral_lookup(lam1);
+            let rgb2 = spectral_lookup(lam2);
 
             let bw = params.band_width.max(0.002);
             let bb = params.band_base;
             let bw_vary = bw * (0.72 + 0.28 * (1.0 - energy));
             let band_intensity = 0.45 + 0.55 * energy;
-            let band_v =
-                gauss_line(u, params.band_v1, bw_vary).max(gauss_line(u, params.band_v2, bw_vary));
-            let band_h =
-                gauss_line(v, params.band_h1, bw_vary).max(gauss_line(v, params.band_h2, bw_vary));
+            let band_v = gauss(u - params.band_v1, bw_vary).max(gauss(u - params.band_v2, bw_vary));
+            let band_h = gauss(v - params.band_h1, bw_vary).max(gauss(v - params.band_h2, bw_vary));
             let eff1 = (bb + (1.0 - bb) * band_v * band_intensity).clamp(bb, 1.0);
             let eff2 = (bb + (1.0 - bb) * band_h * band_intensity).clamp(bb, 1.0);
 
@@ -167,8 +159,8 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
                 (rgb1.2 + rgb2.2) * micro_scale,
             );
 
-            let band_boost1 = clamp01(eff1 - bb);
-            let band_boost2 = clamp01(eff2 - bb);
+            let band_boost1 = (eff1 - bb).clamp(0.0, 1.0);
+            let band_boost2 = (eff2 - bb).clamp(0.0, 1.0);
             let band_rgb = (
                 (rgb1.0 * band_boost1 + rgb2.0 * band_boost2) * combined_energy,
                 (rgb1.1 * band_boost1 + rgb2.1 * band_boost2) * combined_energy,
@@ -183,7 +175,7 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
             let sheet_lam = 440.0
                 + 200.0 * macro_light
                 + 14.0 * (std::f32::consts::TAU * (u * 11.0 + v * 7.0)).sin();
-            let sheet_base = optical_lut_lookup(sheet_lam);
+            let sheet_base = spectral_lookup(sheet_lam);
             let sheet_energy = hash_band
                 * (0.18 + 0.82 * macro_light)
                 * (0.35 + 0.65 * energy)
@@ -200,7 +192,7 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
             let diff_b = 1.0 - (-(micro_rgb.2 + band_rgb.2 + sheet_rgb.2) * params.foil_gain).exp();
 
             let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
-            let pin = smoothstep(0.84, 0.995, optical_cell_hash(col, row, params.seed + 4242));
+            let pin = smoothstep(0.84, 0.995, cell_hash01(col, row, params.seed + 4242));
             spec += pin
                 * (0.18 + 0.82 * hash_band)
                 * combined_energy
@@ -217,15 +209,18 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
             let dark_g = base_g * params.darken;
             let dark_b = base_b * params.darken;
             let reveal = (spec * 0.06).clamp(0.0, 0.06);
-            let result_r = clamp01(
-                1.0 - (1.0 - dark_r) * (1.0 - diff_r) + spec * params.white_gain + base_r * reveal,
-            );
-            let result_g = clamp01(
-                1.0 - (1.0 - dark_g) * (1.0 - diff_g) + spec * params.white_gain + base_g * reveal,
-            );
-            let result_b = clamp01(
-                1.0 - (1.0 - dark_b) * (1.0 - diff_b) + spec * params.white_gain + base_b * reveal,
-            );
+            let result_r = (1.0 - (1.0 - dark_r) * (1.0 - diff_r)
+                + spec * params.white_gain
+                + base_r * reveal)
+                .clamp(0.0, 1.0);
+            let result_g = (1.0 - (1.0 - dark_g) * (1.0 - diff_g)
+                + spec * params.white_gain
+                + base_g * reveal)
+                .clamp(0.0, 1.0);
+            let result_b = (1.0 - (1.0 - dark_b) * (1.0 - diff_b)
+                + spec * params.white_gain
+                + base_b * reveal)
+                .clamp(0.0, 1.0);
 
             let out_r = lerp_f32(base_r, result_r, opacity);
             let out_g = lerp_f32(base_g, result_g, opacity);
@@ -282,8 +277,8 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             // ── Micro-facet + dual grating (same as draw_optical_ser) ──────────
             let (nx, ny, nz, inside, col, row) = optical_micro_facet(local_x, local_y, params);
-            let n_dot_l = clamp01(nx * light.0 + ny * light.1 + nz * light.2);
-            let n_dot_h = clamp01(nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2);
+            let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
+            let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
 
             let light_mod = (n_dot_l - 0.5) * params.light_blaze_shift;
             let delta1 = nx * params.tilt_factor + params.blaze1 + light_mod;
@@ -291,8 +286,8 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
             let order = params.diffraction_order.max(1) as f32;
             let lam1 = params.grating_d_nm * delta1.abs() / order;
             let lam2 = params.grating_d_nm * delta2.abs() / order;
-            let rgb1 = optical_lut_lookup(lam1);
-            let rgb2 = optical_lut_lookup(lam2);
+            let rgb1 = spectral_lookup(lam1);
+            let rgb2 = spectral_lookup(lam2);
 
             // Simplified energy: no FBM, no macro_light, no "#" bands
             let light_energy = 0.30 + 0.70 * n_dot_l;
@@ -309,7 +304,7 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             // Simplified specular
             let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
-            let pin = smoothstep(0.84, 0.995, optical_cell_hash(col, row, params.seed + 4242));
+            let pin = smoothstep(0.84, 0.995, cell_hash01(col, row, params.seed + 4242));
             spec += pin * combined_energy * params.sparkle_gain * 0.5;
 
             // ── Left-to-right warm→cool gradient ─────────────────────────────
@@ -381,15 +376,15 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             let darken = 0.42;
             let strength = foil_strength * opacity;
-            let result_r = clamp01(
-                base_r * darken + foil_rgb.0 * strength + spec * params.white_gain * opacity,
-            );
-            let result_g = clamp01(
-                base_g * darken + foil_rgb.1 * strength + spec * params.white_gain * opacity,
-            );
-            let result_b = clamp01(
-                base_b * darken + foil_rgb.2 * strength + spec * params.white_gain * opacity,
-            );
+            let result_r =
+                (base_r * darken + foil_rgb.0 * strength + spec * params.white_gain * opacity)
+                    .clamp(0.0, 1.0);
+            let result_g =
+                (base_g * darken + foil_rgb.1 * strength + spec * params.white_gain * opacity)
+                    .clamp(0.0, 1.0);
+            let result_b =
+                (base_b * darken + foil_rgb.2 * strength + spec * params.white_gain * opacity)
+                    .clamp(0.0, 1.0);
 
             let out_r = lerp_f32(base_r, result_r, opacity);
             let out_g = lerp_f32(base_g, result_g, opacity);
@@ -418,9 +413,9 @@ fn optical_micro_facet(
     let stagger = if (col & 1) == 1 { pitch_y / 2 } else { 0 };
     let row = (py - stagger).div_euclid(pitch_y);
 
-    let rnd_line = optical_cell_hash(col, row, params.seed + 5555);
+    let rnd_line = cell_hash01(col, row, params.seed + 5555);
     let line_len = if rnd_line > 0.80 {
-        (optical_cell_hash(col, row, params.seed + 6666) * 3.0 + 2.0).floor()
+        (cell_hash01(col, row, params.seed + 6666) * 3.0 + 2.0).floor()
     } else {
         1.0
     };
@@ -434,9 +429,9 @@ fn optical_micro_facet(
     let inside = 1.0 - smoothstep(0.85, 1.08, r);
 
     let tilt_x =
-        (optical_cell_hash(col, row, params.seed + 1337) - 0.5) * 2.0 * params.tilt_strength;
+        (cell_hash01(col, row, params.seed + 1337) - 0.5) * 2.0 * params.tilt_strength;
     let tilt_y =
-        (optical_cell_hash(col, row, params.seed + 8128) - 0.5) * 2.0 * params.tilt_strength;
+        (cell_hash01(col, row, params.seed + 8128) - 0.5) * 2.0 * params.tilt_strength;
     let r_dist = (dx * dx + dy * dy).sqrt();
     let slope = params.dome_depth * r_dist.clamp(0.0, 1.0);
     let active = if inside > 0.001 { 1.0 } else { 0.0 };
@@ -465,7 +460,11 @@ fn optical_fbm(x: f32, y: f32, base_cell: f32, seed: u32, octaves: u32) -> f32 {
         amp *= 0.5;
         cell = (cell * 0.5).max(1.0);
     }
-    if amp_sum > 1e-6 { total / amp_sum } else { 0.0 }
+    if amp_sum > 1e-6 {
+        total / amp_sum
+    } else {
+        0.0
+    }
 }
 
 fn optical_smooth_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
@@ -477,79 +476,13 @@ fn optical_smooth_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
     let fy = py - iy as f32;
     let sx = fx * fx * (3.0 - 2.0 * fx);
     let sy = fy * fy * (3.0 - 2.0 * fy);
-    let a = optical_cell_hash(ix, iy, seed);
-    let b = optical_cell_hash(ix + 1, iy, seed);
-    let c = optical_cell_hash(ix, iy + 1, seed);
-    let d = optical_cell_hash(ix + 1, iy + 1, seed);
+    let a = cell_hash01(ix, iy, seed);
+    let b = cell_hash01(ix + 1, iy, seed);
+    let c = cell_hash01(ix, iy + 1, seed);
+    let d = cell_hash01(ix + 1, iy + 1, seed);
     (a * (1.0 - sx) + b * sx) * (1.0 - sy) + (c * (1.0 - sx) + d * sx) * sy
 }
 
-#[inline]
-fn optical_cell_hash(col: i32, row: i32, seed: u32) -> f32 {
-    let mut x = (col as u32).wrapping_mul(1_664_525).wrapping_add(seed)
-        ^ (row as u32).wrapping_mul(1_013_904_223);
-    x ^= x >> 16;
-    x = x.wrapping_mul(2_246_822_519);
-    x ^= x >> 13;
-    x = x.wrapping_mul(3_266_489_917);
-    x ^= x >> 16;
-    x as f32 / u32::MAX as f32
-}
-
-fn wavelength_lut() -> &'static [(f32, f32, f32)] {
-    static LUT: OnceLock<Vec<(f32, f32, f32)>> = OnceLock::new();
-    LUT.get_or_init(|| {
-        (0..OPTICAL_LUT_SIZE)
-            .map(|i| {
-                let t = i as f32 / (OPTICAL_LUT_SIZE - 1) as f32;
-                wavelength_rgb(OPTICAL_LAM_MIN + (OPTICAL_LAM_MAX - OPTICAL_LAM_MIN) * t)
-            })
-            .collect()
-    })
-}
-
-fn optical_lut_lookup(lam_nm: f32) -> (f32, f32, f32) {
-    if !(OPTICAL_LAM_MIN..=OPTICAL_LAM_MAX).contains(&lam_nm) {
-        return (0.0, 0.0, 0.0);
-    }
-    let lut = wavelength_lut();
-    let idx = (lam_nm - OPTICAL_LAM_MIN) / (OPTICAL_LAM_MAX - OPTICAL_LAM_MIN)
-        * (OPTICAL_LUT_SIZE - 1) as f32;
-    let i0 = idx.floor() as usize;
-    let i1 = (i0 + 1).min(OPTICAL_LUT_SIZE - 1);
-    let t = idx - i0 as f32;
-    lerp_rgb(lut[i0], lut[i1], t)
-}
-
-fn wavelength_rgb(lam: f32) -> (f32, f32, f32) {
-    let x = 1.056 * gauss_asym(lam, 599.8, 37.9, 31.0) + 0.362 * gauss_asym(lam, 442.0, 16.0, 26.7)
-        - 0.065 * gauss_asym(lam, 501.1, 20.4, 26.2);
-    let y = 0.821 * gauss_asym(lam, 568.8, 46.9, 40.5) + 0.286 * gauss_asym(lam, 530.9, 16.3, 31.1);
-    let z = 1.217 * gauss_asym(lam, 437.0, 11.8, 36.0) + 0.681 * gauss_asym(lam, 459.0, 26.0, 13.8);
-    let mut r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
-    let mut g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
-    let mut b = 0.0557 * x - 0.2040 * y + 1.0570 * z;
-    r = r.max(0.0);
-    g = g.max(0.0);
-    b = b.max(0.0);
-    let peak = r.max(g).max(b);
-    if peak > 1e-6 {
-        (r / peak, g / peak, b / peak)
-    } else {
-        (0.0, 0.0, 0.0)
-    }
-}
-
-#[inline]
-fn gauss_asym(x: f32, mu: f32, s1: f32, s2: f32) -> f32 {
-    let s = if x < mu { s1 } else { s2 };
-    (-0.5 * ((x - mu) / s).powi(2)).exp()
-}
-
-#[inline]
-fn gauss_line(x: f32, centre: f32, sigma: f32) -> f32 {
-    (-0.5 * ((x - centre) / sigma.max(1e-6)).powi(2)).exp()
-}
 
 #[inline]
 fn vec_norm3(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
@@ -693,8 +626,8 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
 
             let u_centered = u - 0.5;
             let v_centered = v - 0.5;
-            let n_dot_l = clamp01(nx * light.0 + ny * light.1 + nz * light.2);
-            let n_dot_h = clamp01(nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2);
+            let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
+            let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
             let normal_phase = (nx * grating_nx + ny * grating_ny) * params.tilt_factor;
             let sin_theta = (u_centered * grating_nx + v_centered * grating_ny)
                 * params.angle_spread
@@ -702,12 +635,12 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
                 + normal_phase;
             let order = params.diffraction_order.max(1) as f32;
             let lam = params.grating_d_nm * sin_theta.abs() / order;
-            let diff_rgb = optical_lut_lookup(lam);
+            let diff_rgb = spectral_lookup(lam);
             let warm_near_light =
                 smoothstep(575.0, 635.0, lam) * (1.0 - smoothstep(665.0, 725.0, lam));
 
             let lam2 = params.grating_d_nm * (sin_theta * 0.56 + 0.14).abs() / order;
-            let diff_rgb2 = optical_lut_lookup(lam2);
+            let diff_rgb2 = spectral_lookup(lam2);
 
             let local_phase = avoid_magenta_phase(
                 (dot_hash * 0.18 + u * 0.11 - v * 0.08).rem_euclid(1.0),
@@ -728,7 +661,7 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
             let combined_b = raw_combined_b * (1.0 - red_dominance * warm_near_light * 0.10);
 
             let energy = scr_energy(xf, yf, params);
-            let row_hash = optical_cell_hash(col, row, params.seed + 90_017);
+            let row_hash = cell_hash01(col, row, params.seed + 90_017);
             let row_gate = 0.62 + 0.38 * smoothstep(0.10, 0.92, row_hash);
             let source_dx = u - 0.78;
             let source_dy = v - 0.18;
@@ -809,11 +742,11 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
             let dark_g = metal_g * darken;
             let dark_b = metal_b * darken;
             let result_r =
-                clamp01(1.0 - (1.0 - dark_r) * (1.0 - foil_r) + spec * params.white_gain);
+                (1.0 - (1.0 - dark_r) * (1.0 - foil_r) + spec * params.white_gain).clamp(0.0, 1.0);
             let result_g =
-                clamp01(1.0 - (1.0 - dark_g) * (1.0 - foil_g) + spec * params.white_gain);
+                (1.0 - (1.0 - dark_g) * (1.0 - foil_g) + spec * params.white_gain).clamp(0.0, 1.0);
             let result_b =
-                clamp01(1.0 - (1.0 - dark_b) * (1.0 - foil_b) + spec * params.white_gain);
+                (1.0 - (1.0 - dark_b) * (1.0 - foil_b) + spec * params.white_gain).clamp(0.0, 1.0);
 
             let dot_alpha =
                 opacity * (inside * (0.64 + line_gate * 0.40 + chroma_energy * 0.34)).min(1.0);
@@ -865,9 +798,9 @@ fn scr_dot_facet(
 
     for row in (base_row - 1)..=(base_row + 1) {
         for col in (base_col - 1)..=(base_col + 1) {
-            let hash_a = optical_cell_hash(col, row, params.seed + 10_003);
-            let hash_b = optical_cell_hash(col, row, params.seed + 20_011);
-            let hash_c = optical_cell_hash(col, row, params.seed + 30_019);
+            let hash_a = cell_hash01(col, row, params.seed + 10_003);
+            let hash_b = cell_hash01(col, row, params.seed + 20_011);
+            let hash_c = cell_hash01(col, row, params.seed + 30_019);
             let jitter_x = (hash_a - 0.5) * params.dot_jitter;
             let jitter_y = (hash_b - 0.5) * params.dot_jitter;
             let center_x = (col as f32 + 0.5 + jitter_x) * pitch;
@@ -901,12 +834,12 @@ fn scr_dot_facet(
     let slope_x = best_dx / best_radius.max(1e-3) * params.dome_depth;
     let slope_y = best_dy / best_radius.max(1e-3) * params.dome_depth;
     let tilt_x =
-        (optical_cell_hash(best_col, best_row, params.seed + 40_031) - 0.5) * params.tilt_strength;
+        (cell_hash01(best_col, best_row, params.seed + 40_031) - 0.5) * params.tilt_strength;
     let tilt_y =
-        (optical_cell_hash(best_col, best_row, params.seed + 50_047) - 0.5) * params.tilt_strength;
+        (cell_hash01(best_col, best_row, params.seed + 50_047) - 0.5) * params.tilt_strength;
     let (nx, ny, nz) = vec_norm3(-(slope_x + tilt_x), -(slope_y + tilt_y), 1.0);
 
-    let row_phase_hash = optical_cell_hash(best_col, best_row, params.seed + 60_059);
+    let row_phase_hash = cell_hash01(best_col, best_row, params.seed + 60_059);
     let inv_sqrt2: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let diag_perp = (best_center_x + best_center_y) * inv_sqrt2;
     let diag_along = (best_center_x - best_center_y) * inv_sqrt2;

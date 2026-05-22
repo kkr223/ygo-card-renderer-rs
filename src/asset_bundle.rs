@@ -131,11 +131,12 @@ impl AssetBundle {
     }
 
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, String> {
-        let file = File::open(path.as_ref())
-            .map_err(|e| format!("Failed to open bundle {:?}: {e}", path.as_ref()))?;
+        let path = path.as_ref();
+        let file = File::open(path)
+            .map_err(|e| format!("Failed to open bundle {:?}: {e}", path))?;
         let file_len = file
             .metadata()
-            .map_err(|e| format!("Failed to stat bundle {:?}: {e}", path.as_ref()))?
+            .map_err(|e| format!("Failed to stat bundle {:?}: {e}", path))?
             .len();
         if file_len > MAX_BUNDLE_LEN as u64 {
             return Err(format!("Bundle too large: {file_len} bytes"));
@@ -143,7 +144,7 @@ impl AssetBundle {
         // SAFETY: callers must keep the bundle file immutable while the process uses it.
         // The CLI treats bundle files as read-only build artifacts.
         let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|e| format!("Failed to mmap bundle {:?}: {e}", path.as_ref()))?;
+            .map_err(|e| format!("Failed to mmap bundle {:?}: {e}", path))?;
         Self::load_from_storage(BundleStorage::Mmap(mmap))
     }
 
@@ -183,8 +184,8 @@ impl AssetBundle {
             .map_err(|e| format!("Failed to parse bundle index: {e}"))?;
         let payload_len = data.len() - payload_offset;
 
-        let layout_ptr = index.layout.buffer.clone();
-        validate_buffer(&layout_ptr, payload_len, "layout")?;
+        let layout_ptr = &index.layout.buffer;
+        validate_buffer(layout_ptr, payload_len, "layout")?;
         if let Some(buffer) = &index.atlas.buffer {
             validate_buffer(buffer, payload_len, "atlas")?;
         }
@@ -249,7 +250,7 @@ impl AssetBundle {
             return Err(format!("Asset is not raster: {name}"));
         }
         self.decoded_image(name)
-            .and_then(|pixmap| clone_pixmap(pixmap.as_ref()))
+            .map(|pixmap| pixmap.as_ref().clone())
     }
 
     fn decode_raster_uncached(&self, name: &str) -> Result<Pixmap, String> {
@@ -547,11 +548,4 @@ fn validate_decode_size(width: u32, height: u32) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-fn clone_pixmap(pixmap: &Pixmap) -> Result<Pixmap, String> {
-    let size = tiny_skia::IntSize::from_wh(pixmap.width(), pixmap.height())
-        .ok_or_else(|| "Invalid Pixmap size".to_string())?;
-    Pixmap::from_vec(pixmap.data().to_vec(), size)
-        .ok_or_else(|| "Failed to clone Pixmap".to_string())
 }

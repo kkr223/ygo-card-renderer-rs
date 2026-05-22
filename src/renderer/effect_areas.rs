@@ -196,10 +196,10 @@ fn paint_effect_area_into_mask(mask: &mut Pixmap, area: EffectArea, alpha_scale:
 }
 
 fn paint_rect_into_mask(mask: &mut Pixmap, rect: CoverageRect, alpha_scale: f32) -> bool {
-    let x_start = rect.x.min(CARD_WIDTH);
-    let y_start = rect.y.min(CARD_HEIGHT);
-    let x_end = rect.x.saturating_add(rect.w).min(CARD_WIDTH);
-    let y_end = rect.y.saturating_add(rect.h).min(CARD_HEIGHT);
+    let Some((x_start, y_start, x_end, y_end)) = clipped_rect_bounds(rect, CARD_WIDTH, CARD_HEIGHT)
+    else {
+        return false;
+    };
     let alpha = scaled_alpha(255, alpha_scale);
     if alpha == 0 {
         return false;
@@ -220,8 +220,15 @@ fn paint_masked_rect_into_mask(
     area_mask: &Pixmap,
     alpha_scale: f32,
 ) -> bool {
-    let local_w = rect.w.min(area_mask.width());
-    let local_h = rect.h.min(area_mask.height());
+    let Some((x_start, y_start, x_end, y_end)) = clipped_rect_bounds(rect, CARD_WIDTH, CARD_HEIGHT)
+    else {
+        return false;
+    };
+
+    let local_x_start = x_start.saturating_sub(rect.x);
+    let local_y_start = y_start.saturating_sub(rect.y);
+    let local_w = (x_end - x_start).min(area_mask.width().saturating_sub(local_x_start));
+    let local_h = (y_end - y_start).min(area_mask.height().saturating_sub(local_y_start));
     if local_w == 0 || local_h == 0 {
         return false;
     }
@@ -229,16 +236,12 @@ fn paint_masked_rect_into_mask(
     let mut painted = false;
     let area_pixels = area_mask.pixels();
     for local_y in 0..local_h {
-        let y = rect.y.saturating_add(local_y);
-        if y >= CARD_HEIGHT {
-            continue;
-        }
+        let y = y_start + local_y;
+        let src_y = local_y_start + local_y;
         for local_x in 0..local_w {
-            let x = rect.x.saturating_add(local_x);
-            if x >= CARD_WIDTH {
-                continue;
-            }
-            let area_idx = (local_y * area_mask.width() + local_x) as usize;
+            let x = x_start + local_x;
+            let src_x = local_x_start + local_x;
+            let area_idx = (src_y * area_mask.width() + src_x) as usize;
             let alpha = scaled_alpha(area_pixels[area_idx].alpha(), alpha_scale);
             if alpha > 0 {
                 painted |= write_mask_alpha(composite_mask, x, y, alpha);
@@ -319,16 +322,8 @@ fn card_border_areas() -> Vec<CoverageRect> {
 
 fn pendulum_border_effect_areas(bundle: &AssetBundle, base: &BaseLayout) -> Vec<EffectArea> {
     if let Some(border) = &base.mask.pendulum_border {
-        if let Some(mask) = decode_bundle_image(bundle, &border.asset).map(Arc::new) {
-            return vec![EffectArea::MaskedRect {
-                rect: CoverageRect {
-                    x: border.x,
-                    y: border.y,
-                    w: mask.width(),
-                    h: mask.height(),
-                },
-                mask,
-            }];
+        if let Some(area) = masked_area(bundle, &border.asset, border.x, border.y) {
+            return vec![area];
         }
     }
 
@@ -339,18 +334,9 @@ fn pendulum_effect_box_border_areas(bundle: &AssetBundle, base: &BaseLayout) -> 
     let Some(border) = &base.mask.pendulum_effect_border else {
         return Vec::new();
     };
-    let Some(mask) = decode_bundle_image(bundle, &border.asset).map(Arc::new) else {
-        return Vec::new();
-    };
-    vec![EffectArea::MaskedRect {
-        rect: CoverageRect {
-            x: border.x,
-            y: border.y,
-            w: mask.width(),
-            h: mask.height(),
-        },
-        mask,
-    }]
+    masked_area(bundle, &border.asset, border.x, border.y)
+        .into_iter()
+        .collect()
 }
 
 fn pendulum_frame_mask(base: &BaseLayout) -> &PositionedAsset {
@@ -371,21 +357,13 @@ fn art_effect_areas(
     }
 
     if let Some(art_mask) = &base.mask.pendulum_art {
-        if let Some(mask) = decode_bundle_image(bundle, &art_mask.asset).map(Arc::new) {
-            return vec![EffectArea::MaskedRect {
-                rect: CoverageRect {
-                    x: art_mask.x,
-                    y: art_mask.y,
-                    w: mask.width(),
-                    h: mask.height(),
-                },
-                mask,
-            }];
+        if let Some(area) = masked_area(bundle, &art_mask.asset, art_mask.x, art_mask.y) {
+            return vec![area];
         }
     }
 
     let frame_mask = pendulum_frame_mask(base);
-    let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) else {
+    let Some(mask) = bundle.decoded_image_for_render(&frame_mask.asset).ok() else {
         return vec![EffectArea::Rect(art_rect)];
     };
 
@@ -465,17 +443,8 @@ pub(super) fn art_frame_effect_areas(
         &base.mask.normal
     };
 
-    if let Some(mask) = decode_bundle_image(bundle, &frame_mask.asset) {
-        let mask = Arc::new(mask);
-        return vec![EffectArea::MaskedRect {
-            rect: CoverageRect {
-                x: frame_mask.x,
-                y: frame_mask.y,
-                w: mask.width(),
-                h: mask.height(),
-            },
-            mask,
-        }];
+    if let Some(area) = masked_area(bundle, &frame_mask.asset, frame_mask.x, frame_mask.y) {
+        return vec![area];
     }
 
     frame_ring_areas(art_rect, 28, 28, 28)
@@ -495,7 +464,7 @@ pub(super) fn art_frame_coverage_rect(
     } else {
         &base.mask.normal
     };
-    let mask_image = decode_bundle_image(bundle, &mask.asset)?;
+    let mask_image = bundle.decoded_image_for_render(&mask.asset).ok()?;
     Some(CoverageRect {
         x: mask.x,
         y: mask.y,
@@ -550,14 +519,7 @@ fn attribute_effect_area(
     language: Option<&str>,
 ) -> Option<EffectArea> {
     let asset = attribute_asset_name(card, language)?;
-    let mask = Arc::new(decode_bundle_image(bundle, &asset)?);
-    let rect = CoverageRect {
-        x: base.attribute.x,
-        y: base.attribute.y,
-        w: mask.width(),
-        h: mask.height(),
-    };
-    Some(EffectArea::MaskedRect { rect, mask })
+    masked_area(bundle, &asset, base.attribute.x, base.attribute.y)
 }
 
 fn level_or_rank_effect_areas(
@@ -575,7 +537,7 @@ fn level_or_rank_effect_areas(
     } else {
         (&base.level, false)
     };
-    let Some(mask) = decode_bundle_image(bundle, &layout.asset).map(Arc::new) else {
+    let Some(mask) = bundle.decoded_image_for_render(&layout.asset).ok() else {
         return Vec::new();
     };
     let h = mask.height();
@@ -640,24 +602,16 @@ fn link_arrows_effect_areas(
         };
         // Pre-computed red mask from build_bundle (preferred).
         if let Some(ref red) = pair.red_mask {
-            if let Some(mask) = decode_bundle_image(bundle, &red.asset).map(Arc::new) {
-                areas.push(EffectArea::MaskedRect {
-                    rect: CoverageRect {
-                        x: red.x,
-                        y: red.y,
-                        w: mask.width(),
-                        h: mask.height(),
-                    },
-                    mask,
-                });
+            if let Some(area) = masked_area(bundle, &red.asset, red.x, red.y) {
+                areas.push(area);
                 continue;
             }
         }
         // Fallback: compute red mask at runtime by diffing on/off images.
-        let Some(on_img) = decode_bundle_image(bundle, &pair.on.asset) else {
+        let Some(on_img) = bundle.decoded_image_for_render(&pair.on.asset).ok() else {
             continue;
         };
-        let Some(off_img) = decode_bundle_image(bundle, &pair.off.asset) else {
+        let Some(off_img) = bundle.decoded_image_for_render(&pair.off.asset).ok() else {
             continue;
         };
         let Some(red_mask) = arrow_red_region_mask(&on_img, &off_img) else {
@@ -712,27 +666,30 @@ fn effect_box_border_areas(
         OutFrameEffectBox::EblockBorder => &base.out_frame.effect_box,
         OutFrameEffectBox::EblockBorderO => &base.out_frame.effect_box_colored,
     };
-    let Some(mask) = decode_bundle_image(bundle, &effect_box.asset).map(Arc::new) else {
-        return Vec::new();
-    };
-    vec![EffectArea::MaskedRect {
+    masked_area(bundle, &effect_box.asset, effect_box.x, effect_box.y)
+        .into_iter()
+        .collect()
+}
+
+fn masked_area(bundle: &AssetBundle, asset_name: &str, x: u32, y: u32) -> Option<EffectArea> {
+    let mask = bundle.decoded_image_for_render(asset_name).ok()?;
+    Some(EffectArea::MaskedRect {
         rect: CoverageRect {
-            x: effect_box.x,
-            y: effect_box.y,
+            x,
+            y,
             w: mask.width(),
             h: mask.height(),
         },
         mask,
-    }]
+    })
 }
 
-pub(super) fn decode_bundle_image(bundle: &AssetBundle, asset: &str) -> Option<Pixmap> {
-    let entry = bundle.image(asset).ok()?;
-    match entry.kind.as_str() {
-        "raster" => bundle.decode_raster(asset).ok(),
-        "svg" => bundle.decode_svg(asset).ok(),
-        _ => None,
-    }
+fn clipped_rect_bounds(rect: CoverageRect, max_w: u32, max_h: u32) -> Option<(u32, u32, u32, u32)> {
+    let x_start = rect.x.min(max_w);
+    let y_start = rect.y.min(max_h);
+    let x_end = rect.x.saturating_add(rect.w).min(max_w);
+    let y_end = rect.y.saturating_add(rect.h).min(max_h);
+    (x_start < x_end && y_start < y_end).then_some((x_start, y_start, x_end, y_end))
 }
 
 // ── Visual effect dispatch ────────────────────────────────────────────────────

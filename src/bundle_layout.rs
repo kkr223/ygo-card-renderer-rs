@@ -24,19 +24,13 @@ pub struct TextBlock {
     pub rt_font_scale_x: Option<f32>,
     #[serde(rename = "letterSpacing")]
     pub letter_spacing: Option<f32>,
-    #[serde(rename = "wordSpacing")]
-    pub word_spacing: Option<f32>,
     #[serde(rename = "lineHeight")]
     pub line_height: Option<f32>,
-    #[serde(rename = "scaleY")]
-    pub scale_y: Option<f32>,
     pub right: Option<u32>,
     #[serde(rename = "textIndent")]
     pub text_indent: Option<f32>,
     #[serde(rename = "minHeight")]
     pub min_height: Option<u32>,
-    #[serde(rename = "smallFontSize")]
-    pub small_font_size: Option<u32>,
     #[serde(rename = "icon")]
     pub icon: Option<IconMargins>,
 }
@@ -66,14 +60,6 @@ pub struct StyleDefinition {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ResourceRules {
-    pub base_image: String,
-    pub card_asset: String,
-    pub pendulum_asset: String,
-    pub attribute_asset: String,
-    pub spell_trap_attribute_asset: String,
-    pub rare_asset: String,
-    pub copyright_asset: String,
-    pub laser_asset: String,
     pub atk_def_asset: HashMap<String, String>,
     pub atk_link_asset: HashMap<String, String>,
 }
@@ -82,16 +68,9 @@ pub struct ResourceRules {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LayoutPayload {
-    pub card: CardCanvas,
     pub base: BaseLayout,
     pub styles: HashMap<String, StyleDefinition>,
     pub resource_rules: ResourceRules,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CardCanvas {
-    pub width: u32,
-    pub height: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -121,17 +100,10 @@ pub struct LevelRankBase {
     pub star_width: u32,
     pub y: u32,
     pub gap: u32,
-    pub max: u32,
     pub right_lt_13: Option<u32>,
     pub right_ge_13: Option<u32>,
     pub left_lt_13: Option<u32>,
     pub left_ge_13: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct SpellTrapAssetRule {
-    pub icon_asset_prefix: String,
-    pub icon_asset_suffix: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -164,7 +136,6 @@ pub struct MaskFrames {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct OutFrameLayout {
-    pub image: FrameRect,
     pub name_block: PositionedAsset,
     pub effect_box: PositionedAsset,
     pub effect_box_colored: PositionedAsset,
@@ -185,7 +156,6 @@ pub struct PendulumScaleLayout {
 #[derive(Debug, Deserialize, Clone)]
 pub struct BoxRect {
     pub x: u32,
-    pub y: Option<u32>,
     pub width: u32,
     pub height: u32,
 }
@@ -271,7 +241,6 @@ pub struct BaseLayout {
     pub attribute: Position,
     pub level: LevelRankBase,
     pub rank: LevelRankBase,
-    pub spell_trap: SpellTrapAssetRule,
     pub image: ImageFrames,
     pub mask: MaskFrames,
     pub out_frame: OutFrameLayout,

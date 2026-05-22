@@ -1,57 +1,30 @@
-//! Pre-computed card type facts, derived once from `CardDataEntry`.
-//! Consolidates bit-flag checks and asset name resolution scattered across
-//! `card_logic.rs`, `document/paint.rs`, and layer functions.
+//! Minimal derived card facts used by document construction.
+//! Keeps only values consumed outside this module.
 
 use ygopro_cdb_encode_rs::{
     CardDataEntry, TYPE_FUSION, TYPE_LINK, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_TOKEN, TYPE_XYZ,
 };
 
-const TYPE_NORMAL: u32 = 0x10;
-const TYPE_EFFECT: u32 = 0x20;
-
-/// All boolean / derived facts about a card that are cheap to compute once
-/// and queried repeatedly during document construction and rendering.
-#[allow(dead_code)]
+/// Derived facts queried by document construction and rendering.
 pub(crate) struct CardFacts {
-    pub is_monster: bool,
-    pub is_spell: bool,
-    pub is_trap: bool,
-    pub is_pendulum: bool,
-    pub is_link: bool,
-    pub is_xyz: bool,
-    pub is_synchro: bool,
-    pub is_fusion: bool,
-    pub is_ritual: bool,
-    pub is_token: bool,
-    pub is_effect: bool,
-    pub is_normal: bool,
-    pub has_effect_line: bool,
-    pub uses_rank: bool,
-    pub name_is_light: bool,
     pub footer_is_light: bool,
     pub frame_asset: &'static str,
 }
 
 impl CardFacts {
     pub fn new(card: &CardDataEntry) -> Self {
-        let t = card.type_;
-        let is_monster = card.is_monster();
         let is_spell = card.is_spell();
         let is_trap = card.is_trap();
         let is_pendulum = card.is_pendulum();
-        let is_link = (t & TYPE_LINK) != 0;
-        let is_xyz = (t & TYPE_XYZ) != 0;
-        let is_synchro = (t & TYPE_SYNCHRO) != 0;
-        let is_fusion = (t & TYPE_FUSION) != 0;
-        let is_ritual = (t & TYPE_RITUAL) != 0;
-        let is_token = (t & TYPE_TOKEN) != 0;
-        let is_effect = (t & TYPE_EFFECT) != 0;
-        let is_normal = (t & TYPE_NORMAL) != 0;
-        let has_effect_line = is_monster;
-        let uses_rank = is_xyz;
+        let is_link = (card.type_ & TYPE_LINK) != 0;
+        let is_xyz = (card.type_ & TYPE_XYZ) != 0;
+        let is_synchro = (card.type_ & TYPE_SYNCHRO) != 0;
+        let is_fusion = (card.type_ & TYPE_FUSION) != 0;
+        let is_ritual = (card.type_ & TYPE_RITUAL) != 0;
+        let is_token = (card.type_ & TYPE_TOKEN) != 0;
+        let is_effect = (card.type_ & 0x20) != 0;
 
-        let name_is_light = is_spell || is_trap || is_xyz || is_link;
-        let footer_is_light = is_monster && is_xyz;
+        let footer_is_light = card.is_monster() && is_xyz;
 
         let frame_asset = frame_asset_name_inner(
             is_spell,
@@ -67,21 +40,6 @@ impl CardFacts {
         );
 
         Self {
-            is_monster,
-            is_spell,
-            is_trap,
-            is_pendulum,
-            is_link,
-            is_xyz,
-            is_synchro,
-            is_fusion,
-            is_ritual,
-            is_token,
-            is_effect,
-            is_normal,
-            has_effect_line,
-            uses_rank,
-            name_is_light,
             footer_is_light,
             frame_asset,
         }
@@ -155,69 +113,52 @@ mod tests {
     #[test]
     fn normal_monster() {
         let f = facts(0x11);
-        assert!(f.is_monster);
-        assert!(!f.is_spell);
-        assert!(!f.is_trap);
-        assert!(!f.is_effect);
         assert_eq!(f.frame_asset, "card-normal.webp");
-        assert!(!f.name_is_light);
         assert!(!f.footer_is_light);
-        assert!(f.has_effect_line);
     }
 
     #[test]
     fn effect_monster() {
         let f = facts(0x21);
-        assert!(f.is_effect);
         assert_eq!(f.frame_asset, "card-effect.webp");
     }
 
     #[test]
     fn xyz_monster() {
         let f = facts(TYPE_XYZ | 0x1);
-        assert!(f.is_xyz);
-        assert!(f.uses_rank);
         assert_eq!(f.frame_asset, "card-xyz.webp");
-        assert!(f.name_is_light);
         assert!(f.footer_is_light);
     }
 
     #[test]
     fn link_monster() {
         let f = facts(TYPE_LINK | 0x1);
-        assert!(f.is_link);
         assert_eq!(f.frame_asset, "card-link.webp");
-        assert!(f.name_is_light);
         assert!(!f.footer_is_light);
     }
 
     #[test]
     fn spell_card() {
         let f = facts(0x2);
-        assert!(f.is_spell);
         assert_eq!(f.frame_asset, "card-spell.webp");
-        assert!(f.name_is_light);
         assert!(!f.footer_is_light);
     }
 
     #[test]
     fn trap_card() {
         let f = facts(0x4);
-        assert!(f.is_trap);
         assert_eq!(f.frame_asset, "card-trap.webp");
     }
 
     #[test]
     fn pendulum_effect() {
-        let f = facts(ygopro_cdb_encode_rs::TYPE_PENDULUM | TYPE_EFFECT | 0x1);
-        assert!(f.is_pendulum);
+        let f = facts(ygopro_cdb_encode_rs::TYPE_PENDULUM | 0x20 | 0x1);
         assert_eq!(f.frame_asset, "card-effect-pendulum.webp");
     }
 
     #[test]
     fn token_card() {
         let f = facts(TYPE_TOKEN | 0x1);
-        assert!(f.is_token);
         assert_eq!(f.frame_asset, "card-token.webp");
     }
 }

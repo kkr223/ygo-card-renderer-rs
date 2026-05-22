@@ -28,17 +28,7 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
                 EffectStyle::RainbowFoil { opacity: 0.46 },
                 vec![tw(EffectTarget::Art, 0.46)],
             );
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ur-icon-foil",
-                91,
-                EffectStyle::Holographic { opacity: 0.62 },
-                vec![
-                    tw(EffectTarget::Attribute, 0.62),
-                    tw(EffectTarget::LevelOrRank, 0.58),
-                    tw(EffectTarget::LinkArrows, 0.58),
-                ],
-            );
+            push_composite_rare_effect(&mut nodes, "rare-ur-icon-foil", 91, EffectStyle::Holographic { opacity: 0.62 }, icon_targets(0.62, 0.58));
         }
         RareType::Gr => {
             push_composite_rare_effect(
@@ -105,24 +95,7 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
             EffectStyle::Holographic { opacity: 0.45 },
         ),
         RareType::Ser => {
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ser-art-optical",
-                30,
-                EffectStyle::OpticalSer { opacity: 1.00 },
-                vec![tw(EffectTarget::Art, 1.00)],
-            );
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ser-icon-optical",
-                91,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-                vec![
-                    tw(EffectTarget::Attribute, 0.90),
-                    tw(EffectTarget::LevelOrRank, 0.90),
-                    tw(EffectTarget::LinkArrows, 0.90),
-                ],
-            );
+            push_ser_optical(&mut nodes);
         }
         RareType::Scr => {
             push_composite_rare_effect(
@@ -208,24 +181,7 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
             EffectStyle::DiamondFoil { opacity: 0.68 },
         ),
         RareType::Upr => {
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ur-art-foil",
-                30,
-                EffectStyle::RainbowFoil { opacity: 0.46 },
-                vec![tw(EffectTarget::Art, 0.46)],
-            );
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ur-icon-foil",
-                91,
-                EffectStyle::Holographic { opacity: 0.62 },
-                vec![
-                    tw(EffectTarget::Attribute, 0.62),
-                    tw(EffectTarget::LevelOrRank, 0.58),
-                    tw(EffectTarget::LinkArrows, 0.58),
-                ],
-            );
+            push_ur_foil(&mut nodes);
             push_visual_effect(
                 &mut nodes,
                 "rare-upr-diamond-foil",
@@ -235,24 +191,7 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
             );
         }
         RareType::Sepr => {
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ser-art-optical",
-                30,
-                EffectStyle::OpticalSer { opacity: 1.00 },
-                vec![tw(EffectTarget::Art, 1.00)],
-            );
-            push_composite_rare_effect(
-                &mut nodes,
-                "rare-ser-icon-optical",
-                91,
-                EffectStyle::OpticalSerSimple { opacity: 0.90 },
-                vec![
-                    tw(EffectTarget::Attribute, 0.90),
-                    tw(EffectTarget::LevelOrRank, 0.90),
-                    tw(EffectTarget::LinkArrows, 0.90),
-                ],
-            );
+            push_ser_optical(&mut nodes);
             push_visual_effect(
                 &mut nodes,
                 "rare-sepr-diamond-foil",
@@ -302,6 +241,48 @@ fn push_composite_rare_effect(
     ));
 }
 
+fn push_ur_foil(nodes: &mut Vec<RenderNode>) {
+    push_composite_rare_effect(
+        nodes,
+        "rare-ur-art-foil",
+        30,
+        EffectStyle::RainbowFoil { opacity: 0.46 },
+        vec![tw(EffectTarget::Art, 0.46)],
+    );
+    push_composite_rare_effect(
+        nodes,
+        "rare-ur-icon-foil",
+        91,
+        EffectStyle::Holographic { opacity: 0.62 },
+        icon_targets(0.62, 0.58),
+    );
+}
+
+fn push_ser_optical(nodes: &mut Vec<RenderNode>) {
+    push_composite_rare_effect(
+        nodes,
+        "rare-ser-art-optical",
+        30,
+        EffectStyle::OpticalSer { opacity: 1.00 },
+        vec![tw(EffectTarget::Art, 1.00)],
+    );
+    push_composite_rare_effect(
+        nodes,
+        "rare-ser-icon-optical",
+        91,
+        EffectStyle::OpticalSerSimple { opacity: 0.90 },
+        icon_targets(0.90, 0.90),
+    );
+}
+
+fn icon_targets(attr_weight: f32, level_or_link_weight: f32) -> Vec<EffectTargetWeight> {
+    vec![
+        tw(EffectTarget::Attribute, attr_weight),
+        tw(EffectTarget::LevelOrRank, level_or_link_weight),
+        tw(EffectTarget::LinkArrows, level_or_link_weight),
+    ]
+}
+
 fn tw(target: EffectTarget, opacity: f32) -> EffectTargetWeight {
     EffectTargetWeight { target, opacity }
 }
@@ -311,34 +292,36 @@ fn tw(target: EffectTarget, opacity: f32) -> EffectTargetWeight {
 pub(super) fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, Option<TextPaint>) {
     match rare {
         Some(RareType::Ur | RareType::Gr | RareType::Gser) => (
-            Some(TextPaint {
-                color: None,
-                gradient: Some(TextGradient::vertical_middle(
-                    "#9a6718", "#fff0a8", "#6f4208",
-                )),
-            }),
-            Some(TextPaint {
-                color: Some("#5a3708".to_string()),
-                gradient: Some(TextGradient::vertical_middle(
-                    "#2d1903", "#a46a16", "#221103",
-                )),
-            }),
+            Some(rare_title_paint(None, "#9a6718", "#fff0a8", "#6f4208")),
+            Some(rare_title_paint(
+                Some("#5a3708"),
+                "#2d1903",
+                "#a46a16",
+                "#221103",
+            )),
         ),
         Some(RareType::Ser | RareType::Pser | RareType::Scr) => (
-            Some(TextPaint {
-                color: None,
-                gradient: Some(TextGradient::vertical_middle(
-                    "#f8fafc", "#94a3b8", "#f1f5f9",
-                )),
-            }),
-            Some(TextPaint {
-                color: Some("#94a3b8".to_string()),
-                gradient: Some(TextGradient::vertical_middle(
-                    "#cbd5e1", "#64748b", "#cbd5e1",
-                )),
-            }),
+            Some(rare_title_paint(None, "#f8fafc", "#94a3b8", "#f1f5f9")),
+            Some(rare_title_paint(
+                Some("#94a3b8"),
+                "#cbd5e1",
+                "#64748b",
+                "#cbd5e1",
+            )),
         ),
         _ => (None, None),
+    }
+}
+
+fn rare_title_paint(
+    color: Option<&str>,
+    top: &str,
+    middle: &str,
+    bottom: &str,
+) -> TextPaint {
+    TextPaint {
+        color: color.map(str::to_string),
+        gradient: Some(TextGradient::vertical_middle(top, middle, bottom)),
     }
 }
 

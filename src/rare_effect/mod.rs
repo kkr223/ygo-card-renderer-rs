@@ -37,13 +37,16 @@ pub(crate) use secret::{draw_secret_foil, draw_secret_weave};
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-pub(crate) use math::hsv_to_color;
-
-#[cfg(test)]
 mod tests {
     use tiny_skia::{Color, Pixmap};
 
     use super::*;
+
+    fn hsv_to_color(h: f32, s: f32, v: f32, alpha: f32) -> tiny_skia::Color {
+        let (r, g, b) = crate::pixel_ops::hsv_to_rgb(h, s, v);
+        tiny_skia::Color::from_rgba(r * alpha, g * alpha, b * alpha, alpha)
+            .unwrap_or(tiny_skia::Color::TRANSPARENT)
+    }
 
     // ── hsv_to_color anchor values ────────────────────────────────────────────
 

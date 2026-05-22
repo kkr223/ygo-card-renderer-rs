@@ -19,71 +19,14 @@
 //!   swept diagonally with per-cell hue jitter.
 //! - Screen-blended.
 
-use std::sync::OnceLock;
-
 use tiny_skia::Pixmap;
 
 use crate::pixel_ops::screen_pixel;
 
 use super::{
     CoverageRect,
-    math::{ser_hash01, smoothstep},
+    math::{cell_hash01, ser_hash01, smoothstep, spectral_lookup, SPECTRAL_LAM_MAX, SPECTRAL_LAM_MIN},
 };
-
-// ── Spectral LUT (same as SER optical.rs) ─────────────────────────────────────
-
-const LUT_SIZE: usize = 1024;
-const LAM_MIN: f32 = 380.0;
-const LAM_MAX: f32 = 720.0;
-
-fn wavelength_lut() -> &'static [(f32, f32, f32); LUT_SIZE] {
-    static LUT: OnceLock<[(f32, f32, f32); LUT_SIZE]> = OnceLock::new();
-    LUT.get_or_init(|| {
-        let mut lut = [(0.0, 0.0, 0.0); LUT_SIZE];
-        for i in 0..LUT_SIZE {
-            let lam = LAM_MIN + (LAM_MAX - LAM_MIN) * (i as f32 / (LUT_SIZE - 1) as f32);
-            lut[i] = wavelength_rgb(lam);
-        }
-        lut
-    })
-}
-
-fn wavelength_rgb(lam: f32) -> (f32, f32, f32) {
-    let gauss_asym = |x: f32, mu: f32, s1: f32, s2: f32| -> f32 {
-        let s = if x < mu { s1 } else { s2 };
-        (-0.5 * ((x - mu) / s).powi(2)).exp()
-    };
-    let x = 1.056 * gauss_asym(lam, 599.8, 37.9, 31.0) + 0.362 * gauss_asym(lam, 442.0, 16.0, 26.7)
-        - 0.065 * gauss_asym(lam, 501.1, 20.4, 26.2);
-    let y = 0.821 * gauss_asym(lam, 568.8, 46.9, 40.5) + 0.286 * gauss_asym(lam, 530.9, 16.3, 31.1);
-    let z = 1.217 * gauss_asym(lam, 437.0, 11.8, 36.0) + 0.681 * gauss_asym(lam, 459.0, 26.0, 13.8);
-    let mut r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
-    let mut g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
-    let mut b = 0.0557 * x - 0.2040 * y + 1.0570 * z;
-    r = r.max(0.0);
-    g = g.max(0.0);
-    b = b.max(0.0);
-    let peak = r.max(g).max(b);
-    if peak > 1e-6 {
-        (r / peak, g / peak, b / peak)
-    } else {
-        (0.0, 0.0, 0.0)
-    }
-}
-
-fn spectral_lookup(lam_nm: f32) -> (f32, f32, f32) {
-    if !(LAM_MIN..=LAM_MAX).contains(&lam_nm) {
-        return (0.0, 0.0, 0.0);
-    }
-    let lut = wavelength_lut();
-    let idx = (lam_nm - LAM_MIN) / (LAM_MAX - LAM_MIN) * (LUT_SIZE - 1) as f32;
-    let i0 = idx.floor() as usize;
-    let i1 = (i0 + 1).min(LUT_SIZE - 1);
-    let t = idx - i0 as f32;
-    let (r0, g0, b0) = lut[i0];
-    let (r1, g1, b1) = lut[i1];
-    (r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t)
-}
 
 // ── Cell grid & hashing (same as SER optical_micro_facet) ─────────────────────
 
@@ -95,14 +38,7 @@ const PITCH: i32 = CELL_W + CELL_GAP; // 9
 /// Same per-cell hash as `optical_cell_hash`.  Returns [0, 1).
 #[inline]
 fn cell_hash(col: i32, row: i32, seed: u32) -> f32 {
-    let mut x = (col as u32).wrapping_mul(1_664_525).wrapping_add(seed)
-        ^ (row as u32).wrapping_mul(1_013_904_223);
-    x ^= x >> 16;
-    x = x.wrapping_mul(2_246_822_519);
-    x ^= x >> 13;
-    x = x.wrapping_mul(3_266_489_917);
-    x ^= x >> 16;
-    x as f32 / u32::MAX as f32
+    cell_hash01(col, row, seed)
 }
 
 /// Column, row, horizontal-stagger for pixel at `(local_x, local_y)`.
@@ -339,8 +275,8 @@ pub(crate) fn draw_diamond_foil(target: &mut Pixmap, rect: CoverageRect, opacity
             // ── Spectral colour ─────────────────────────────────────────
             let h1 = cell_hash(col, row, 0x7777);
             let noise = ser_hash01(x, y);
-            let lam = LAM_MIN
-                + (LAM_MAX - LAM_MIN)
+            let lam = SPECTRAL_LAM_MIN
+                + (SPECTRAL_LAM_MAX - SPECTRAL_LAM_MIN)
                     * ((u * 0.45 + v * 0.35 + noise * 0.06 + h1 * 0.14).rem_euclid(1.0));
             let (r, g, b) = spectral_lookup(lam);
 

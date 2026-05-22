@@ -339,9 +339,11 @@ fn truncate_text_to_width(
         let mut fitted = String::new();
         let mut raw_acc = 0.0_f32;
         let mut char_count = 0usize;
+        let mut ch_buf = [0u8; 4];
 
         for ch in text.chars() {
-            let (ch_raw, _) = engine.measure_raw_advances(&ch.to_string(), family_name, font_size);
+            let ch_str = ch.encode_utf8(&mut ch_buf);
+            let (ch_raw, _) = engine.measure_raw_advances(ch_str, family_name, font_size);
             let new_width = raw_acc + ch_raw + letter_spacing * char_count as f32;
             if new_width > max_width {
                 break;
@@ -375,12 +377,13 @@ pub(super) fn tokenize_line(text: &str) -> Vec<String> {
         let segment = &text[prev..bp];
         if !segment.is_empty() {
             let mut word = String::new();
+            let mut ch_buf = [0u8; 4];
             for ch in segment.chars() {
                 if is_word_separator(ch) {
                     if !word.is_empty() {
                         tokens.push(std::mem::take(&mut word));
                     }
-                    tokens.push(ch.to_string());
+                    tokens.push(ch.encode_utf8(&mut ch_buf).to_string());
                 } else {
                     word.push(ch);
                 }

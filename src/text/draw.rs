@@ -242,10 +242,6 @@ fn lerp_color(start: Color, end: Color, t: f32) -> Color {
 
 /// Draw a single line of text (scale_x = 1.0).
 pub fn draw_text_line(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
-    draw_text_line_inner(pixmap, p);
-}
-
-fn draw_text_line_inner(pixmap: &mut Pixmap, p: DrawTextLine<'_>) {
     if p.text.trim().is_empty() {
         return;
     }
@@ -327,11 +323,6 @@ pub fn draw_multiline_text(pixmap: &mut Pixmap, p: DrawMultiline<'_>) {
     // Binary-search for the largest font_size in [min_font_size, base_font_size]
     // whose wrapped text fits within `height`.
     let font_size = binary_search_font_size(
-        text,
-        p.language,
-        p.family_name,
-        p.width,
-        p.letter_spacing,
         p.line_height,
         p.height,
         p.base_font_size,
@@ -688,7 +679,7 @@ fn draw_multiline_with_first_line_compress(
         p.letter_spacing,
     );
 
-    draw_text_line_inner(
+    draw_text_line(
         pixmap,
         DrawTextLine {
             text: first_line,
@@ -807,11 +798,6 @@ fn draw_justified_token_line(
 /// Uses binary search — O(log range) wraps instead of O(range).
 #[allow(clippy::too_many_arguments)]
 fn binary_search_font_size(
-    _text: &str,
-    _language: Option<&str>,
-    _family_name: &str,
-    _width: f32,
-    _letter_spacing: f32,
     line_height: f32,
     height: f32,
     base_font_size: u32,

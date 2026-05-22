@@ -363,7 +363,8 @@ pub fn wrap_ruby_tokens(
             }
             RubyToken::Plain(ref s) => {
                 for ch in s.chars() {
-                    let ch_str = ch.to_string();
+                    let mut ch_buf = [0u8; 4];
+                    let ch_str = ch.encode_utf8(&mut ch_buf);
                     let ch_w =
                         estimate_text_width(&ch_str, None, family_name, font_size, letter_spacing);
                     if !current_line.is_empty() && current_width + ch_w > max_width {
@@ -372,7 +373,7 @@ pub fn wrap_ruby_tokens(
                     }
                     match current_line.last_mut() {
                         Some(RubyToken::Plain(last)) => last.push(ch),
-                        _ => current_line.push(RubyToken::Plain(ch_str)),
+                        _ => current_line.push(RubyToken::Plain(ch_str.to_string())),
                     }
                     current_width += ch_w;
                 }

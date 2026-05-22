@@ -76,12 +76,7 @@ pub(crate) fn description_y(card: &CardDataEntry, style: &LayoutStyle) -> u32 {
     if card.is_spell() || card.is_trap() {
         style.effect_top
     } else {
-        let effect_height = if has_effect_line(card) {
-            (style.effect_size as f32 * style.effect_line_height).round() as u32
-        } else {
-            style.effect_min_height
-        };
-        style.effect_top + effect_height
+        style.effect_top + effect_line_height(style, has_effect_line(card))
     }
 }
 
@@ -92,11 +87,7 @@ pub(crate) fn description_height(
 ) -> u32 {
     let mut height = base.description.base_height;
     if !card.is_spell() && !card.is_trap() {
-        let effect_height = if has_effect_line(card) {
-            (style.effect_size as f32 * style.effect_line_height).round() as u32
-        } else {
-            style.effect_min_height
-        };
+        let effect_height = effect_line_height(style, has_effect_line(card));
         height = height.saturating_sub(effect_height);
         height = height.saturating_sub(base.description.atk_bar_height);
     }
@@ -140,17 +131,13 @@ pub(crate) fn attribute_asset_name(card: &CardDataEntry, language: Option<&str>)
 }
 
 pub(crate) fn spell_trap_subtype_icon_asset(card: &CardDataEntry) -> Option<&'static str> {
-    if (card.type_ & TYPE_QUICKPLAY) != 0 {
-        Some("icon-quick-play.webp")
-    } else if (card.type_ & TYPE_CONTINUOUS) != 0 {
-        Some("icon-continuous.webp")
-    } else if (card.type_ & TYPE_EQUIP) != 0 {
-        Some("icon-equip.webp")
-    } else if (card.type_ & TYPE_FIELD) != 0 {
-        Some("icon-field.webp")
-    } else if (card.type_ & TYPE_COUNTER) != 0 {
-        Some("icon-counter.webp")
-    } else if card.is_spell() && (card.type_ & TYPE_RITUAL) != 0 {
+    for &(bit, asset) in SUBTYPE_ICONS {
+        if (card.type_ & bit) != 0 {
+            return Some(asset);
+        }
+    }
+
+    if card.is_spell() && (card.type_ & TYPE_RITUAL) != 0 {
         Some("icon-ritual.webp")
     } else {
         None
@@ -176,55 +163,21 @@ pub(crate) fn localized_spell_trap_name(
     language: Option<&str>,
 ) -> &'static str {
     match language.unwrap_or("sc") {
-        "sc" | "tc" => {
-            if card.is_spell() {
-                "魔法卡"
-            } else {
-                "陷阱卡"
-            }
-        }
-        "jp" => {
-            if card.is_spell() {
-                "[魔(ま)][法(ほう)]カード"
-            } else {
-                "[罠(トラップ)]カード"
-            }
-        }
-        "kr" => {
-            if card.is_spell() {
-                "마법 카드"
-            } else {
-                "함정 카드"
-            }
-        }
-        "en" => {
-            if card.is_spell() {
-                "Spell Card"
-            } else {
-                "Trap Card"
-            }
-        }
-        "astral" => {
-            if card.is_spell() {
-                "マホウカアド"
-            } else {
-                "トラププカアド"
-            }
-        }
-        _ => {
-            if card.is_spell() {
-                "魔法卡"
-            } else {
-                "陷阱卡"
-            }
-        }
+        "sc" | "tc" => localized_spell_trap_labels(card.is_spell(), "魔法卡", "陷阱卡"),
+        "jp" => localized_spell_trap_labels(
+            card.is_spell(),
+            "[魔(ま)][法(ほう)]カード",
+            "[罠(トラップ)]カード",
+        ),
+        "kr" => localized_spell_trap_labels(card.is_spell(), "마법 카드", "함정 카드"),
+        "en" => localized_spell_trap_labels(card.is_spell(), "Spell Card", "Trap Card"),
+        "astral" => localized_spell_trap_labels(card.is_spell(), "マホウカアド", "トラププカアド"),
+        _ => localized_spell_trap_labels(card.is_spell(), "魔法卡", "陷阱卡"),
     }
 }
 
 pub(crate) fn has_effect_line(card: &CardDataEntry) -> bool {
-    // `build_effect_line` returns None for spells/traps and always builds a
-    // non-empty string for monsters, so `.is_some()` is sufficient here.
-    build_effect_line(card, CardKind::Yugioh, None).is_some()
+    !card.is_spell() && !card.is_trap()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +218,14 @@ const MONSTER_TYPE_ORDER: &[(MonsterTypeKey, u32)] = &[
     (MonsterTypeKey::Tuner, TYPE_TUNER),
 ];
 
+const SUBTYPE_ICONS: &[(u32, &str)] = &[
+    (TYPE_QUICKPLAY, "icon-quick-play.webp"),
+    (TYPE_CONTINUOUS, "icon-continuous.webp"),
+    (TYPE_EQUIP, "icon-equip.webp"),
+    (TYPE_FIELD, "icon-field.webp"),
+    (TYPE_COUNTER, "icon-counter.webp"),
+];
+
 fn normalized_language(language: Option<&str>) -> &'static str {
     match language.unwrap_or("sc") {
         "tc" => "tc",
@@ -291,6 +252,18 @@ fn localized_monster_word(language: &str) -> &'static str {
         "kr" => "몬스터",
         "tc" => "怪獸",
         _ => "怪兽",
+    }
+}
+
+fn localized_spell_trap_labels(is_spell: bool, spell: &'static str, trap: &'static str) -> &'static str {
+    if is_spell { spell } else { trap }
+}
+
+fn effect_line_height(style: &LayoutStyle, has_effect_line: bool) -> u32 {
+    if has_effect_line {
+        (style.effect_size as f32 * style.effect_line_height).round() as u32
+    } else {
+        style.effect_min_height
     }
 }
 
@@ -676,7 +649,11 @@ fn join_trimmed_lines(lines: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_effect_line, split_pendulum_description};
+    use super::{
+        build_effect_line, has_effect_line, localized_spell_trap_name,
+        spell_trap_subtype_icon_asset, split_pendulum_description, TYPE_QUICKPLAY,
+        TYPE_RITUAL,
+    };
     use ygopro_cdb_encode_rs::{CardDataEntry, TYPE_MONSTER};
 
     #[test]
@@ -777,5 +754,45 @@ mod tests {
 
         assert_eq!(sections.pendulum_effect, None);
         assert_eq!(sections.monster_effect, "没有分隔标记。");
+    }
+
+    #[test]
+    fn has_effect_line_matches_spell_trap_check() {
+        let monster = CardDataEntry {
+            type_: TYPE_MONSTER,
+            ..CardDataEntry::default()
+        };
+        let spell = CardDataEntry {
+            type_: 0x2,
+            ..CardDataEntry::default()
+        };
+
+        assert!(has_effect_line(&monster));
+        assert!(!has_effect_line(&spell));
+    }
+
+    #[test]
+    fn keeps_subtype_icon_priority() {
+        let card = CardDataEntry {
+            type_: 0x2 | TYPE_QUICKPLAY | TYPE_RITUAL,
+            ..CardDataEntry::default()
+        };
+
+        assert_eq!(spell_trap_subtype_icon_asset(&card), Some("icon-quick-play.webp"));
+    }
+
+    #[test]
+    fn localized_spell_trap_name_matches_language_and_type() {
+        let spell = CardDataEntry {
+            type_: 0x2,
+            ..CardDataEntry::default()
+        };
+        let trap = CardDataEntry {
+            type_: 0x4,
+            ..CardDataEntry::default()
+        };
+
+        assert_eq!(localized_spell_trap_name(&spell, Some("en")), "Spell Card");
+        assert_eq!(localized_spell_trap_name(&trap, Some("en")), "Trap Card");
     }
 }

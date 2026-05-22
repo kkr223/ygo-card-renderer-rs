@@ -2,22 +2,15 @@
 
 use crate::pixel_ops::hsv_to_rgb;
 
-/// Convert HSV (all 0.0–1.0) + alpha byte to a premultiplied [`tiny_skia::Color`].
-#[cfg(test)]
-pub(crate) fn hsv_to_color(h: f32, s: f32, v: f32, alpha: f32) -> tiny_skia::Color {
-    let (r, g, b) = hsv_to_rgb(h, s, v);
-    tiny_skia::Color::from_rgba(r * alpha, g * alpha, b * alpha, alpha)
-        .unwrap_or(tiny_skia::Color::TRANSPARENT)
-}
+use std::sync::OnceLock;
+
+pub(crate) const SPECTRAL_LUT_SIZE: usize = 1024;
+pub(crate) const SPECTRAL_LAM_MIN: f32 = 380.0;
+pub(crate) const SPECTRAL_LAM_MAX: f32 = 720.0;
 
 pub(crate) fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-#[inline]
-pub(crate) fn clamp01(v: f32) -> f32 {
-    v.clamp(0.0, 1.0)
 }
 
 #[inline]
@@ -28,11 +21,6 @@ pub(crate) fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
 #[inline]
 pub(crate) fn gauss(d: f32, sigma: f32) -> f32 {
     (-d * d / (2.0 * sigma * sigma)).exp()
-}
-
-#[inline]
-pub(crate) fn ser_sin(v: f32) -> f32 {
-    v.sin()
 }
 
 #[inline]
@@ -48,6 +36,18 @@ pub(crate) fn ser_pixel_hash(x: u32, y: u32) -> u64 {
 #[inline]
 pub(crate) fn ser_hash01(x: u32, y: u32) -> f32 {
     (ser_pixel_hash(x, y) & 0xFFFF) as f32 / 65535.0
+}
+
+#[inline]
+pub(crate) fn cell_hash01(col: i32, row: i32, seed: u32) -> f32 {
+    let mut x = (col as u32).wrapping_mul(1_664_525).wrapping_add(seed)
+        ^ (row as u32).wrapping_mul(1_013_904_223);
+    x ^= x >> 16;
+    x = x.wrapping_mul(2_246_822_519);
+    x ^= x >> 13;
+    x = x.wrapping_mul(3_266_489_917);
+    x ^= x >> 16;
+    x as f32 / u32::MAX as f32
 }
 
 #[inline]
@@ -69,7 +69,7 @@ pub(crate) fn value_noise(u: f32, v: f32, scale: f32, seed_x: i32, seed_y: i32) 
 
 #[inline]
 pub(crate) fn prism_peak(phase: f32, power: f32) -> f32 {
-    (ser_sin(phase * std::f32::consts::TAU) * 0.5 + 0.5).powf(power)
+    ((phase * std::f32::consts::TAU).sin() * 0.5 + 0.5).powf(power)
 }
 
 #[inline]
@@ -84,7 +84,7 @@ pub(crate) fn ser_independent_speckle_rgb(
     let mut phase = (phase_a * 0.42
         + phase_b * 0.31
         + phase_c * 0.27
-        + ser_sin(u * 38.0 + v * 17.0) * 0.055
+        + (u * 38.0 + v * 17.0).sin() * 0.055
         + u * 0.18
         - v * 0.11)
         .rem_euclid(1.0);
@@ -238,6 +238,51 @@ pub(crate) fn screen_channel_float(dst: f32, src: f32, alpha: f32) -> f32 {
 }
 
 #[inline]
-pub(crate) fn hard_unit_mask(radius: f32, dist: f32) -> f32 {
-    if dist <= radius { 1.0 } else { 0.0 }
+pub(crate) fn spectral_lookup(lam_nm: f32) -> (f32, f32, f32) {
+    if !(SPECTRAL_LAM_MIN..=SPECTRAL_LAM_MAX).contains(&lam_nm) {
+        return (0.0, 0.0, 0.0);
+    }
+    let lut = spectral_lut();
+    let idx = (lam_nm - SPECTRAL_LAM_MIN) / (SPECTRAL_LAM_MAX - SPECTRAL_LAM_MIN)
+        * (SPECTRAL_LUT_SIZE - 1) as f32;
+    let i0 = idx.floor() as usize;
+    let i1 = (i0 + 1).min(SPECTRAL_LUT_SIZE - 1);
+    let t = idx - i0 as f32;
+    lerp_rgb(lut[i0], lut[i1], t)
+}
+
+fn spectral_lut() -> &'static [(f32, f32, f32); SPECTRAL_LUT_SIZE] {
+    static LUT: OnceLock<[(f32, f32, f32); SPECTRAL_LUT_SIZE]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut lut = [(0.0, 0.0, 0.0); SPECTRAL_LUT_SIZE];
+        for i in 0..SPECTRAL_LUT_SIZE {
+            let lam = SPECTRAL_LAM_MIN
+                + (SPECTRAL_LAM_MAX - SPECTRAL_LAM_MIN) * (i as f32 / (SPECTRAL_LUT_SIZE - 1) as f32);
+            lut[i] = wavelength_rgb(lam);
+        }
+        lut
+    })
+}
+
+fn wavelength_rgb(lam: f32) -> (f32, f32, f32) {
+    let gauss_asym = |x: f32, mu: f32, s1: f32, s2: f32| -> f32 {
+        let s = if x < mu { s1 } else { s2 };
+        (-0.5 * ((x - mu) / s).powi(2)).exp()
+    };
+    let x = 1.056 * gauss_asym(lam, 599.8, 37.9, 31.0) + 0.362 * gauss_asym(lam, 442.0, 16.0, 26.7)
+        - 0.065 * gauss_asym(lam, 501.1, 20.4, 26.2);
+    let y = 0.821 * gauss_asym(lam, 568.8, 46.9, 40.5) + 0.286 * gauss_asym(lam, 530.9, 16.3, 31.1);
+    let z = 1.217 * gauss_asym(lam, 437.0, 11.8, 36.0) + 0.681 * gauss_asym(lam, 459.0, 26.0, 13.8);
+    let mut r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
+    let mut g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
+    let mut b = 0.0557 * x - 0.2040 * y + 1.0570 * z;
+    r = r.max(0.0);
+    g = g.max(0.0);
+    b = b.max(0.0);
+    let peak = r.max(g).max(b);
+    if peak > 1e-6 {
+        (r / peak, g / peak, b / peak)
+    } else {
+        (0.0, 0.0, 0.0)
+    }
 }
