@@ -283,8 +283,7 @@ pub fn draw_ruby_text_line(pixmap: &mut Pixmap, p: RubyLineParams<'_>) {
 
                 let eff_rt_w = if slot.rt_letter_spacing > 0.0 {
                     (slot.rt_natural_width
-                        + slot.rt_letter_spacing
-                            * (rt.chars().count().saturating_sub(1)) as f32)
+                        + slot.rt_letter_spacing * (rt.chars().count().saturating_sub(1)) as f32)
                         * combined_scale
                 } else {
                     slot.rt_natural_width * combined_scale

@@ -2243,6 +2243,7 @@ dependencies = [
  "image",
  "memmap2",
  "ort",
+ "rayon",
  "resvg",
  "serde",
  "serde_json",

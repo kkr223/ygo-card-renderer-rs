@@ -25,7 +25,9 @@ use crate::pixel_ops::screen_pixel;
 
 use super::{
     CoverageRect,
-    math::{cell_hash01, ser_hash01, smoothstep, spectral_lookup, SPECTRAL_LAM_MAX, SPECTRAL_LAM_MIN},
+    math::{
+        SPECTRAL_LAM_MAX, SPECTRAL_LAM_MIN, cell_hash01, ser_hash01, smoothstep, spectral_lookup,
+    },
 };
 
 // ── Cell grid & hashing (same as SER optical_micro_facet) ─────────────────────

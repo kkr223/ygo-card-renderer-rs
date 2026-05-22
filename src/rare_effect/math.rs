@@ -257,7 +257,8 @@ fn spectral_lut() -> &'static [(f32, f32, f32); SPECTRAL_LUT_SIZE] {
         let mut lut = [(0.0, 0.0, 0.0); SPECTRAL_LUT_SIZE];
         for i in 0..SPECTRAL_LUT_SIZE {
             let lam = SPECTRAL_LAM_MIN
-                + (SPECTRAL_LAM_MAX - SPECTRAL_LAM_MIN) * (i as f32 / (SPECTRAL_LUT_SIZE - 1) as f32);
+                + (SPECTRAL_LAM_MAX - SPECTRAL_LAM_MIN)
+                    * (i as f32 / (SPECTRAL_LUT_SIZE - 1) as f32);
             lut[i] = wavelength_rgb(lam);
         }
         lut

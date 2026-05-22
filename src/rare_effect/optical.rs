@@ -3,9 +3,77 @@
 //! Core algorithm: staggered micro-facet normal map, two orthogonal diffraction
 //! gratings, FBM energy variation, "#" band efficiency, and Blinn-Phong glints.
 
+use rayon::prelude::*;
 use tiny_skia::Pixmap;
 
-use super::{math::*, CoverageRect};
+use super::{CoverageRect, math::*};
+
+const OPTICAL_ENERGY_MAP_STEP: u32 = 4;
+
+#[derive(Debug, Clone)]
+struct EnergyMap {
+    step: u32,
+    rect_w: u32,
+    rect_h: u32,
+    grid_w: usize,
+    grid_h: usize,
+    values: Vec<f32>,
+}
+
+impl EnergyMap {
+    fn build<F>(rect_w: u32, rect_h: u32, step: u32, mut sample: F) -> Self
+    where
+        F: FnMut(f32, f32) -> f32,
+    {
+        let rect_w = rect_w.max(1);
+        let rect_h = rect_h.max(1);
+        let step = step.max(1);
+        let grid_w = (rect_w.saturating_sub(1).div_ceil(step) + 1) as usize;
+        let grid_h = (rect_h.saturating_sub(1).div_ceil(step) + 1) as usize;
+        let mut values = Vec::with_capacity(grid_w * grid_h);
+        for gy in 0..grid_h {
+            let y = ((gy as u32).saturating_mul(step)).min(rect_h - 1) as f32;
+            for gx in 0..grid_w {
+                let x = ((gx as u32).saturating_mul(step)).min(rect_w - 1) as f32;
+                values.push(sample(x, y));
+            }
+        }
+        Self {
+            step,
+            rect_w,
+            rect_h,
+            grid_w,
+            grid_h,
+            values,
+        }
+    }
+
+    #[inline]
+    fn sample(&self, x: f32, y: f32) -> f32 {
+        let x = x.clamp(0.0, self.rect_w.saturating_sub(1) as f32);
+        let y = y.clamp(0.0, self.rect_h.saturating_sub(1) as f32);
+        let step = self.step as f32;
+        let gx0 = (x / step).floor().clamp(0.0, (self.grid_w - 1) as f32) as usize;
+        let gy0 = (y / step).floor().clamp(0.0, (self.grid_h - 1) as f32) as usize;
+        let gx1 = (gx0 + 1).min(self.grid_w - 1);
+        let gy1 = (gy0 + 1).min(self.grid_h - 1);
+        let x0 = (gx0 as u32).saturating_mul(self.step).min(self.rect_w - 1) as f32;
+        let x1 = (gx1 as u32).saturating_mul(self.step).min(self.rect_w - 1) as f32;
+        let y0 = (gy0 as u32).saturating_mul(self.step).min(self.rect_h - 1) as f32;
+        let y1 = (gy1 as u32).saturating_mul(self.step).min(self.rect_h - 1) as f32;
+        let tx = if x1 > x0 { (x - x0) / (x1 - x0) } else { 0.0 };
+        let ty = if y1 > y0 { (y - y0) / (y1 - y0) } else { 0.0 };
+        let row0 = gy0 * self.grid_w;
+        let row1 = gy1 * self.grid_w;
+        let a = self.values[row0 + gx0];
+        let b = self.values[row0 + gx1];
+        let c = self.values[row1 + gx0];
+        let d = self.values[row1 + gx1];
+        let ab = a + (b - a) * tx;
+        let cd = c + (d - c) * tx;
+        ab + (cd - ab) * ty
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct OpticalSerParams {
@@ -84,6 +152,80 @@ const OPTICAL_SER_PARAMS: OpticalSerParams = OpticalSerParams {
     cluster_high: 0.90,
 };
 
+#[derive(Debug, Clone, Copy)]
+struct OpticalSerCell {
+    line_len: f32,
+    tilt_x: f32,
+    tilt_y: f32,
+    sparkle_pin: f32,
+}
+
+#[derive(Debug, Clone)]
+struct OpticalSerCellCache {
+    cols: usize,
+    col_min: i32,
+    row_min: i32,
+    row_max: i32,
+    entries: Vec<OpticalSerCell>,
+}
+
+impl OpticalSerCellCache {
+    fn build(rect_w: u32, rect_h: u32, params: OpticalSerParams) -> Self {
+        let pitch_x = (params.cell_w + params.cell_gap).max(1) as i32;
+        let pitch_y = (params.cell_h + params.cell_gap).max(1) as i32;
+        let col_min = 0;
+        let col_max = (rect_w.max(1) as i32 - 1).div_euclid(pitch_x) + 1;
+        let row_min = -1;
+        let row_max = (rect_h.max(1) as i32 - 1).div_euclid(pitch_y) + 1;
+        let cols = (col_max - col_min + 1).max(1) as usize;
+        let rows = (row_max - row_min + 1).max(1) as usize;
+        let mut entries = Vec::with_capacity(cols * rows);
+        for row in row_min..=row_max {
+            for col in col_min..=col_max {
+                entries.push(compute_optical_ser_cell(col, row, params));
+            }
+        }
+        Self {
+            cols,
+            col_min,
+            row_min,
+            row_max,
+            entries,
+        }
+    }
+
+    #[inline]
+    fn get(&self, col: i32, row: i32, params: OpticalSerParams) -> OpticalSerCell {
+        if col < self.col_min || row < self.row_min || row > self.row_max {
+            return compute_optical_ser_cell(col, row, params);
+        }
+        let local_col = col - self.col_min;
+        if local_col < 0 || local_col as usize >= self.cols {
+            return compute_optical_ser_cell(col, row, params);
+        }
+        let idx = (row - self.row_min) as usize * self.cols + local_col as usize;
+        self.entries[idx]
+    }
+}
+
+fn compute_optical_ser_cell(col: i32, row: i32, params: OpticalSerParams) -> OpticalSerCell {
+    let rnd_line = cell_hash01(col, row, params.seed + 5555);
+    let line_len = if rnd_line > 0.80 {
+        (cell_hash01(col, row, params.seed + 6666) * 3.0 + 2.0).floor()
+    } else {
+        1.0
+    };
+    let tilt_x = (cell_hash01(col, row, params.seed + 1337) - 0.5) * 2.0 * params.tilt_strength;
+    let tilt_y = (cell_hash01(col, row, params.seed + 8128) - 0.5) * 2.0 * params.tilt_strength;
+    let sparkle_pin = smoothstep(0.84, 0.995, cell_hash01(col, row, params.seed + 4242));
+    OpticalSerCell {
+        line_len,
+        tilt_x,
+        tilt_y,
+        sparkle_pin,
+    }
+}
+
 /// Physically-inspired Secret Rare foil for the illustration: a staggered
 /// micro-facet normal map, two orthogonal diffraction gratings, broad "#" band
 /// efficiency, FBM energy variation, and Blinn-Phong white glints.
@@ -111,129 +253,167 @@ pub(crate) fn draw_optical_ser(target: &mut Pixmap, rect: CoverageRect, opacity:
     let light = vec_norm3(params.light_x, params.light_y, params.light_z);
     let half_vec = vec_norm3(light.0, light.1, light.2 + 1.0);
     let light_xy_len = (light.0 * light.0 + light.1 * light.1).sqrt().max(1e-6);
+    let local_extent_w = x_end.saturating_sub(rect.x).max(1);
+    let local_extent_h = y_end.saturating_sub(rect.y).max(1);
+    let energy_map = EnergyMap::build(
+        local_extent_w,
+        local_extent_h,
+        OPTICAL_ENERGY_MAP_STEP,
+        |x, y| optical_energy(x, y, params),
+    );
+    let cell_cache = OpticalSerCellCache::build(local_extent_w, local_extent_h, params);
+    let width_usize = width as usize;
     let pixels = target.pixels_mut();
 
-    for y in y_start..y_end {
-        for x in x_start..x_end {
-            let local_x = x.saturating_sub(rect.x);
-            let local_y = y.saturating_sub(rect.y);
-            let xf = local_x as f32;
-            let yf = local_y as f32;
-            let u = xf / norm_w;
-            let v = yf / norm_h;
-            let u_centered = u - 0.5;
-            let v_centered = v - 0.5;
+    pixels
+        .par_chunks_mut(width_usize)
+        .enumerate()
+        .skip(y_start as usize)
+        .take((y_end - y_start) as usize)
+        .for_each(|(y, row_pixels)| {
+            let y = y as u32;
+            for x in x_start..x_end {
+                let local_x = x.saturating_sub(rect.x);
+                let local_y = y.saturating_sub(rect.y);
+                let xf = local_x as f32;
+                let yf = local_y as f32;
+                let u = xf / norm_w;
+                let v = yf / norm_h;
+                let u_centered = u - 0.5;
+                let v_centered = v - 0.5;
 
-            let (nx, ny, nz, inside, col, row) = optical_micro_facet(local_x, local_y, params);
-            let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
-            let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
-            let macro_axis = (u_centered * light.0 + v_centered * light.1) / light_xy_len;
-            let macro_light = smoothstep(-0.70, 0.70, macro_axis);
-            let energy = optical_energy(xf, yf, params);
+                let (nx, ny, nz, inside, col, row) =
+                    optical_micro_facet(local_x, local_y, params, &cell_cache);
+                if inside <= f32::EPSILON {
+                    let dst = row_pixels[x as usize];
+                    let base_r = dst.red() as f32 / 255.0;
+                    let base_g = dst.green() as f32 / 255.0;
+                    let base_b = dst.blue() as f32 / 255.0;
+                    let out_r = lerp_f32(base_r, base_r * params.darken, opacity);
+                    let out_g = lerp_f32(base_g, base_g * params.darken, opacity);
+                    let out_b = lerp_f32(base_b, base_b * params.darken, opacity);
+                    row_pixels[x as usize] = tiny_skia::PremultipliedColorU8::from_rgba(
+                        (out_r * 255.0).round() as u8,
+                        (out_g * 255.0).round() as u8,
+                        (out_b * 255.0).round() as u8,
+                        dst.alpha(),
+                    )
+                    .unwrap_or(dst);
+                    continue;
+                }
+                let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
+                let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
+                let macro_axis = (u_centered * light.0 + v_centered * light.1) / light_xy_len;
+                let macro_light = smoothstep(-0.70, 0.70, macro_axis);
+                let energy = energy_map.sample(xf, yf);
 
-            let light_mod = (n_dot_l - 0.5) * params.light_blaze_shift;
-            let delta1 = nx * params.tilt_factor + params.blaze1 + light_mod;
-            let delta2 = ny * params.tilt_factor + params.blaze2 - light_mod;
-            let order = params.diffraction_order.max(1) as f32;
-            let lam1 = params.grating_d_nm * delta1.abs() / order;
-            let lam2 = params.grating_d_nm * delta2.abs() / order;
-            let rgb1 = spectral_lookup(lam1);
-            let rgb2 = spectral_lookup(lam2);
+                let light_mod = (n_dot_l - 0.5) * params.light_blaze_shift;
+                let delta1 = nx * params.tilt_factor + params.blaze1 + light_mod;
+                let delta2 = ny * params.tilt_factor + params.blaze2 - light_mod;
+                let order = params.diffraction_order.max(1) as f32;
+                let lam1 = params.grating_d_nm * delta1.abs() / order;
+                let lam2 = params.grating_d_nm * delta2.abs() / order;
+                let rgb1 = spectral_lookup(lam1);
+                let rgb2 = spectral_lookup(lam2);
 
-            let bw = params.band_width.max(0.002);
-            let bb = params.band_base;
-            let bw_vary = bw * (0.72 + 0.28 * (1.0 - energy));
-            let band_intensity = 0.45 + 0.55 * energy;
-            let band_v = gauss(u - params.band_v1, bw_vary).max(gauss(u - params.band_v2, bw_vary));
-            let band_h = gauss(v - params.band_h1, bw_vary).max(gauss(v - params.band_h2, bw_vary));
-            let eff1 = (bb + (1.0 - bb) * band_v * band_intensity).clamp(bb, 1.0);
-            let eff2 = (bb + (1.0 - bb) * band_h * band_intensity).clamp(bb, 1.0);
+                let bw = params.band_width.max(0.002);
+                let bb = params.band_base;
+                let bw_vary = bw * (0.72 + 0.28 * (1.0 - energy));
+                let band_intensity = 0.45 + 0.55 * energy;
+                let band_v =
+                    gauss(u - params.band_v1, bw_vary).max(gauss(u - params.band_v2, bw_vary));
+                let band_h =
+                    gauss(v - params.band_h1, bw_vary).max(gauss(v - params.band_h2, bw_vary));
+                let eff1 = (bb + (1.0 - bb) * band_v * band_intensity).clamp(bb, 1.0);
+                let eff2 = (bb + (1.0 - bb) * band_h * band_intensity).clamp(bb, 1.0);
 
-            let light_energy = 0.30 + 0.70 * n_dot_l;
-            let combined_energy = energy * inside * light_energy;
-            let macro_brightness = 0.25 + 0.75 * macro_light;
-            let micro_scale = combined_energy * macro_brightness * params.micro_gain * 0.5;
-            let micro_rgb = (
-                (rgb1.0 + rgb2.0) * micro_scale,
-                (rgb1.1 + rgb2.1) * micro_scale,
-                (rgb1.2 + rgb2.2) * micro_scale,
-            );
+                let light_energy = 0.30 + 0.70 * n_dot_l;
+                let combined_energy = energy * inside * light_energy;
+                let macro_brightness = 0.25 + 0.75 * macro_light;
+                let micro_scale = combined_energy * macro_brightness * params.micro_gain * 0.5;
+                let micro_rgb = (
+                    (rgb1.0 + rgb2.0) * micro_scale,
+                    (rgb1.1 + rgb2.1) * micro_scale,
+                    (rgb1.2 + rgb2.2) * micro_scale,
+                );
 
-            let band_boost1 = (eff1 - bb).clamp(0.0, 1.0);
-            let band_boost2 = (eff2 - bb).clamp(0.0, 1.0);
-            let band_rgb = (
-                (rgb1.0 * band_boost1 + rgb2.0 * band_boost2) * combined_energy,
-                (rgb1.1 * band_boost1 + rgb2.1 * band_boost2) * combined_energy,
-                (rgb1.2 * band_boost1 + rgb2.2 * band_boost2) * combined_energy,
-            );
+                let band_boost1 = (eff1 - bb).clamp(0.0, 1.0);
+                let band_boost2 = (eff2 - bb).clamp(0.0, 1.0);
+                let band_rgb = (
+                    (rgb1.0 * band_boost1 + rgb2.0 * band_boost2) * combined_energy,
+                    (rgb1.1 * band_boost1 + rgb2.1 * band_boost2) * combined_energy,
+                    (rgb1.2 * band_boost1 + rgb2.2 * band_boost2) * combined_energy,
+                );
 
-            let inv_band_base = (1.0 - bb).max(1e-6);
-            let line1 = band_boost1 / inv_band_base;
-            let line2 = band_boost2 / inv_band_base;
-            let hash_band = (line1 * 0.95).max(line2 * 1.05) + line1 * line2 * 0.70;
-            let hash_band = hash_band.clamp(0.0, 1.0);
-            let sheet_lam = 440.0
-                + 200.0 * macro_light
-                + 14.0 * (std::f32::consts::TAU * (u * 11.0 + v * 7.0)).sin();
-            let sheet_base = spectral_lookup(sheet_lam);
-            let sheet_energy = hash_band
-                * (0.18 + 0.82 * macro_light)
-                * (0.35 + 0.65 * energy)
-                * inside
-                * params.sheet_gain;
-            let sheet_rgb = (
-                sheet_base.0 * sheet_energy,
-                sheet_base.1 * sheet_energy,
-                sheet_base.2 * sheet_energy,
-            );
+                let inv_band_base = (1.0 - bb).max(1e-6);
+                let line1 = band_boost1 / inv_band_base;
+                let line2 = band_boost2 / inv_band_base;
+                let hash_band = (line1 * 0.95).max(line2 * 1.05) + line1 * line2 * 0.70;
+                let hash_band = hash_band.clamp(0.0, 1.0);
+                let sheet_lam = 440.0
+                    + 200.0 * macro_light
+                    + 14.0 * (std::f32::consts::TAU * (u * 11.0 + v * 7.0)).sin();
+                let sheet_base = spectral_lookup(sheet_lam);
+                let sheet_energy = hash_band
+                    * (0.18 + 0.82 * macro_light)
+                    * (0.35 + 0.65 * energy)
+                    * inside
+                    * params.sheet_gain;
+                let sheet_rgb = (
+                    sheet_base.0 * sheet_energy,
+                    sheet_base.1 * sheet_energy,
+                    sheet_base.2 * sheet_energy,
+                );
 
-            let diff_r = 1.0 - (-(micro_rgb.0 + band_rgb.0 + sheet_rgb.0) * params.foil_gain).exp();
-            let diff_g = 1.0 - (-(micro_rgb.1 + band_rgb.1 + sheet_rgb.1) * params.foil_gain).exp();
-            let diff_b = 1.0 - (-(micro_rgb.2 + band_rgb.2 + sheet_rgb.2) * params.foil_gain).exp();
+                let diff_r =
+                    1.0 - (-(micro_rgb.0 + band_rgb.0 + sheet_rgb.0) * params.foil_gain).exp();
+                let diff_g =
+                    1.0 - (-(micro_rgb.1 + band_rgb.1 + sheet_rgb.1) * params.foil_gain).exp();
+                let diff_b =
+                    1.0 - (-(micro_rgb.2 + band_rgb.2 + sheet_rgb.2) * params.foil_gain).exp();
 
-            let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
-            let pin = smoothstep(0.84, 0.995, cell_hash01(col, row, params.seed + 4242));
-            spec += pin
-                * (0.18 + 0.82 * hash_band)
-                * combined_energy
-                * params.sparkle_gain
-                * macro_brightness;
+                let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
+                let pin = cell_cache.get(col, row, params).sparkle_pin;
+                spec += pin
+                    * (0.18 + 0.82 * hash_band)
+                    * combined_energy
+                    * params.sparkle_gain
+                    * macro_brightness;
 
-            let idx = (y * width + x) as usize;
-            let dst = pixels[idx];
-            let base_r = dst.red() as f32 / 255.0;
-            let base_g = dst.green() as f32 / 255.0;
-            let base_b = dst.blue() as f32 / 255.0;
+                let dst = row_pixels[x as usize];
+                let base_r = dst.red() as f32 / 255.0;
+                let base_g = dst.green() as f32 / 255.0;
+                let base_b = dst.blue() as f32 / 255.0;
 
-            let dark_r = base_r * params.darken;
-            let dark_g = base_g * params.darken;
-            let dark_b = base_b * params.darken;
-            let reveal = (spec * 0.06).clamp(0.0, 0.06);
-            let result_r = (1.0 - (1.0 - dark_r) * (1.0 - diff_r)
-                + spec * params.white_gain
-                + base_r * reveal)
-                .clamp(0.0, 1.0);
-            let result_g = (1.0 - (1.0 - dark_g) * (1.0 - diff_g)
-                + spec * params.white_gain
-                + base_g * reveal)
-                .clamp(0.0, 1.0);
-            let result_b = (1.0 - (1.0 - dark_b) * (1.0 - diff_b)
-                + spec * params.white_gain
-                + base_b * reveal)
-                .clamp(0.0, 1.0);
+                let dark_r = base_r * params.darken;
+                let dark_g = base_g * params.darken;
+                let dark_b = base_b * params.darken;
+                let reveal = (spec * 0.06).clamp(0.0, 0.06);
+                let result_r = (1.0 - (1.0 - dark_r) * (1.0 - diff_r)
+                    + spec * params.white_gain
+                    + base_r * reveal)
+                    .clamp(0.0, 1.0);
+                let result_g = (1.0 - (1.0 - dark_g) * (1.0 - diff_g)
+                    + spec * params.white_gain
+                    + base_g * reveal)
+                    .clamp(0.0, 1.0);
+                let result_b = (1.0 - (1.0 - dark_b) * (1.0 - diff_b)
+                    + spec * params.white_gain
+                    + base_b * reveal)
+                    .clamp(0.0, 1.0);
 
-            let out_r = lerp_f32(base_r, result_r, opacity);
-            let out_g = lerp_f32(base_g, result_g, opacity);
-            let out_b = lerp_f32(base_b, result_b, opacity);
-            pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
-                (out_r * 255.0).round() as u8,
-                (out_g * 255.0).round() as u8,
-                (out_b * 255.0).round() as u8,
-                dst.alpha(),
-            )
-            .unwrap_or(dst);
-        }
-    }
+                let out_r = lerp_f32(base_r, result_r, opacity);
+                let out_g = lerp_f32(base_g, result_g, opacity);
+                let out_b = lerp_f32(base_b, result_b, opacity);
+                row_pixels[x as usize] = tiny_skia::PremultipliedColorU8::from_rgba(
+                    (out_r * 255.0).round() as u8,
+                    (out_g * 255.0).round() as u8,
+                    (out_b * 255.0).round() as u8,
+                    dst.alpha(),
+                )
+                .unwrap_or(dst);
+            }
+        });
 }
 
 /// Simplified Ser foil for small masked regions (attribute icons, level/rank
@@ -264,6 +444,9 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
     let norm_h = (rect_h - 1.0).max(1.0);
     let light = vec_norm3(params.light_x, params.light_y, params.light_z);
     let half_vec = vec_norm3(light.0, light.1, light.2 + 1.0);
+    let local_extent_w = x_end.saturating_sub(rect.x).max(1);
+    let local_extent_h = y_end.saturating_sub(rect.y).max(1);
+    let cell_cache = OpticalSerCellCache::build(local_extent_w, local_extent_h, params);
     let pixels = target.pixels_mut();
 
     for y in y_start..y_end {
@@ -276,7 +459,11 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
             let v = yf / norm_h;
 
             // ── Micro-facet + dual grating (same as draw_optical_ser) ──────────
-            let (nx, ny, nz, inside, col, row) = optical_micro_facet(local_x, local_y, params);
+            let (nx, ny, nz, inside, col, row) =
+                optical_micro_facet(local_x, local_y, params, &cell_cache);
+            if inside <= f32::EPSILON {
+                continue;
+            }
             let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
             let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
 
@@ -304,7 +491,7 @@ pub(crate) fn draw_optical_ser_simple(target: &mut Pixmap, rect: CoverageRect, o
 
             // Simplified specular
             let mut spec = n_dot_h.powf(params.shininess) * combined_energy;
-            let pin = smoothstep(0.84, 0.995, cell_hash01(col, row, params.seed + 4242));
+            let pin = cell_cache.get(col, row, params).sparkle_pin;
             spec += pin * combined_energy * params.sparkle_gain * 0.5;
 
             // ── Left-to-right warm→cool gradient ─────────────────────────────
@@ -404,6 +591,7 @@ fn optical_micro_facet(
     local_x: u32,
     local_y: u32,
     params: OpticalSerParams,
+    cell_cache: &OpticalSerCellCache,
 ) -> (f32, f32, f32, f32, i32, i32) {
     let pitch_x = (params.cell_w + params.cell_gap).max(1) as i32;
     let pitch_y = (params.cell_h + params.cell_gap).max(1) as i32;
@@ -413,30 +601,21 @@ fn optical_micro_facet(
     let stagger = if (col & 1) == 1 { pitch_y / 2 } else { 0 };
     let row = (py - stagger).div_euclid(pitch_y);
 
-    let rnd_line = cell_hash01(col, row, params.seed + 5555);
-    let line_len = if rnd_line > 0.80 {
-        (cell_hash01(col, row, params.seed + 6666) * 3.0 + 2.0).floor()
-    } else {
-        1.0
-    };
+    let cell = cell_cache.get(col, row, params);
 
     let cx = (col as f32 + 0.5) * pitch_x as f32;
     let cy = (row as f32 + 0.5) * pitch_y as f32 + stagger as f32;
     let dx = (local_x as f32 - cx) / (params.cell_w.max(1) as f32 * 0.5);
     let dy = (local_y as f32 - cy) / (params.cell_h.max(1) as f32 * 0.5);
-    let dy_stretched = dy / line_len.max(1.0);
+    let dy_stretched = dy / cell.line_len.max(1.0);
     let r = (dx.abs().powf(3.0) + dy_stretched.abs().powf(3.0)).powf(1.0 / 3.0);
     let inside = 1.0 - smoothstep(0.85, 1.08, r);
 
-    let tilt_x =
-        (cell_hash01(col, row, params.seed + 1337) - 0.5) * 2.0 * params.tilt_strength;
-    let tilt_y =
-        (cell_hash01(col, row, params.seed + 8128) - 0.5) * 2.0 * params.tilt_strength;
     let r_dist = (dx * dx + dy * dy).sqrt();
     let slope = params.dome_depth * r_dist.clamp(0.0, 1.0);
     let active = if inside > 0.001 { 1.0 } else { 0.0 };
-    let nx = (-dx * slope + tilt_x) * active;
-    let ny = (-dy * slope + tilt_y) * active;
+    let nx = (-dx * slope + cell.tilt_x) * active;
+    let ny = (-dy * slope + cell.tilt_y) * active;
     let inv_len = 1.0 / (nx * nx + ny * ny + 1.0).sqrt();
     (nx * inv_len, ny * inv_len, inv_len, inside, col, row)
 }
@@ -460,11 +639,7 @@ fn optical_fbm(x: f32, y: f32, base_cell: f32, seed: u32, octaves: u32) -> f32 {
         amp *= 0.5;
         cell = (cell * 0.5).max(1.0);
     }
-    if amp_sum > 1e-6 {
-        total / amp_sum
-    } else {
-        0.0
-    }
+    if amp_sum > 1e-6 { total / amp_sum } else { 0.0 }
 }
 
 fn optical_smooth_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
@@ -482,7 +657,6 @@ fn optical_smooth_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
     let d = cell_hash01(ix + 1, iy + 1, seed);
     (a * (1.0 - sx) + b * sx) * (1.0 - sy) + (c * (1.0 - sx) + d * sx) * sy
 }
-
 
 #[inline]
 fn vec_norm3(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
@@ -573,6 +747,100 @@ const OPTICAL_SCR_PARAMS: OpticalScrParams = OpticalScrParams {
     cluster_high: 0.82,
 };
 
+#[derive(Debug, Clone, Copy)]
+struct OpticalScrDotCell {
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    dot_hash: f32,
+    tilt_x: f32,
+    tilt_y: f32,
+    line_gate: f32,
+    row_gate: f32,
+}
+
+#[derive(Debug, Clone)]
+struct OpticalScrCellCache {
+    cols: usize,
+    col_min: i32,
+    row_min: i32,
+    row_max: i32,
+    entries: Vec<OpticalScrDotCell>,
+}
+
+impl OpticalScrCellCache {
+    fn build(rect_w: u32, rect_h: u32, params: OpticalScrParams) -> Self {
+        let pitch = params.dot_pitch.max(1.0);
+        let col_min = -1;
+        let row_min = -1;
+        let col_max = ((rect_w.max(1) - 1) as f32 / pitch).floor() as i32 + 1;
+        let row_max = ((rect_h.max(1) - 1) as f32 / pitch).floor() as i32 + 1;
+        let cols = (col_max - col_min + 1).max(1) as usize;
+        let rows = (row_max - row_min + 1).max(1) as usize;
+        let mut entries = Vec::with_capacity(cols * rows);
+        for row in row_min..=row_max {
+            for col in col_min..=col_max {
+                entries.push(compute_scr_dot_cell(col, row, params));
+            }
+        }
+        Self {
+            cols,
+            col_min,
+            row_min,
+            row_max,
+            entries,
+        }
+    }
+
+    #[inline]
+    fn get(&self, col: i32, row: i32, params: OpticalScrParams) -> OpticalScrDotCell {
+        if col < self.col_min || row < self.row_min || row > self.row_max {
+            return compute_scr_dot_cell(col, row, params);
+        }
+        let local_col = col - self.col_min;
+        if local_col < 0 || local_col as usize >= self.cols {
+            return compute_scr_dot_cell(col, row, params);
+        }
+        let idx = (row - self.row_min) as usize * self.cols + local_col as usize;
+        self.entries[idx]
+    }
+}
+
+fn compute_scr_dot_cell(col: i32, row: i32, params: OpticalScrParams) -> OpticalScrDotCell {
+    let pitch = params.dot_pitch.max(1.0);
+    let hash_a = cell_hash01(col, row, params.seed + 10_003);
+    let hash_b = cell_hash01(col, row, params.seed + 20_011);
+    let hash_c = cell_hash01(col, row, params.seed + 30_019);
+    let jitter_x = (hash_a - 0.5) * params.dot_jitter;
+    let jitter_y = (hash_b - 0.5) * params.dot_jitter;
+    let center_x = (col as f32 + 0.5 + jitter_x) * pitch;
+    let center_y = (row as f32 + 0.5 + jitter_y) * pitch;
+    let radius = params.dot_radius * (0.86 + hash_c * 0.26);
+    let tilt_x = (cell_hash01(col, row, params.seed + 40_031) - 0.5) * params.tilt_strength;
+    let tilt_y = (cell_hash01(col, row, params.seed + 50_047) - 0.5) * params.tilt_strength;
+    let row_phase_hash = cell_hash01(col, row, params.seed + 60_059);
+    let inv_sqrt2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let diag_perp = (center_x + center_y) * inv_sqrt2;
+    let diag_along = (center_x - center_y) * inv_sqrt2;
+    let line_phase =
+        diag_perp / params.line_pitch.max(1.0) + diag_along * 0.004 + row_phase_hash * 0.055;
+    let primary = prism_peak(line_phase, params.line_sharpness);
+    let secondary = prism_peak(line_phase * 0.53 + 0.37, params.line_sharpness * 0.78);
+    let line_gate = (primary * 0.92 + secondary * 0.36).min(1.0);
+    let row_gate =
+        0.62 + 0.38 * smoothstep(0.10, 0.92, cell_hash01(col, row, params.seed + 90_017));
+    OpticalScrDotCell {
+        center_x,
+        center_y,
+        radius,
+        dot_hash: hash_c,
+        tilt_x,
+        tilt_y,
+        line_gate,
+        row_gate,
+    }
+}
+
 /// SCR foil for the illustration area.
 ///
 /// Physical model: only small dots are printed. They live on a dense
@@ -603,7 +871,15 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
     let norm_h = (rect_h - 1.0).max(1.0);
     let light = vec_norm3(params.light_x, params.light_y, params.light_z);
     let half_vec = vec_norm3(light.0, light.1, light.2 + 1.0);
-    let pixels = target.pixels_mut();
+    let local_extent_w = x_end.saturating_sub(rect.x).max(1);
+    let local_extent_h = y_end.saturating_sub(rect.y).max(1);
+    let energy_map = EnergyMap::build(
+        local_extent_w,
+        local_extent_h,
+        OPTICAL_ENERGY_MAP_STEP,
+        |x, y| scr_energy(x, y, params),
+    );
+    let cell_cache = OpticalScrCellCache::build(local_extent_w, local_extent_h, params);
 
     // Grating direction: dots are arranged along ↗ rows, so the grating normal
     // is the perpendicular ↘ axis. Colour is therefore coherent along each
@@ -612,156 +888,165 @@ pub(crate) fn draw_optical_scr(target: &mut Pixmap, rect: CoverageRect, opacity:
     let grating_nx = inv_sqrt2;
     let grating_ny = inv_sqrt2;
 
-    for y in y_start..y_end {
-        for x in x_start..x_end {
-            let local_x = x.saturating_sub(rect.x);
-            let local_y = y.saturating_sub(rect.y);
-            let xf = local_x as f32;
-            let yf = local_y as f32;
-            let u = xf / norm_w;
-            let v = yf / norm_h;
+    let width_usize = width as usize;
+    let pixels = target.pixels_mut();
 
-            let (inside, dome_bright, nx, ny, nz, col, row, line_gate, dot_hash) =
-                scr_dot_facet(local_x, local_y, params);
+    pixels
+        .par_chunks_mut(width_usize)
+        .enumerate()
+        .skip(y_start as usize)
+        .take((y_end - y_start) as usize)
+        .for_each(|(y, row_pixels)| {
+            let y = y as u32;
+            for x in x_start..x_end {
+                let local_x = x.saturating_sub(rect.x);
+                let local_y = y.saturating_sub(rect.y);
+                let xf = local_x as f32;
+                let yf = local_y as f32;
+                let u = xf / norm_w;
+                let v = yf / norm_h;
 
-            let u_centered = u - 0.5;
-            let v_centered = v - 0.5;
-            let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
-            let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
-            let normal_phase = (nx * grating_nx + ny * grating_ny) * params.tilt_factor;
-            let sin_theta = (u_centered * grating_nx + v_centered * grating_ny)
-                * params.angle_spread
-                + params.blaze_offset
-                + normal_phase;
-            let order = params.diffraction_order.max(1) as f32;
-            let lam = params.grating_d_nm * sin_theta.abs() / order;
-            let diff_rgb = spectral_lookup(lam);
-            let warm_near_light =
-                smoothstep(575.0, 635.0, lam) * (1.0 - smoothstep(665.0, 725.0, lam));
+                let (inside, dome_bright, nx, ny, nz, col, row, line_gate, dot_hash) =
+                    scr_dot_facet(local_x, local_y, params, &cell_cache);
 
-            let lam2 = params.grating_d_nm * (sin_theta * 0.56 + 0.14).abs() / order;
-            let diff_rgb2 = spectral_lookup(lam2);
+                let u_centered = u - 0.5;
+                let v_centered = v - 0.5;
+                let n_dot_l = (nx * light.0 + ny * light.1 + nz * light.2).clamp(0.0, 1.0);
+                let n_dot_h = (nx * half_vec.0 + ny * half_vec.1 + nz * half_vec.2).clamp(0.0, 1.0);
+                let normal_phase = (nx * grating_nx + ny * grating_ny) * params.tilt_factor;
+                let sin_theta = (u_centered * grating_nx + v_centered * grating_ny)
+                    * params.angle_spread
+                    + params.blaze_offset
+                    + normal_phase;
+                let order = params.diffraction_order.max(1) as f32;
+                let lam = params.grating_d_nm * sin_theta.abs() / order;
+                let diff_rgb = spectral_lookup(lam);
+                let warm_near_light =
+                    smoothstep(575.0, 635.0, lam) * (1.0 - smoothstep(665.0, 725.0, lam));
 
-            let local_phase = avoid_magenta_phase(
-                (dot_hash * 0.18 + u * 0.11 - v * 0.08).rem_euclid(1.0),
-                line_gate * 0.20,
-            );
-            let local_rgb = spectral_phase_rgb(local_phase, 0.95, 1.0);
-            let raw_combined_r = diff_rgb.0 * 0.72 + diff_rgb2.0 * 0.20 + local_rgb.0 * 0.08;
-            let raw_combined_g = diff_rgb.1 * 0.72 + diff_rgb2.1 * 0.20 + local_rgb.1 * 0.08;
-            let raw_combined_b = diff_rgb.2 * 0.72 + diff_rgb2.2 * 0.20 + local_rgb.2 * 0.08;
-            let red_dominance = smoothstep(
-                0.10,
-                0.54,
-                raw_combined_r - raw_combined_g.max(raw_combined_b),
-            );
-            let orange_lift = red_dominance * warm_near_light * 0.22;
-            let combined_r = raw_combined_r * (1.0 - red_dominance * warm_near_light * 0.18);
-            let combined_g = (raw_combined_g + orange_lift).min(1.0);
-            let combined_b = raw_combined_b * (1.0 - red_dominance * warm_near_light * 0.10);
+                let lam2 = params.grating_d_nm * (sin_theta * 0.56 + 0.14).abs() / order;
+                let diff_rgb2 = spectral_lookup(lam2);
 
-            let energy = scr_energy(xf, yf, params);
-            let row_hash = cell_hash01(col, row, params.seed + 90_017);
-            let row_gate = 0.62 + 0.38 * smoothstep(0.10, 0.92, row_hash);
-            let source_dx = u - 0.78;
-            let source_dy = v - 0.18;
-            let near_source = (1.0
-                - ((source_dx * source_dx + source_dy * source_dy).sqrt() / 0.68))
-                .clamp(0.0, 1.0)
-                .powf(1.85);
-            let warm_energy = smoothstep(0.22, 0.92, warm_near_light * 0.78 + near_source * 0.46);
-            let cool_near_light =
-                smoothstep(420.0, 485.0, lam) * (1.0 - smoothstep(540.0, 610.0, lam));
-            let cool_band_hint = (prism_peak((u * 0.74 + v * 0.92 + 0.18) * 2.4, 3.2) * 0.62
-                + prism_peak((u * 1.18 - v * 0.36 + 0.41) * 2.0, 2.4) * 0.38)
-                .min(1.0);
-            let cool_energy =
-                smoothstep(0.16, 0.82, cool_near_light * 0.72 + cool_band_hint * 0.36);
-            let cold_far = (1.0 - warm_near_light) * (1.0 - near_source * 0.45);
-            let diag_perp = (xf + yf) * inv_sqrt2;
-            let diag_along = (xf - yf) * inv_sqrt2;
-            let sheet_band = (prism_peak(diag_perp / 38.0 + diag_along * 0.008, 4.4) * 0.78
-                + prism_peak(diag_perp / 76.0 + 0.31, 3.1) * 0.22)
-                .min(1.0);
-            let light_energy = 0.28 + 0.72 * n_dot_l;
-            let connected_rows = (params.line_base
-                + params.line_gain * line_gate * (0.72 + warm_energy * 0.58))
-                .min(2.08);
-            let chroma_energy = (warm_energy * 0.72 + cool_energy * 0.56).min(1.0);
-            let combined_energy = energy
-                * inside
-                * dome_bright
-                * light_energy
-                * connected_rows
-                * row_gate
-                * (0.82 + warm_energy * 0.70 + cool_energy * 0.52)
-                * (1.0 - cold_far * 0.08);
+                let local_phase = avoid_magenta_phase(
+                    (dot_hash * 0.18 + u * 0.11 - v * 0.08).rem_euclid(1.0),
+                    line_gate * 0.20,
+                );
+                let local_rgb = spectral_phase_rgb(local_phase, 0.95, 1.0);
+                let raw_combined_r = diff_rgb.0 * 0.72 + diff_rgb2.0 * 0.20 + local_rgb.0 * 0.08;
+                let raw_combined_g = diff_rgb.1 * 0.72 + diff_rgb2.1 * 0.20 + local_rgb.1 * 0.08;
+                let raw_combined_b = diff_rgb.2 * 0.72 + diff_rgb2.2 * 0.20 + local_rgb.2 * 0.08;
+                let red_dominance = smoothstep(
+                    0.10,
+                    0.54,
+                    raw_combined_r - raw_combined_g.max(raw_combined_b),
+                );
+                let orange_lift = red_dominance * warm_near_light * 0.22;
+                let combined_r = raw_combined_r * (1.0 - red_dominance * warm_near_light * 0.18);
+                let combined_g = (raw_combined_g + orange_lift).min(1.0);
+                let combined_b = raw_combined_b * (1.0 - red_dominance * warm_near_light * 0.10);
 
-            let scale = combined_energy
-                * params.foil_gain
-                * (0.88 + warm_energy * 0.52 + cool_energy * 0.40);
-            let foil_r = 1.0 - (-combined_r * scale).exp();
-            let foil_g = 1.0 - (-combined_g * scale).exp();
-            let foil_b = 1.0 - (-combined_b * scale).exp();
+                let energy = energy_map.sample(xf, yf);
+                let row_gate = cell_cache.get(col, row, params).row_gate;
+                let source_dx = u - 0.78;
+                let source_dy = v - 0.18;
+                let near_source = (1.0
+                    - ((source_dx * source_dx + source_dy * source_dy).sqrt() / 0.68))
+                    .clamp(0.0, 1.0)
+                    .powf(1.85);
+                let warm_energy =
+                    smoothstep(0.22, 0.92, warm_near_light * 0.78 + near_source * 0.46);
+                let cool_near_light =
+                    smoothstep(420.0, 485.0, lam) * (1.0 - smoothstep(540.0, 610.0, lam));
+                let cool_band_hint = (prism_peak((u * 0.74 + v * 0.92 + 0.18) * 2.4, 3.2) * 0.62
+                    + prism_peak((u * 1.18 - v * 0.36 + 0.41) * 2.0, 2.4) * 0.38)
+                    .min(1.0);
+                let cool_energy =
+                    smoothstep(0.16, 0.82, cool_near_light * 0.72 + cool_band_hint * 0.36);
+                let cold_far = (1.0 - warm_near_light) * (1.0 - near_source * 0.45);
+                let diag_perp = (xf + yf) * inv_sqrt2;
+                let diag_along = (xf - yf) * inv_sqrt2;
+                let sheet_band = (prism_peak(diag_perp / 38.0 + diag_along * 0.008, 4.4) * 0.78
+                    + prism_peak(diag_perp / 76.0 + 0.31, 3.1) * 0.22)
+                    .min(1.0);
+                let light_energy = 0.28 + 0.72 * n_dot_l;
+                let connected_rows = (params.line_base
+                    + params.line_gain * line_gate * (0.72 + warm_energy * 0.58))
+                    .min(2.08);
+                let chroma_energy = (warm_energy * 0.72 + cool_energy * 0.56).min(1.0);
+                let combined_energy = energy
+                    * inside
+                    * dome_bright
+                    * light_energy
+                    * connected_rows
+                    * row_gate
+                    * (0.82 + warm_energy * 0.70 + cool_energy * 0.52)
+                    * (1.0 - cold_far * 0.08);
 
-            let mut spec = n_dot_h.powf(params.shininess)
-                * combined_energy
-                * (0.28 + warm_energy * 0.38 + cool_energy * 0.24);
-            let sparkle_hash = ser_pixel_hash(local_x / 2 + 13, local_y / 2 + 29);
-            let sparkle = smoothstep(0.91, 0.999, (sparkle_hash & 0xFFFF) as f32 / 65535.0);
-            spec += sparkle
-                * inside
-                * params.sparkle_gain
-                * (0.26 + line_gate * 0.58 + warm_energy * 0.46 + cool_energy * 0.34)
-                * row_gate;
+                let scale = combined_energy
+                    * params.foil_gain
+                    * (0.88 + warm_energy * 0.52 + cool_energy * 0.40);
+                let foil_r = 1.0 - (-combined_r * scale).exp();
+                let foil_g = 1.0 - (-combined_g * scale).exp();
+                let foil_b = 1.0 - (-combined_b * scale).exp();
 
-            // ── Composite onto base image ────────────────────────────────────
-            let idx = (y * width + x) as usize;
-            let dst = pixels[idx];
-            let base_r = dst.red() as f32 / 255.0;
-            let base_g = dst.green() as f32 / 255.0;
-            let base_b = dst.blue() as f32 / 255.0;
-            let sheet_energy = (0.095 + energy * 0.24)
-                * (0.44 + sheet_band * 0.72)
-                * (0.64 + near_source * 0.52 + warm_energy * 0.38 + cool_energy * 0.44)
-                * (1.0 - cold_far * 0.10);
-            let sheet_alpha = (sheet_energy * opacity).min(0.52);
-            let sheet_rgb = lerp_rgb(
-                (diff_rgb.0, diff_rgb.1, diff_rgb.2),
-                (combined_r, combined_g, combined_b),
-                0.38 + chroma_energy * 0.20,
-            );
-            let metal_keep = 1.0 - sheet_alpha * (0.18 + chroma_energy * 0.08);
-            let metal_r = screen_channel_float(base_r * metal_keep, sheet_rgb.0, sheet_alpha);
-            let metal_g = screen_channel_float(base_g * metal_keep, sheet_rgb.1, sheet_alpha);
-            let metal_b = screen_channel_float(base_b * metal_keep, sheet_rgb.2, sheet_alpha);
+                let mut spec = n_dot_h.powf(params.shininess)
+                    * combined_energy
+                    * (0.28 + warm_energy * 0.38 + cool_energy * 0.24);
+                let sparkle_hash = ser_pixel_hash(local_x / 2 + 13, local_y / 2 + 29);
+                let sparkle = smoothstep(0.91, 0.999, (sparkle_hash & 0xFFFF) as f32 / 65535.0);
+                spec += sparkle
+                    * inside
+                    * params.sparkle_gain
+                    * (0.26 + line_gate * 0.58 + warm_energy * 0.46 + cool_energy * 0.34)
+                    * row_gate;
 
-            let dot_density = (inside * (0.42 + line_gate * 0.70 + chroma_energy * 0.44)).min(1.0);
-            let darken = lerp_f32(0.88, params.darken, dot_density);
-            let dark_r = metal_r * darken;
-            let dark_g = metal_g * darken;
-            let dark_b = metal_b * darken;
-            let result_r =
-                (1.0 - (1.0 - dark_r) * (1.0 - foil_r) + spec * params.white_gain).clamp(0.0, 1.0);
-            let result_g =
-                (1.0 - (1.0 - dark_g) * (1.0 - foil_g) + spec * params.white_gain).clamp(0.0, 1.0);
-            let result_b =
-                (1.0 - (1.0 - dark_b) * (1.0 - foil_b) + spec * params.white_gain).clamp(0.0, 1.0);
+                // ── Composite onto base image ────────────────────────────────────
+                let dst = row_pixels[x as usize];
+                let base_r = dst.red() as f32 / 255.0;
+                let base_g = dst.green() as f32 / 255.0;
+                let base_b = dst.blue() as f32 / 255.0;
+                let sheet_energy = (0.095 + energy * 0.24)
+                    * (0.44 + sheet_band * 0.72)
+                    * (0.64 + near_source * 0.52 + warm_energy * 0.38 + cool_energy * 0.44)
+                    * (1.0 - cold_far * 0.10);
+                let sheet_alpha = (sheet_energy * opacity).min(0.52);
+                let sheet_rgb = lerp_rgb(
+                    (diff_rgb.0, diff_rgb.1, diff_rgb.2),
+                    (combined_r, combined_g, combined_b),
+                    0.38 + chroma_energy * 0.20,
+                );
+                let metal_keep = 1.0 - sheet_alpha * (0.18 + chroma_energy * 0.08);
+                let metal_r = screen_channel_float(base_r * metal_keep, sheet_rgb.0, sheet_alpha);
+                let metal_g = screen_channel_float(base_g * metal_keep, sheet_rgb.1, sheet_alpha);
+                let metal_b = screen_channel_float(base_b * metal_keep, sheet_rgb.2, sheet_alpha);
 
-            let dot_alpha =
-                opacity * (inside * (0.64 + line_gate * 0.40 + chroma_energy * 0.34)).min(1.0);
-            let out_r = lerp_f32(metal_r, result_r, dot_alpha);
-            let out_g = lerp_f32(metal_g, result_g, dot_alpha);
-            let out_b = lerp_f32(metal_b, result_b, dot_alpha);
-            pixels[idx] = tiny_skia::PremultipliedColorU8::from_rgba(
-                (out_r * 255.0).round() as u8,
-                (out_g * 255.0).round() as u8,
-                (out_b * 255.0).round() as u8,
-                dst.alpha(),
-            )
-            .unwrap_or(dst);
-        }
-    }
+                let dot_density =
+                    (inside * (0.42 + line_gate * 0.70 + chroma_energy * 0.44)).min(1.0);
+                let darken = lerp_f32(0.88, params.darken, dot_density);
+                let dark_r = metal_r * darken;
+                let dark_g = metal_g * darken;
+                let dark_b = metal_b * darken;
+                let result_r = (1.0 - (1.0 - dark_r) * (1.0 - foil_r) + spec * params.white_gain)
+                    .clamp(0.0, 1.0);
+                let result_g = (1.0 - (1.0 - dark_g) * (1.0 - foil_g) + spec * params.white_gain)
+                    .clamp(0.0, 1.0);
+                let result_b = (1.0 - (1.0 - dark_b) * (1.0 - foil_b) + spec * params.white_gain)
+                    .clamp(0.0, 1.0);
+
+                let dot_alpha =
+                    opacity * (inside * (0.64 + line_gate * 0.40 + chroma_energy * 0.34)).min(1.0);
+                let out_r = lerp_f32(metal_r, result_r, dot_alpha);
+                let out_g = lerp_f32(metal_g, result_g, dot_alpha);
+                let out_b = lerp_f32(metal_b, result_b, dot_alpha);
+                row_pixels[x as usize] = tiny_skia::PremultipliedColorU8::from_rgba(
+                    (out_r * 255.0).round() as u8,
+                    (out_g * 255.0).round() as u8,
+                    (out_b * 255.0).round() as u8,
+                    dst.alpha(),
+                )
+                .unwrap_or(dst);
+            }
+        });
 }
 
 /// SCR foil for small masked regions (attribute icons, level/rank stars, link
@@ -779,6 +1064,7 @@ fn scr_dot_facet(
     local_x: u32,
     local_y: u32,
     params: OpticalScrParams,
+    cell_cache: &OpticalScrCellCache,
 ) -> (f32, f32, f32, f32, f32, i32, i32, f32, f32) {
     let xf = local_x as f32;
     let yf = local_y as f32;
@@ -792,22 +1078,18 @@ fn scr_dot_facet(
     let mut best_radius = params.dot_radius;
     let mut best_col = base_col;
     let mut best_row = base_row;
-    let mut best_hash = 0.0_f32;
-    let mut best_center_x = 0.0_f32;
-    let mut best_center_y = 0.0_f32;
+    let mut best_cell = cell_cache.get(base_col, base_row, params);
 
     for row in (base_row - 1)..=(base_row + 1) {
         for col in (base_col - 1)..=(base_col + 1) {
-            let hash_a = cell_hash01(col, row, params.seed + 10_003);
-            let hash_b = cell_hash01(col, row, params.seed + 20_011);
-            let hash_c = cell_hash01(col, row, params.seed + 30_019);
-            let jitter_x = (hash_a - 0.5) * params.dot_jitter;
-            let jitter_y = (hash_b - 0.5) * params.dot_jitter;
-            let center_x = (col as f32 + 0.5 + jitter_x) * pitch;
-            let center_y = (row as f32 + 0.5 + jitter_y) * pitch;
-            let dx = xf - center_x;
-            let dy = yf - center_y;
-            let radius = params.dot_radius * (0.86 + hash_c * 0.26);
+            let cell = cell_cache.get(col, row, params);
+            let dx = xf - cell.center_x;
+            let dy = yf - cell.center_y;
+            let radius = cell.radius;
+            let max_dist = radius + params.dot_softness;
+            if dx.abs() > max_dist || dy.abs() > max_dist {
+                continue;
+            }
             let dist = (dx * dx + dy * dy).sqrt();
             let inside = 1.0 - smoothstep(radius, radius + params.dot_softness, dist);
             if inside > best_inside {
@@ -817,15 +1099,13 @@ fn scr_dot_facet(
                 best_radius = radius;
                 best_col = col;
                 best_row = row;
-                best_hash = hash_c;
-                best_center_x = center_x;
-                best_center_y = center_y;
+                best_cell = cell;
             }
         }
     }
 
     if best_inside <= 0.0 {
-        return (0.0, 0.0, 0.0, 0.0, 1.0, best_col, best_row, 0.0, best_hash);
+        return (0.0, 0.0, 0.0, 0.0, 1.0, best_col, best_row, 0.0, 0.0);
     }
 
     let r = (best_dx * best_dx + best_dy * best_dy).sqrt() / best_radius.max(1e-3);
@@ -833,21 +1113,11 @@ fn scr_dot_facet(
 
     let slope_x = best_dx / best_radius.max(1e-3) * params.dome_depth;
     let slope_y = best_dy / best_radius.max(1e-3) * params.dome_depth;
-    let tilt_x =
-        (cell_hash01(best_col, best_row, params.seed + 40_031) - 0.5) * params.tilt_strength;
-    let tilt_y =
-        (cell_hash01(best_col, best_row, params.seed + 50_047) - 0.5) * params.tilt_strength;
-    let (nx, ny, nz) = vec_norm3(-(slope_x + tilt_x), -(slope_y + tilt_y), 1.0);
-
-    let row_phase_hash = cell_hash01(best_col, best_row, params.seed + 60_059);
-    let inv_sqrt2: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    let diag_perp = (best_center_x + best_center_y) * inv_sqrt2;
-    let diag_along = (best_center_x - best_center_y) * inv_sqrt2;
-    let line_phase =
-        diag_perp / params.line_pitch.max(1.0) + diag_along * 0.004 + row_phase_hash * 0.055;
-    let primary = prism_peak(line_phase, params.line_sharpness);
-    let secondary = prism_peak(line_phase * 0.53 + 0.37, params.line_sharpness * 0.78);
-    let line_gate = (primary * 0.92 + secondary * 0.36).min(1.0);
+    let (nx, ny, nz) = vec_norm3(
+        -(slope_x + best_cell.tilt_x),
+        -(slope_y + best_cell.tilt_y),
+        1.0,
+    );
 
     (
         best_inside,
@@ -857,8 +1127,8 @@ fn scr_dot_facet(
         nz,
         best_col,
         best_row,
-        line_gate,
-        best_hash,
+        best_cell.line_gate,
+        best_cell.dot_hash,
     )
 }
 

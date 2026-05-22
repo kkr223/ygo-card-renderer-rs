@@ -4,9 +4,9 @@ use crate::{
     document::{RenderRect, RubyStyle},
     model::FontWeight,
     text::{
-        draw_multiline_ruby_text, draw_ruby_text_line, draw_text_line, fit_ruby_text_scale,
-        fit_single_line, fit_single_line_compressed, DrawTextLine, RubyLineParams,
-        RubyMultilineParams,
+        DrawTextLine, RubyLineParams, RubyMultilineParams, draw_multiline_ruby_text,
+        draw_ruby_text_line, draw_text_line, fit_ruby_text_scale, fit_single_line,
+        fit_single_line_compressed,
     },
 };
 

@@ -255,7 +255,11 @@ fn localized_monster_word(language: &str) -> &'static str {
     }
 }
 
-fn localized_spell_trap_labels(is_spell: bool, spell: &'static str, trap: &'static str) -> &'static str {
+fn localized_spell_trap_labels(
+    is_spell: bool,
+    spell: &'static str,
+    trap: &'static str,
+) -> &'static str {
     if is_spell { spell } else { trap }
 }
 
@@ -650,9 +654,8 @@ fn join_trimmed_lines(lines: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_effect_line, has_effect_line, localized_spell_trap_name,
-        spell_trap_subtype_icon_asset, split_pendulum_description, TYPE_QUICKPLAY,
-        TYPE_RITUAL,
+        TYPE_QUICKPLAY, TYPE_RITUAL, build_effect_line, has_effect_line, localized_spell_trap_name,
+        spell_trap_subtype_icon_asset, split_pendulum_description,
     };
     use ygopro_cdb_encode_rs::{CardDataEntry, TYPE_MONSTER};
 
@@ -778,7 +781,10 @@ mod tests {
             ..CardDataEntry::default()
         };
 
-        assert_eq!(spell_trap_subtype_icon_asset(&card), Some("icon-quick-play.webp"));
+        assert_eq!(
+            spell_trap_subtype_icon_asset(&card),
+            Some("icon-quick-play.webp")
+        );
     }
 
     #[test]

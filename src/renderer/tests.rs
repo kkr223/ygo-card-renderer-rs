@@ -1,16 +1,15 @@
 use super::{
-    art_coverage_rect,
+    CoverageRect, art_coverage_rect,
     draw_card::premultiply_pixmap_alpha,
-    effect_areas::{art_frame_coverage_rect, art_frame_effect_areas, EffectArea},
+    effect_areas::{EffectArea, art_frame_coverage_rect, art_frame_effect_areas},
     scale_pixmap,
     visual_effects::{draw_frosted_foil, draw_relief_engrave},
-    CoverageRect,
 };
 use crate::{
-    asset_bundle::{get_bundle, init_global_bundle, AssetBundle},
-    document::{laser_asset_name, RenderDocument, RenderNode, RenderOp, RenderRect},
-    model::YgoCardMeta,
     CardKind, RenderOptions, RenderRequest,
+    asset_bundle::{AssetBundle, get_bundle, init_global_bundle},
+    document::{RenderDocument, RenderNode, RenderOp, RenderRect, laser_asset_name},
+    model::YgoCardMeta,
 };
 use std::{
     fs,

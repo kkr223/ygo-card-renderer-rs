@@ -12,13 +12,13 @@ use std::sync::Arc;
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
 
 use crate::{
-    asset_bundle::{try_get_bundle, AssetBundle, BaseLayout},
+    asset_bundle::{AssetBundle, BaseLayout, try_get_bundle},
     constants::{BACKGROUND_CREAM, CARD_WIDTH},
     document::{
         EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument, RenderOp, RenderRect,
     },
     model::{RenderError, RenderRequest},
-    rare_effect::{draw_bright_border, CoverageRect},
+    rare_effect::{CoverageRect, draw_bright_border},
 };
 
 use color::parse_hex_color;

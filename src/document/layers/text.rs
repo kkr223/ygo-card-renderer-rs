@@ -283,7 +283,8 @@ pub(crate) fn push_pendulum_description_node(
         let shadow = paint::resolve_optional_fill(&options.text_colors.description_shadow, None);
 
         let mut tmp = String::new();
-        let (formatted_text, first_line_compress) = apply_format_mode(&text, &mut tmp, card, options);
+        let (formatted_text, first_line_compress) =
+            apply_format_mode(&text, &mut tmp, card, options);
 
         nodes.push(RenderNode::new(
             "pendulum-description",
@@ -307,7 +308,9 @@ pub(crate) fn push_pendulum_description_node(
                 shadow,
                 ruby: paint::description_ruby_style(style),
                 first_line_compress,
-                align: options.description_align.unwrap_or(TextAlignChoice::Justify),
+                align: options
+                    .description_align
+                    .unwrap_or(TextAlignChoice::Justify),
                 font_weight: options.description_weight,
             },
         ));
@@ -333,8 +336,10 @@ fn apply_format_mode<'a>(
         return (text, options.description_first_line_compress);
     }
     let t = card.type_;
-    let is_extra =
-        (t & TYPE_FUSION) != 0 || (t & TYPE_SYNCHRO) != 0 || (t & TYPE_XYZ) != 0 || (t & TYPE_LINK) != 0;
+    let is_extra = (t & TYPE_FUSION) != 0
+        || (t & TYPE_SYNCHRO) != 0
+        || (t & TYPE_XYZ) != 0
+        || (t & TYPE_LINK) != 0;
 
     tmp.clear();
     if is_extra {
@@ -389,7 +394,9 @@ pub(crate) fn push_description_node(
             shadow,
             ruby: paint::description_ruby_style(style),
             first_line_compress,
-            align: options.description_align.unwrap_or(TextAlignChoice::Justify),
+            align: options
+                .description_align
+                .unwrap_or(TextAlignChoice::Justify),
             font_weight: options.description_weight,
         },
     ));

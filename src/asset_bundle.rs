@@ -132,8 +132,8 @@ impl AssetBundle {
 
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
-        let file = File::open(path)
-            .map_err(|e| format!("Failed to open bundle {:?}: {e}", path))?;
+        let file =
+            File::open(path).map_err(|e| format!("Failed to open bundle {:?}: {e}", path))?;
         let file_len = file
             .metadata()
             .map_err(|e| format!("Failed to stat bundle {:?}: {e}", path))?

@@ -203,11 +203,7 @@ pub(super) fn draw_external_image(
 }
 
 fn finite_or_zero(value: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+    if value.is_finite() { value } else { 0.0 }
 }
 
 fn cropped_pixmap(pixmap: Pixmap, crop: Option<ImageCrop>) -> Pixmap {

@@ -5,7 +5,7 @@
 
 use tiny_skia::Pixmap;
 
-use super::{math::*, CoverageRect};
+use super::{CoverageRect, math::*};
 
 const SECRET_CELL: u32 = 6;
 

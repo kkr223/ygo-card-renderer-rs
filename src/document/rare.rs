@@ -28,7 +28,13 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
                 EffectStyle::RainbowFoil { opacity: 0.46 },
                 vec![tw(EffectTarget::Art, 0.46)],
             );
-            push_composite_rare_effect(&mut nodes, "rare-ur-icon-foil", 91, EffectStyle::Holographic { opacity: 0.62 }, icon_targets(0.62, 0.58));
+            push_composite_rare_effect(
+                &mut nodes,
+                "rare-ur-icon-foil",
+                91,
+                EffectStyle::Holographic { opacity: 0.62 },
+                icon_targets(0.62, 0.58),
+            );
         }
         RareType::Gr => {
             push_composite_rare_effect(
@@ -313,12 +319,7 @@ pub(super) fn rare_title_paints(rare: Option<RareType>) -> (Option<TextPaint>, O
     }
 }
 
-fn rare_title_paint(
-    color: Option<&str>,
-    top: &str,
-    middle: &str,
-    bottom: &str,
-) -> TextPaint {
+fn rare_title_paint(color: Option<&str>, top: &str, middle: &str, bottom: &str) -> TextPaint {
     TextPaint {
         color: color.map(str::to_string),
         gradient: Some(TextGradient::vertical_middle(top, middle, bottom)),
