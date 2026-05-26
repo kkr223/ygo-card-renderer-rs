@@ -206,14 +206,6 @@ fn rare_effect_nodes(rare: Option<RareType>) -> Vec<RenderNode> {
                 EffectStyle::DiamondFoil { opacity: 0.68 },
             );
         }
-        RareType::PserPrint => push_visual_effect(
-            &mut nodes,
-            "rare-pser-print-border",
-            30,
-            EffectTarget::FullCard,
-            EffectStyle::BrightBorder { opacity: 0.72 },
-        ),
-        RareType::Dt => {}
     }
 
     nodes
@@ -373,7 +365,6 @@ mod tests {
     #[test]
     fn rare_effect_nodes_lock_contracts() {
         assert!(rare_effect_nodes(None).is_empty());
-        assert!(rare_effect_nodes(Some(RareType::Dt)).is_empty());
 
         let nodes = rare_effect_nodes(Some(RareType::Sr));
         assert_eq!(nodes.len(), 1);
@@ -646,25 +637,11 @@ mod tests {
             EffectStyle::DiamondFoil { opacity: 0.68 },
         );
 
-        let nodes = rare_effect_nodes(Some(RareType::PserPrint));
-        assert_eq!(nodes.len(), 1);
-        assert_visual(
-            &nodes[0],
-            "rare-pser-print-border",
-            30,
-            EffectTarget::FullCard,
-            EffectStyle::BrightBorder { opacity: 0.72 },
-        );
     }
 
     #[test]
     fn rare_title_paints_returns_none_for_none_rare() {
         assert_eq!(rare_title_paints(None), (None, None));
-    }
-
-    #[test]
-    fn rare_title_paints_returns_none_for_dt() {
-        assert_eq!(rare_title_paints(Some(RareType::Dt)), (None, None));
     }
 
     #[test]

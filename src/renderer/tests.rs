@@ -251,13 +251,6 @@ fn sanitizes_effect_style_opacity() {
     ));
 
     assert!(matches!(
-        super::sanitize_effect_style(crate::document::EffectStyle::BrightBorder {
-            opacity: 1.7,
-        }),
-        crate::document::EffectStyle::BrightBorder { opacity } if opacity == 1.0
-    ));
-
-    assert!(matches!(
         super::sanitize_effect_style(crate::document::EffectStyle::ReliefEngrave {
             opacity: -0.25,
         }),

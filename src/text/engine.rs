@@ -249,12 +249,35 @@ fn build_text_engine() -> TextEngine {
     // Skip load_system_fonts() — all required fonts are bundled and loaded lazily.
     db.set_sans_serif_family("ygo-sc");
     db.set_serif_family("ygo-sc");
-    let font_system = FontSystem::new_with_locale_and_db("zh-CN".to_string(), db);
+    let mut font_system = FontSystem::new_with_locale_and_db("zh-CN".to_string(), db);
+
+    // Pre-load all bundled fonts into the fontdb so that glyph fallback has
+    // maximum coverage from the start.  Without this, characters like '·'
+    // (U+00B7) may render as tofu when the current font family doesn't
+    // contain them and the fallback fonts haven't been loaded yet.
+    let mut loaded_fonts = HashSet::<String>::new();
+    for key in font_data_slots().keys() {
+        match get_font_data(key) {
+            Some(Ok(data)) => {
+                font_system
+                    .db_mut()
+                    .load_font_source(fontdb::Source::Binary(data));
+                loaded_fonts.insert(key.clone());
+            }
+            Some(Err(err)) => {
+                eprintln!("font preload failed for {key}: {err}");
+            }
+            None => {
+                eprintln!("missing bundled font for key {key}");
+            }
+        }
+    }
+
     TextEngine {
         font_system,
         swash_cache: SwashCache::new(),
         glyph_cache: GlyphWidthCache::new(),
-        loaded_fonts: HashSet::new(),
+        loaded_fonts,
     }
 }
 

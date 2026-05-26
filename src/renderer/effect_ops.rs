@@ -16,7 +16,6 @@ pub(super) fn effect_opacity(effect: EffectStyle) -> f32 {
         | EffectStyle::SecretWeave { opacity }
         | EffectStyle::SecretFoil { opacity }
         | EffectStyle::Holographic { opacity }
-        | EffectStyle::BrightBorder { opacity }
         | EffectStyle::GoldWash { opacity }
         | EffectStyle::FrostedFoil { opacity }
         | EffectStyle::ConcentricEngrave { opacity }
@@ -44,7 +43,6 @@ pub(super) fn effect_with_opacity(effect: EffectStyle, opacity: f32) -> EffectSt
         EffectStyle::SecretWeave { .. } => EffectStyle::SecretWeave { opacity },
         EffectStyle::SecretFoil { .. } => EffectStyle::SecretFoil { opacity },
         EffectStyle::Holographic { .. } => EffectStyle::Holographic { opacity },
-        EffectStyle::BrightBorder { .. } => EffectStyle::BrightBorder { opacity },
         EffectStyle::GoldWash { .. } => EffectStyle::GoldWash { opacity },
         EffectStyle::FrostedFoil { .. } => EffectStyle::FrostedFoil { opacity },
         EffectStyle::ConcentricEngrave { .. } => EffectStyle::ConcentricEngrave { opacity },

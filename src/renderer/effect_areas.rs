@@ -736,7 +736,6 @@ fn draw_visual_effect_rect(target: &mut Pixmap, rect: CoverageRect, effect: Effe
         }
         EffectStyle::ReliefEngrave { opacity } => draw_relief_engrave(target, rect, opacity),
         EffectStyle::DiamondFoil { opacity } => draw_diamond_foil(target, rect, opacity),
-        EffectStyle::BrightBorder { .. } => {}
     }
 }
 
@@ -782,6 +781,7 @@ pub(super) fn snapshot_effect_rect(target: &Pixmap, rect: CoverageRect) -> Effec
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn restore_protected_effect_pixels(
     target: &mut Pixmap,
     before: &EffectRectSnapshot,

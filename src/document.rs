@@ -516,7 +516,6 @@ pub enum EffectStyle {
     SecretWeave { opacity: f32 },
     SecretFoil { opacity: f32 },
     Holographic { opacity: f32 },
-    BrightBorder { opacity: f32 },
     GoldWash { opacity: f32 },
     FrostedFoil { opacity: f32 },
     ConcentricEngrave { opacity: f32 },

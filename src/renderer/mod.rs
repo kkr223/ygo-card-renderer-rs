@@ -18,14 +18,14 @@ use crate::{
         EffectStyle, EffectTarget, EffectTargetWeight, RenderDocument, RenderOp, RenderRect,
     },
     model::{RenderError, RenderRequest},
-    rare_effect::{CoverageRect, draw_bright_border},
+    rare_effect::{CoverageRect},
 };
 
 use color::parse_hex_color;
 use draw_card::{draw_external_image, draw_positioned_render_image, sanitize_render_rect};
 use effect_areas::{
     art_coverage_rect, build_composite_mask, draw_visual_effect_area, effect_target_areas,
-    load_effect_protection_mask, restore_masked_effect_pixels, restore_protected_effect_pixels,
+    load_effect_protection_mask, restore_masked_effect_pixels,
     snapshot_effect_rect,
 };
 use effect_ops::{composite_base_opacity, effect_with_opacity, sanitize_effect_style};
@@ -308,18 +308,6 @@ fn draw_document_visual_effect(
         h: crate::constants::CARD_HEIGHT,
     };
     let art_rect = art_coverage_rect(&document.card, base);
-
-    if let EffectStyle::BrightBorder { opacity } = effect {
-        // BrightBorder operates on both the outer card edge and the art frame
-        // bevel simultaneously, so it needs both rects and cannot be expressed
-        // as a single EffectArea.  Dispatch it here before the area loop.
-        let before = protection_mask.map(|_| snapshot_effect_rect(target, full_rect));
-        draw_bright_border(target, full_rect, art_rect, opacity);
-        if let Some(before) = before.as_ref() {
-            restore_protected_effect_pixels(target, before, protection_mask);
-        }
-        return;
-    }
 
     for area in effect_target_areas(
         bundle,

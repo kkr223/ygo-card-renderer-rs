@@ -33,8 +33,6 @@ pub enum RareType {
     Gser,
     /// Prismatic Secret Rare
     Pser,
-    /// Prismatic Secret Rare (print)
-    PserPrint,
     /// Secret Collector's Rare
     Scr,
     /// Extra Secret Rare
@@ -45,8 +43,6 @@ pub enum RareType {
     Upr,
     /// Secret Extra Parallel Rare (full-card diamond foil on SER base)
     Sepr,
-    /// Duel Terminal parallel rare
-    Dt,
 }
 
 /// Effect text box used by out-frame cards.
@@ -166,7 +162,7 @@ impl FontWeightKeyword {
     }
 }
 
-/// CSS-style two-stop horizontal gradient for text rendering.
+/// CSS-style two-stop vertical gradient for text rendering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextGradient {
@@ -184,7 +180,7 @@ impl TextGradient {
             start: start.into(),
             end: end.into(),
             middle: None,
-            direction: GradientDirection::Horizontal,
+            direction: GradientDirection::default(),
         }
     }
 
@@ -205,21 +201,21 @@ impl TextGradient {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum GradientDirection {
-    #[default]
     Horizontal,
+    #[default]
     Vertical,
 }
 
 impl GradientDirection {
     fn is_default(&self) -> bool {
-        *self == Self::Horizontal
+        *self == Self::Vertical
     }
 }
 
 /// A serializable text paint descriptor accepted by render options.
 ///
 /// `color` is used as a solid fallback. When `gradient` is present and both
-/// stops parse successfully, the renderer uses a horizontal gradient over the
+/// stops parse successfully, the renderer uses a vertical gradient over the
 /// target text layout box.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

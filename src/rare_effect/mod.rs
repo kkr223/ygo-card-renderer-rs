@@ -2,7 +2,6 @@
 //!
 //! No external noise crates are used; all procedural math is inline.
 
-mod bright_border;
 mod diamond_foil;
 mod dot_grid;
 mod holographic;
@@ -24,7 +23,6 @@ pub(crate) struct CoverageRect {
 
 // ── Public API re-exports ─────────────────────────────────────────────────────
 
-pub(crate) use bright_border::draw_bright_border;
 pub(crate) use diamond_foil::draw_diamond_foil;
 pub(crate) use dot_grid::draw_dot_grid;
 pub(crate) use holographic::draw_holographic;
@@ -143,31 +141,6 @@ mod tests {
                 .any(|(a, b)| a.red() != b.red()),
             "holographic should change pixels"
         );
-    }
-
-    #[test]
-    fn bright_border_prefers_edges_over_center() {
-        let mut px = make_card_pixmap();
-        let full = CoverageRect {
-            x: 0,
-            y: 0,
-            w: 100,
-            h: 100,
-        };
-        let art = CoverageRect {
-            x: 28,
-            y: 28,
-            w: 44,
-            h: 44,
-        };
-        let before = px.pixels().to_vec();
-        draw_bright_border(&mut px, full, art, 0.8);
-
-        let edge_idx = 5;
-        let center_idx = 50 * 100 + 50;
-        let edge_delta = px.pixels()[edge_idx].blue() as i16 - before[edge_idx].blue() as i16;
-        let center_delta = px.pixels()[center_idx].blue() as i16 - before[center_idx].blue() as i16;
-        assert!(edge_delta > center_delta);
     }
 
     #[test]

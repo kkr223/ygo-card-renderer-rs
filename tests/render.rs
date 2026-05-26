@@ -1156,7 +1156,6 @@ fn render_rare_effects() {
         ("npr", RareType::Npr),
         // ("gser", RareType::Gser),
         ("pser", RareType::Pser),
-        // ("pser-print", RareType::PserPrint),
     ];
 
     let renderer = Renderer::new();
