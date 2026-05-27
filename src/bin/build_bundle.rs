@@ -381,9 +381,8 @@ fn build_layout_with_generated_masks(
     images: &mut serde_json::Map<String, Value>,
     payload: &mut Vec<u8>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut json_str = LAYOUT_JSON.to_string();
-    json_str.push('}');
-    let mut layout: Value = serde_json::from_str(&json_str)?;
+    let mut layout = parse_builtin_layout()?;
+    lower_east_asian_title_layouts(&mut layout);
 
     add_pendulum_split_masks(image_dir, image_entries, &mut layout)?;
     add_pendulum_effect_border_mask(image_dir, image_entries, &mut layout, images, payload)?;
@@ -435,6 +434,26 @@ fn build_layout_with_generated_masks(
             json!({"asset": mask_name, "x": arrow["on"]["x"], "y": arrow["on"]["y"]});
     }
     Ok(layout.to_string().into_bytes())
+}
+
+fn parse_builtin_layout() -> Result<Value, serde_json::Error> {
+    let mut json_str = LAYOUT_JSON.to_string();
+    json_str.push('}');
+    serde_json::from_str(&json_str)
+}
+
+fn lower_east_asian_title_layouts(layout: &mut Value) {
+    set_name_top(layout, "jp", 108);
+    set_name_top(layout, "kr", 100);
+    set_name_top(layout, "tc", 101);
+}
+
+fn set_name_top(layout: &mut Value, language: &str, top: u64) {
+    let pointer = format!("/styles/{language}/name/top");
+    let value = layout
+        .pointer_mut(&pointer)
+        .unwrap_or_else(|| panic!("missing layout pointer: {pointer}"));
+    *value = json!(top);
 }
 
 fn add_pendulum_split_masks(
@@ -731,4 +750,26 @@ fn unpremultiply_rgba(data: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn east_asian_title_layouts_are_lowered() {
+        let mut layout = parse_builtin_layout().expect("layout json parses");
+        lower_east_asian_title_layouts(&mut layout);
+        let styles = layout["styles"].as_object().expect("styles object");
+
+        assert_eq!(name_top(styles, "jp"), 108);
+        assert_eq!(name_top(styles, "kr"), 100);
+        assert_eq!(name_top(styles, "tc"), 101);
+    }
+
+    fn name_top(styles: &serde_json::Map<String, Value>, language: &str) -> u64 {
+        styles[language]["name"]["top"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{language} name top is present"))
+    }
 }
