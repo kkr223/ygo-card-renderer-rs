@@ -1,5 +1,5 @@
 use crate::{
-    asset_bundle::{AssetBundle, BaseLayout},
+    asset_bundle::{AssetBundle, BaseLayout, PositionedAsset},
     card_logic::{display_stat, uses_rank},
     constants::{CARD_WIDTH, TEXT_COLOR_DARK},
     layout::LayoutStyle,
@@ -66,6 +66,8 @@ pub(crate) fn push_out_frame_nodes(
     );
 
     if card.out_frame_effect_enabled {
+        let background_rect = out_frame_effect_background_rect(bundle, effect_box, effect_rect);
+
         // Effect box background FillRect
         if let Some(color) = card
             .out_frame_effect_background_color
@@ -78,7 +80,7 @@ pub(crate) fn push_out_frame_nodes(
                     "out-frame-effect-bg",
                     51,
                     RenderOp::FillRect {
-                        rect: effect_rect,
+                        rect: background_rect,
                         color: color.to_string(),
                         opacity,
                     },
@@ -95,6 +97,61 @@ pub(crate) fn push_out_frame_nodes(
             },
         ));
     }
+}
+
+fn out_frame_effect_background_rect(
+    bundle: &AssetBundle,
+    effect_box: &PositionedAsset,
+    border_rect: RenderRect,
+) -> RenderRect {
+    let Ok(mask) = bundle.decoded_image_for_render(&effect_box.asset) else {
+        return border_rect;
+    };
+    let Some((left, top, right, bottom)) = inner_shadow_bounds(mask.as_ref()) else {
+        return border_rect;
+    };
+
+    let scale_x = border_rect.width / mask.width() as f32;
+    let scale_y = border_rect.height / mask.height() as f32;
+    RenderRect::from_f32(
+        border_rect.x + left as f32 * scale_x,
+        border_rect.y + top as f32 * scale_y,
+        (right - left + 1) as f32 * scale_x,
+        (bottom - top + 1) as f32 * scale_y,
+    )
+}
+
+fn inner_shadow_bounds(mask: &tiny_skia::Pixmap) -> Option<(u32, u32, u32, u32)> {
+    let w = mask.width();
+    let h = mask.height();
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    let pixels = mask.pixels();
+    let alpha_at = |x: u32, y: u32| pixels[(y * w + x) as usize].alpha();
+    let mid_x = w / 2;
+    let mid_y = h / 2;
+    let solid_threshold = 245;
+
+    let left_solid = (0..w).find(|&x| alpha_at(x, mid_y) >= solid_threshold)?;
+    let left = (left_solid..w).find(|&x| alpha_at(x, mid_y) < solid_threshold)?;
+    let right_solid = (0..w)
+        .rev()
+        .find(|&x| alpha_at(x, mid_y) >= solid_threshold)?;
+    let right = (0..=right_solid)
+        .rev()
+        .find(|&x| alpha_at(x, mid_y) < solid_threshold)?;
+    let top_solid = (0..h).find(|&y| alpha_at(mid_x, y) >= solid_threshold)?;
+    let top = (top_solid..h).find(|&y| alpha_at(mid_x, y) < solid_threshold)?;
+    let bottom_solid = (0..h)
+        .rev()
+        .find(|&y| alpha_at(mid_x, y) >= solid_threshold)?;
+    let bottom = (0..=bottom_solid)
+        .rev()
+        .find(|&y| alpha_at(mid_x, y) < solid_threshold)?;
+
+    (left < right && top < bottom).then_some((left, top, right, bottom))
 }
 
 // ── Level / Rank ─────────────────────────────────────────────────────────────

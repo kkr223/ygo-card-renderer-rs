@@ -78,10 +78,27 @@ pub(crate) fn push_title_node(
             fill,
             shadow,
             ruby,
-            width_compress: request.options.title_width_compress,
+            width_compress: title_width_compress(&request.options),
             font_weight: None,
         },
     ));
+}
+
+fn title_width_compress(_options: &RenderOptions) -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_width_compression_is_always_enabled() {
+        let mut options = RenderOptions::default();
+        options.title_width_compress = false;
+
+        assert!(title_width_compress(&options));
+    }
 }
 
 // ── Spell / Trap label + icon ────────────────────────────────────────────────

@@ -145,38 +145,14 @@ pub fn fit_single_line_compressed(
         letter_spacing,
     );
 
-    let max_width_f = max_width as f32;
-    let fit_ratio = if estimated > 0.0 {
-        (max_width_f / estimated).min(1.0)
-    } else {
-        1.0
-    };
-    let mut scale_x = if estimated > max_width_f {
-        fit_ratio.max(min_scale_x).min(1.0)
-    } else {
-        1.0
-    };
-    let mut fitted_text = text.to_string();
-
-    if estimated > max_width_f && fit_ratio < min_scale_x {
-        scale_x = min_scale_x;
-        let unscaled_limit = max_width_f / scale_x;
-        fitted_text = truncate_text_to_width(
-            text,
-            family_name,
-            base_font_size as f32,
-            letter_spacing,
-            unscaled_limit,
-        );
-    }
-
-    SingleLineLayout {
-        text: fitted_text,
-        font_size: base_font_size,
+    compressed_single_line_layout(
+        text,
+        base_font_size,
         max_width,
         letter_spacing,
-        scale_x: scale_x.max(0.0),
-    }
+        estimated,
+        min_scale_x,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +333,35 @@ fn truncate_text_to_width(
     })
 }
 
+fn compressed_single_line_layout(
+    text: &str,
+    base_font_size: u32,
+    max_width: u32,
+    letter_spacing: f32,
+    estimated_width: f32,
+    min_scale_x: f32,
+) -> SingleLineLayout {
+    let max_width_f = max_width as f32;
+    let fit_ratio = if estimated_width > 0.0 {
+        (max_width_f / estimated_width).min(1.0)
+    } else {
+        1.0
+    };
+    let scale_x = if estimated_width > max_width_f {
+        fit_ratio.max(min_scale_x).min(1.0)
+    } else {
+        1.0
+    };
+
+    SingleLineLayout {
+        text: text.to_string(),
+        font_size: base_font_size,
+        max_width,
+        letter_spacing,
+        scale_x: scale_x.max(0.0),
+    }
+}
+
 /// Tokenize a single line for wrapping using Unicode UAX #14 line-breaking
 /// rules (CSS `line-break: strict` / `word-break: normal`) — the same engine
 /// that the JS `yugioh-card` CompressText uses via `css-line-break`.
@@ -409,4 +414,20 @@ fn is_word_separator(ch: char) -> bool {
         | 0x1039 // MYANMAR SIGN LITTLE SECTION
         | 0x1091 // MYANMAR SIGN SECTION
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compressed_single_line_keeps_full_text_below_min_scale() {
+        let layout = compressed_single_line_layout("ABCDEFGHIJ", 42, 100, 0.0, 1000.0, 0.2);
+
+        assert_eq!(layout.text, "ABCDEFGHIJ");
+        assert_eq!(layout.font_size, 42);
+        assert_eq!(layout.max_width, 100);
+        assert_eq!(layout.letter_spacing, 0.0);
+        assert_eq!(layout.scale_x, 0.2);
+    }
 }

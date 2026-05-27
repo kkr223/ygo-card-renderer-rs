@@ -423,6 +423,13 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
         return;
     }
 
+    if p.first_line_compress {
+        if let Some((first_line, rest)) = split_first_explicit_ruby_line(text) {
+            draw_multiline_ruby_with_first_line_compress(pixmap, first_line, rest, p);
+            return;
+        }
+    }
+
     // Binary-search for the largest font size that fits.
     let font_size = {
         let fits = |fs: u32| {
@@ -535,5 +542,101 @@ pub fn draw_multiline_ruby_text(pixmap: &mut Pixmap, p: RubyMultilineParams<'_>)
                 font_weight: p.font_weight,
             },
         );
+    }
+}
+
+fn draw_multiline_ruby_with_first_line_compress(
+    pixmap: &mut Pixmap,
+    first_line: &str,
+    rest: &str,
+    p: RubyMultilineParams<'_>,
+) {
+    let first_line_height = p.base_font_size as f32;
+    let remaining_height = (p.height - first_line_height * p.line_height).max(0.0);
+    let tokens = parse_ruby_text(first_line);
+    let first_line_scale_x = fit_ruby_text_scale(
+        &tokens,
+        p.family,
+        p.base_font_size as f32,
+        p.rt_font_size as f32,
+        p.letter_spacing,
+        p.rt_font_scale_x,
+        p.width,
+    );
+    let slots = measure_ruby_slots(
+        &tokens,
+        p.family,
+        p.base_font_size as f32,
+        p.rt_font_size as f32,
+        p.letter_spacing,
+        p.rt_font_scale_x,
+    );
+    let line_width = slots
+        .iter()
+        .map(RubySlot::slot_width)
+        .sum::<f32>()
+        .min(p.width / first_line_scale_x.max(0.01))
+        * first_line_scale_x;
+    let line_x = match p.align {
+        TextAlign::Left | TextAlign::Justify => p.x,
+        TextAlign::Center => p.x + (p.width - line_width) / 2.0,
+        TextAlign::Right => p.x + p.width - line_width,
+    };
+
+    draw_ruby_text_line(
+        pixmap,
+        RubyLineParams {
+            tokens: &tokens,
+            x: line_x,
+            y: p.y,
+            font_size: p.base_font_size as f32,
+            rt_font_size: p.rt_font_size as f32,
+            rt_top: p.rt_top,
+            rt_font_scale_x_override: p.rt_font_scale_x,
+            color: p.color,
+            shadow_color: p.shadow_color,
+            brush: p.brush.clone(),
+            shadow_brush: p.shadow_brush.clone(),
+            family: p.family,
+            language: p.language,
+            letter_spacing: p.letter_spacing,
+            scale_x: first_line_scale_x,
+            justify_gap: 0.0,
+            font_weight: p.font_weight,
+        },
+    );
+
+    if rest.trim().is_empty() || remaining_height <= 0.0 {
+        return;
+    }
+
+    draw_multiline_ruby_text(
+        pixmap,
+        RubyMultilineParams {
+            text: rest,
+            y: p.y + p.base_font_size as f32 * p.line_height,
+            height: remaining_height,
+            first_line_compress: false,
+            ..p
+        },
+    );
+}
+
+fn split_first_explicit_ruby_line(text: &str) -> Option<(&str, &str)> {
+    let newline_index = text.find('\n')?;
+    let first_line = text[..newline_index].trim_end_matches('\r');
+    let rest = text[newline_index + 1..].trim_start_matches('\n');
+    Some((first_line, rest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_ruby_text_at_first_explicit_newline_for_first_line_compress() {
+        let split = split_first_explicit_ruby_line("[青眼(ブルーアイズ)]の白龍\n通常モンスター");
+
+        assert_eq!(split, Some(("[青眼(ブルーアイズ)]の白龍", "通常モンスター")));
     }
 }

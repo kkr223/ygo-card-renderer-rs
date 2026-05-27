@@ -15,8 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight, fontdb,
+    Attrs, Buffer, Family, Fallback, FontSystem, Metrics, Shaping, SwashCache, Weight, fontdb,
 };
+use unicode_script::Script;
 
 use crate::asset_bundle::get_bundle;
 
@@ -244,12 +245,39 @@ fn font_bundle_key(family: &str) -> &str {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom font fallback: uses bundled font names (loaded into fontdb) instead of
+// platform system fonts (which may not be present in the database).
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct BundledFontFallback;
+
+impl Fallback for BundledFontFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        &["ygo-sc"]
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        &[]
+    }
+
+    fn script_fallback(&self, script: Script, _locale: &str) -> &[&'static str] {
+        match script {
+            Script::Han | Script::Hiragana | Script::Katakana | Script::Hangul => {
+                &["ygo-sc"]
+            }
+            Script::Latin => &["ygo-en"],
+            _ => &["ygo-sc"],
+        }
+    }
+}
+
 fn build_text_engine() -> TextEngine {
     let mut db = cosmic_text::fontdb::Database::new();
-    // Skip load_system_fonts() — all required fonts are bundled and loaded lazily.
     db.set_sans_serif_family("ygo-sc");
     db.set_serif_family("ygo-sc");
-    let mut font_system = FontSystem::new_with_locale_and_db("zh-CN".to_string(), db);
+    let mut font_system =
+        FontSystem::new_with_locale_and_db_and_fallback("zh-CN".to_string(), db, BundledFontFallback);
 
     // Pre-load all bundled fonts into the fontdb so that glyph fallback has
     // maximum coverage from the start.  Without this, characters like '·'
@@ -272,6 +300,10 @@ fn build_text_engine() -> TextEngine {
             }
         }
     }
+
+    // Last-resort fallback: load system fonts for any glyphs still not
+    // covered by bundled fonts (e.g. rare Unicode symbols, emoji).
+    font_system.db_mut().load_system_fonts();
 
     TextEngine {
         font_system,

@@ -1,15 +1,16 @@
 use super::{
-    CoverageRect, art_coverage_rect,
+    art_coverage_rect,
     draw_card::premultiply_pixmap_alpha,
-    effect_areas::{EffectArea, art_frame_coverage_rect, art_frame_effect_areas},
+    effect_areas::{art_frame_coverage_rect, art_frame_effect_areas, EffectArea},
     scale_pixmap,
     visual_effects::{draw_frosted_foil, draw_relief_engrave},
+    CoverageRect,
 };
 use crate::{
-    CardKind, RenderOptions, RenderRequest,
-    asset_bundle::{AssetBundle, get_bundle, init_global_bundle},
-    document::{RenderDocument, RenderNode, RenderOp, RenderRect, laser_asset_name},
+    asset_bundle::{get_bundle, init_global_bundle, AssetBundle},
+    document::{laser_asset_name, RenderDocument, RenderNode, RenderOp, RenderRect},
     model::YgoCardMeta,
+    CardKind, RenderOptions, RenderRequest,
 };
 use std::{
     fs,
@@ -129,6 +130,103 @@ fn explicit_bundle_renderer_builds_document() {
         .expect("build document with explicit bundle");
     assert!(document.nodes.iter().any(|node| node.id == "frame"));
     assert!(document.nodes.iter().any(|node| node.id == "title"));
+}
+
+#[test]
+fn out_frame_effect_background_stays_inside_border() {
+    let bundle = load_test_bundle();
+    let renderer = super::Renderer::with_bundle(Arc::clone(&bundle));
+    let mut card = YgoCardMeta::from(CardDataEntry {
+        code: 46986414,
+        name: "Dark Magician".to_string(),
+        desc: "The ultimate wizard in terms of attack and defense.".to_string(),
+        type_: 0x41,
+        attack: 2500,
+        defense: 2100,
+        level: 7,
+        race: 0x1,
+        attribute: 0x10,
+        ..CardDataEntry::default()
+    });
+    card.out_frame = true;
+    card.out_frame_effect_background_color = Some("#ffffff".to_string());
+
+    let request = RenderRequest {
+        kind: CardKind::Yugioh,
+        card,
+        options: RenderOptions::default(),
+    };
+    let document = renderer
+        .build_document(&request)
+        .expect("build out-frame document");
+
+    let bg_rect = document
+        .nodes
+        .iter()
+        .find_map(|node| match (&*node.id, &node.op) {
+            ("out-frame-effect-bg", RenderOp::FillRect { rect, .. }) => Some(*rect),
+            _ => None,
+        })
+        .expect("out-frame effect background node");
+    let border_rect = document
+        .nodes
+        .iter()
+        .find_map(|node| match (&*node.id, &node.op) {
+            ("out-frame-effect-box", RenderOp::ImageAssetRect { rect, .. }) => Some(*rect),
+            _ => None,
+        })
+        .expect("out-frame effect border node");
+
+    assert!(bg_rect.x > border_rect.x);
+    assert!(bg_rect.y > border_rect.y);
+    assert!(bg_rect.x + bg_rect.width < border_rect.x + border_rect.width);
+    assert!(bg_rect.y + bg_rect.height < border_rect.y + border_rect.height);
+
+    let effect_box = &bundle.layout.base.out_frame.effect_box;
+    let mask = bundle
+        .decoded_image_for_render(&effect_box.asset)
+        .expect("decode effect box border");
+    let transparent_hole = transparent_hole_bounds(mask.as_ref()).expect("transparent inner hole");
+    let scale_x = border_rect.width / mask.width() as f32;
+    let scale_y = border_rect.height / mask.height() as f32;
+    let transparent_left = border_rect.x + transparent_hole.0 as f32 * scale_x;
+    let transparent_top = border_rect.y + transparent_hole.1 as f32 * scale_y;
+    let transparent_right = border_rect.x + (transparent_hole.2 + 1) as f32 * scale_x;
+    let transparent_bottom = border_rect.y + (transparent_hole.3 + 1) as f32 * scale_y;
+
+    assert!(bg_rect.x < transparent_left);
+    assert!(bg_rect.y < transparent_top);
+    assert!(bg_rect.x + bg_rect.width > transparent_right);
+    assert!(bg_rect.y + bg_rect.height > transparent_bottom);
+}
+
+fn transparent_hole_bounds(mask: &tiny_skia::Pixmap) -> Option<(u32, u32, u32, u32)> {
+    let w = mask.width();
+    let h = mask.height();
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    let pixels = mask.pixels();
+    let alpha_at = |x: u32, y: u32| pixels[(y * w + x) as usize].alpha();
+    let threshold = 8;
+    let mid_x = w / 2;
+    let mid_y = h / 2;
+
+    let left_solid = (0..w).find(|&x| alpha_at(x, mid_y) > threshold)?;
+    let left = (left_solid..w).find(|&x| alpha_at(x, mid_y) <= threshold)?;
+    let right_solid = (0..w).rev().find(|&x| alpha_at(x, mid_y) > threshold)?;
+    let right = (0..=right_solid)
+        .rev()
+        .find(|&x| alpha_at(x, mid_y) <= threshold)?;
+    let top_solid = (0..h).find(|&y| alpha_at(mid_x, y) > threshold)?;
+    let top = (top_solid..h).find(|&y| alpha_at(mid_x, y) <= threshold)?;
+    let bottom_solid = (0..h).rev().find(|&y| alpha_at(mid_x, y) > threshold)?;
+    let bottom = (0..=bottom_solid)
+        .rev()
+        .find(|&y| alpha_at(mid_x, y) <= threshold)?;
+
+    (left < right && top < bottom).then_some((left, top, right, bottom))
 }
 
 #[test]
